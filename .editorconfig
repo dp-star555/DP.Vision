@@ -1,0 +1,39 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.cs]
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_between_query_expression_clauses = true
+csharp_preserve_single_line_blocks = true
+csharp_preserve_single_line_statements = false
+csharp_prefer_braces = true:warning
+csharp_style_expression_bodied_methods = false:warning
+csharp_style_expression_bodied_constructors = false:warning
+csharp_style_expression_bodied_operators = false:warning
+csharp_style_expression_bodied_local_functions = false:warning
+dotnet_diagnostic.IDE0011.severity = warning
+dotnet_diagnostic.IDE0021.severity = warning
+dotnet_diagnostic.IDE0022.severity = warning
+dotnet_diagnostic.IDE0023.severity = warning
+dotnet_diagnostic.IDE0061.severity = warning
+
+# 文件夹按功能分类，既有命名空间不随物理目录改变。
+dotnet_style_namespace_match_folder = false
+
+# 自定义枚举统一使用E前缀，例如EPixelLayout、ERoiTool。
+dotnet_naming_rule.enums_use_e_prefix.severity = warning
+dotnet_naming_rule.enums_use_e_prefix.symbols = enum_types
+dotnet_naming_rule.enums_use_e_prefix.style = e_prefixed_pascal
+dotnet_naming_symbols.enum_types.applicable_kinds = enum
+dotnet_naming_style.e_prefixed_pascal.required_prefix = E
+dotnet_naming_style.e_prefixed_pascal.capitalization = pascal_case

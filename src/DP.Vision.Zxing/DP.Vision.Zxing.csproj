@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>netstandard2.0</TargetFramework>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../DP.Vision.Algorithms/DP.Vision.Algorithms.csproj" />
+        <PackageReference Include="ZXing.Net" Version="0.16.11" />
+    </ItemGroup>
+</Project>

@@ -1,0 +1,36 @@
+# 统一换行处理：仓库内按内容规范化，避免跨平台 diff 噪声
+* text=auto
+
+# 二进制，禁止换行转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.pptx  binary
+*.xlsx  binary
+*.docx  binary
+*.dll   binary
+*.pdb   binary
+*.nupkg binary
+*.pgm   binary
+
+# 文本，显式声明
+*.cs     text
+*.csproj text
+*.props  text
+*.targets text
+*.sln    text
+*.ps1    text
+*.cmd    text
+*.md     text
+*.json   text
+*.resx   text
+*.xml    text
+*.svg    text
+*.yml    text
+*.yaml   text
+.editorconfig  text
+.gitignore     text
+.gitattributes text

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../DP.Vision.Algorithms/DP.Vision.Algorithms.csproj" />
+        <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.28.0" />
+    </ItemGroup>
+</Project>

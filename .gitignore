@@ -1,0 +1,34 @@
+# .NET build outputs
+**/bin/
+**/obj/
+artifacts/
+.artifacts/
+dist/
+
+# Visual Studio / user state
+.vs/
+**/.vs/
+*.user
+*.suo
+
+# Local probes and temporary files
+.tmp/
+**/.tmp/
+.pi-tmp/
+**/.pi-tmp/
+*.tmp
+~$*
+*.log
+
+# Assistant / tooling session state
+.workbuddy-ai/
+
+# Test results and coverage
+TestResults/
+**/TestResults/
+*.coverage
+*.coveragexml
+
+# OS/editor files
+.DS_Store
+Thumbs.db

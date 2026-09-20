@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+        <UseWindowsForms>true</UseWindowsForms>
+        <UseWPF>true</UseWPF>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../../src/DP.Vision.Winform/DP.Vision.Winform.csproj" />
+        <ProjectReference Include="../../src/DP.Vision.WPF/DP.Vision.WPF.csproj" />
+    </ItemGroup>
+</Project>

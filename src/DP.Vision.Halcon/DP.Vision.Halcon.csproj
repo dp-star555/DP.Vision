@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+    <HalconDotNetPath Condition="'$(HalconDotNetPath)' == '' and '$(HALCONROOT)' != ''">$(HALCONROOT)\bin\dotnet35\halcondotnet.dll</HalconDotNetPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="Exists('$(HalconDotNetPath)')">
+    <DefineConstants>$(DefineConstants);HALCON_SDK</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DP.Vision.Algorithms/DP.Vision.Algorithms.csproj" />
+    <ProjectReference Include="../DP.Vision.Acquisition.Abstractions/DP.Vision.Acquisition.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(HalconDotNetPath)')">
+    <Reference Include="halcondotnet" HintPath="$(HalconDotNetPath)" Private="true" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 插件私有配置由本Provider自己解析；公共契约层不引入JSON。 -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 插件Manifest随程序集一起输出，使该目录本身就是一个可被插件加载器扫描的插件包。 -->
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
