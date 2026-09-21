@@ -26,7 +26,8 @@ public sealed class HalconStreamSessionTests
 
         Assert.AreEqual(1, harness.Camera.OpenCount);
         Assert.AreEqual(EVisionTriggerMode.External, harness.Camera.AppliedTriggerMode);
-        Assert.AreEqual("Line1", harness.Camera.AppliedTriggerSource);
+        Assert.IsNull(harness.Camera.AppliedExposure, "会话按机器配置布防，不写节点级曝光覆盖。");
+        Assert.IsNull(harness.Camera.AppliedGain, "会话按机器配置布防，不写节点级增益覆盖。");
         Assert.AreEqual(1500, harness.Camera.AppliedGrabTimeout);
         Assert.IsTrue(harness.Camera.WaitForGrabEntered(), "布防后采集循环必须真的开始拉取。");
         CollectionAssert.AreEqual(new[] { "Open", "Apply" }, harness.Camera.Events.Take(2).ToArray());
@@ -254,7 +255,11 @@ public sealed class HalconStreamSessionTests
         var session = new HalconStreamSession(camera, new RecordingStreamSink());
 
         Assert.ThrowsExactly<VisionSourceConfigurationException>(
-            () => session.Arm(EVisionTriggerMode.External, "Line1", 1000));
+            () => session.Arm(
+                EVisionTriggerMode.External,
+                exposureMicroseconds: null,
+                gainDecibels: null,
+                grabTimeoutMilliseconds: 1000));
 
         Assert.IsTrue(session.Stopped);
         Assert.AreEqual(1, camera.OpenCount);
@@ -271,7 +276,11 @@ public sealed class HalconStreamSessionTests
         var session = new HalconStreamSession(camera, new RecordingStreamSink());
 
         Assert.ThrowsExactly<VisionDeviceOfflineException>(
-            () => session.Arm(EVisionTriggerMode.KeepCurrent, null, 1000));
+            () => session.Arm(
+                EVisionTriggerMode.KeepCurrent,
+                exposureMicroseconds: null,
+                gainDecibels: null,
+                grabTimeoutMilliseconds: 1000));
 
         Assert.IsTrue(session.Stopped);
         Assert.AreEqual(0, camera.OpenCount);
@@ -304,13 +313,16 @@ public sealed class HalconStreamSessionTests
     {
         public Harness(
             EVisionTriggerMode triggerMode = EVisionTriggerMode.External,
-            string? triggerSource = "Line1",
             int grabTimeoutMilliseconds = 1500)
         {
             Camera = new FakeHalconStreamCamera();
             Sink = new RecordingStreamSink();
             Session = new HalconStreamSession(Camera, Sink);
-            Session.Arm(triggerMode, triggerSource, grabTimeoutMilliseconds);
+            Session.Arm(
+                triggerMode,
+                exposureMicroseconds: null,
+                gainDecibels: null,
+                grabTimeoutMilliseconds);
         }
 
         public FakeHalconStreamCamera Camera { get; }

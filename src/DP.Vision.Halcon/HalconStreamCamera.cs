@@ -1,5 +1,6 @@
 #if HALCON_SDK
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using DP.Vision.Acquisition;
@@ -165,23 +166,32 @@ internal sealed class HObjectGrabFrame : IHalconGrabFrame
 }
 
 /// <summary>
-/// 基于 <see cref="HFramegrabber"/> 的真实长连接设备。
+/// 基于 <see cref="HFramegrabber"/> 的真实设备：持有唯一句柄，同时驱动主动单次采集与持续取流。
 /// <para>
-/// 采集循环遵循 HALCON 官方示例 <c>genicamtl_simple.hdev</c> 的写法：
-/// <c>grab_image_start</c> 激活持续取流，随后每次 <c>grab_image_async</c> 在返回前自动启动下一轮，
-/// 停止时用 <c>set_framegrabber_param('do_abort_grab', -1)</c> 打断正在进行的抓取。
+/// 句柄在设备被释放之前保持打开（单次采集之间、两次布防之间都不关闭），因此不会重复打开同一台相机，
+/// 两种采集模式也共用同一条取流通道。
 /// </para>
 /// <para>
-/// 触发设置按"先打开、后写参数"的顺序在 <see cref="ApplyArmParameters"/> 里写入，
+/// 两条取流路径的 HALCON 写法**不同**，这是厂商差异而不是不一致：
+/// 主动单次采集用 <c>grab_image</c>（自行完成"启动—等一帧—停止"），等待上限由 <c>grab_timeout</c> 给出；
+/// 持续取流遵循官方示例 <c>genicamtl_simple.hdev</c>，先用 <c>grab_image_start</c> 激活一次，
+/// 之后每次 <c>grab_image_async</c> 在返回前自动启动下一轮，停止时用
+/// <c>set_framegrabber_param('do_abort_grab', -1)</c> 打断正在进行的抓取。
+/// </para>
+/// <para>
+/// 触发与曝光/增益按"先打开、后写参数"的顺序在 <see cref="ApplyArmParameters"/> 里写入，
 /// 与 Basler 侧保持同构；差异只在写入手段上（HALCON 只能走 <c>set_framegrabber_param</c>）。
+/// 参数到设备参数的翻译全部交给 <see cref="HalconFramegrabberParameters"/>，本类型只负责执行与报错。
 /// </para>
 /// </summary>
 internal sealed class HalconFramegrabberCamera : IHalconStreamCamera
 {
     private readonly HalconAcquisitionBinding _binding;
+    private readonly object _sync = new object();
 
     private HFramegrabber? _camera;
     private bool _grabbing;
+    private bool _captureInFlight;
     private int _disposed;
 
     /// <summary>创建设备；此时尚未打开。</summary>
@@ -222,9 +232,16 @@ internal sealed class HalconFramegrabberCamera : IHalconStreamCamera
     /// <remarks>本方法不抛异常：它的调用点都是"释放设备"路径，此时抛异常只会掩盖真正的原因。</remarks>
     public void Close()
     {
-        var camera = _camera;
-        _camera = null;
-        _grabbing = false;
+        HFramegrabber? camera;
+        lock (_sync)
+        {
+            camera = _camera;
+            _camera = null;
+            // 句柄没了，两条取流路径的状态也必须一起复位，否则重新打开后会把"仍在取流"带过去。
+            _grabbing = false;
+            _captureInFlight = false;
+        }
+
         if (camera is null)
             return;
 
@@ -243,55 +260,196 @@ internal sealed class HalconFramegrabberCamera : IHalconStreamCamera
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 参数顺序固定为"抓取超时 → 曝光/增益 → 触发"：抓取超时先落地，后续参数写失败时这次调用也
+    /// 不会留下"等不到帧却还是无限等待"的状态。翻译与顺序全部由
+    /// <see cref="HalconFramegrabberParameters"/> 决定，本方法只负责写入与把厂商异常转成公共异常。
+    /// </remarks>
     public void ApplyArmParameters(
         EVisionTriggerMode triggerMode,
-        string? triggerSource,
+        double? exposureMicroseconds,
+        double? gainDecibels,
         int grabTimeoutMilliseconds)
     {
         var camera = RequireOpen();
+        lock (_sync)
+        {
+            if (_captureInFlight)
+            {
+                // 拒绝必须发生在任何设备动作之前：句柄正被一次单次采集占用，
+                // 此时写布防参数会把那次采集的设备设置改掉，采集到的就不是请求那一刻的图。
+                throw new InvalidOperationException(
+                    "HALCON 设备上已经有一次单次采集在占用句柄；布防不能与它并发。");
+            }
+        }
+
+        ApplyParametersCore(camera, triggerMode, exposureMicroseconds, gainDecibels, grabTimeoutMilliseconds);
+    }
+
+    /// <summary>
+    /// 实际写入参数；布防与单次采集共用它。
+    /// <para>
+    /// 单次采集在途时也要写参数，因此不能走带互斥检查的 <see cref="ApplyArmParameters"/>——
+    /// 互斥检查的是"另一条取流路径"，不是"本次调用自己"。
+    /// </para>
+    /// </summary>
+    /// <param name="camera">已打开的采集设备。</param>
+    /// <param name="triggerMode">触发模式。</param>
+    /// <param name="exposureMicroseconds">曝光，单位微秒；空表示不改写。</param>
+    /// <param name="gainDecibels">增益，单位分贝；空表示不改写。</param>
+    /// <param name="grabTimeoutMilliseconds">单次抓取等待上限。</param>
+    /// <exception cref="ArgumentOutOfRangeException">抓取超时不为正。</exception>
+    private void ApplyParametersCore(
+        HFramegrabber camera,
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int grabTimeoutMilliseconds)
+    {
         if (grabTimeoutMilliseconds < 1)
             throw new ArgumentOutOfRangeException(nameof(grabTimeoutMilliseconds));
 
+        WriteParameters(camera, new[]
+        {
+            new HalconDeviceParameter(HalconFramegrabberParameters.GrabTimeout, grabTimeoutMilliseconds)
+        });
+        WriteParameters(
+            camera,
+            HalconFramegrabberParameters.ResolveCaptureParameters(exposureMicroseconds, gainDecibels));
+        WriteParameters(
+            camera,
+            HalconFramegrabberParameters.ResolveTrigger(triggerMode, _binding.TriggerSource));
+    }
+
+    /// <inheritdoc/>
+    public IHalconGrabFrame CaptureSingleFrame(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int timeoutMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        if (timeoutMilliseconds < 1)
+            throw new ArgumentOutOfRangeException(nameof(timeoutMilliseconds));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var camera = RequireOpen();
+        lock (_sync)
+        {
+            if (_grabbing)
+            {
+                throw new InvalidOperationException(
+                    "HALCON 设备正在持续取流；同一台设备只有一条取流通道，不能同时用于单次采集。");
+            }
+
+            if (_captureInFlight)
+                throw new InvalidOperationException("HALCON 设备上已经有一次单次采集在进行中。");
+            _captureInFlight = true;
+        }
+
         try
         {
-            SetIntegerParam(camera, "grab_timeout", grabTimeoutMilliseconds);
+            ApplyParametersCore(camera, triggerMode, exposureMicroseconds, gainDecibels, timeoutMilliseconds);
 
-            switch (triggerMode)
+            if (HalconFramegrabberParameters.RequiresSoftwareTriggerCommand(triggerMode))
             {
-                case EVisionTriggerMode.KeepCurrent:
-                    // 保持设备当前触发设置：一个触发参数都不写，也不猜物理接线。
-                    break;
+                // 官方示例 genicamtl_software_trigger.hdev 在每次抓图前单独发一条软触发命令；
+                // 只把触发方式设成 'Software' 并不会自己产生触发。
+                WriteParameters(camera, new[] { HalconFramegrabberParameters.SoftwareTriggerCommand() });
+            }
 
-                case EVisionTriggerMode.FreeRun:
-                    camera.SetFramegrabberParam("external_trigger", "false");
-                    break;
+            // 取消只能在调用边界检查：一旦进入 SDK 的阻塞抓取，只能等 grab_timeout 到点。
+            cancellationToken.ThrowIfCancellationRequested();
 
-                case EVisionTriggerMode.External:
-                    if (string.IsNullOrWhiteSpace(triggerSource))
-                    {
-                        throw new VisionSourceConfigurationException(
-                            "HALCON 外部触发必须由Provider私有配置显式声明触发源（triggerSource，例如 Line1）；"
-                            + "不猜物理接线，也不静默退回自由运行。");
-                    }
+            HImage image;
+            try
+            {
+                // grab_image 自行完成"启动采集—等一张图—停止采集"，不需要先 GrabImageStart；
+                // 等待上限由上面写入的 grab_timeout 决定。
+                image = camera.GrabImage();
+            }
+            catch (HOperatorException exception)
+            {
+                throw TranslateGrabFailure(exception, timeoutMilliseconds);
+            }
 
-                    camera.SetFramegrabberParam("external_trigger", "true");
+            // 抓取返回的图像所有权在调用方：由设备帧视图负责释放。
+            return HObjectGrabFrame.Own(image, DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            lock (_sync)
+                _captureInFlight = false;
+        }
+    }
 
-                    // GenICam SFNC 标准节点名。设备不支持这些节点时会明确失败（H_ERR_FGPARAM 等），
-                    // 这正是想要的：写不进触发配置比"以为在等触发其实在自由运行"安全得多。
-                    camera.SetFramegrabberParam("TriggerSelector", "FrameStart");
-                    camera.SetFramegrabberParam("TriggerSource", triggerSource!);
-                    camera.SetFramegrabberParam("TriggerMode", "On");
-                    break;
+    /// <summary>
+    /// 把一次抓取失败翻译成公共异常。超时是"这一轮没有等到帧"，与设备故障、许可证故障互不等价。
+    /// </summary>
+    /// <param name="exception">厂商异常。</param>
+    /// <param name="timeoutMilliseconds">本次等待上限；进入诊断文本便于现场核对。</param>
+    /// <returns>应当抛出的公共异常。</returns>
+    private static Exception TranslateGrabFailure(HOperatorException exception, int timeoutMilliseconds)
+    {
+        var code = exception.GetErrorCode();
+        if (HalconStreamFaults.IsGrabTimeout(code))
+        {
+            return new VisionCaptureTimeoutException(
+                $"HALCON 采集超时（{timeoutMilliseconds} ms）；外部触发未到达或设备未出图。"
+                + $"请检查触发接线、触发源配置和曝光时间。底层原因：{exception.GetErrorMessage()}");
+        }
 
-                default:
-                    throw new VisionParameterNotSupportedException(
-                        $"HALCON Adapter 不支持触发模式 {triggerMode}；请在Provider私有配置中设置触发源。");
+        return HalconStreamFaults.Classify(code, exception.GetErrorMessage(), exception);
+    }
+
+    /// <summary>逐条写入设备参数；写入失败必须变成可诊断的公共异常，而不是厂商异常越过 Provider 边界。</summary>
+    /// <param name="camera">已打开的采集设备。</param>
+    /// <param name="parameters">按顺序写入的参数；空序列是空操作，即"保持设备当前设置"。</param>
+    /// <exception cref="VisionParameterNotSupportedException">设备不接受该参数名或取值。</exception>
+    /// <exception cref="VisionAcquisitionException">设备、许可证或超时类故障。</exception>
+    private static void WriteParameters(HFramegrabber camera, IReadOnlyList<HalconDeviceParameter> parameters)
+    {
+        foreach (var parameter in parameters)
+        {
+            try
+            {
+                WriteParameter(camera, parameter);
+            }
+            catch (HOperatorException exception)
+            {
+                var code = exception.GetErrorCode();
+                if (HalconStreamFaults.IsGrabTimeout(code)
+                    || HalconStreamFaults.IsLicenseFault(code)
+                    || HalconStreamFaults.IsDeviceFault(code))
+                {
+                    // 已经能判定为设备侧故障（例如设备在写参数时掉线）：不要伪装成"参数不支持"。
+                    throw HalconStreamFaults.Classify(code, exception.GetErrorMessage(), exception);
+                }
+
+                // 其余一律按"参数不支持"上报，并且把参数名与取值一起带出去：
+                // 现场最常见的原因就是采集接口不提供该节点，或该取值超出设备允许范围。
+                throw new VisionParameterNotSupportedException(
+                    $"HALCON 设备不接受参数 {parameter.Name}={parameter.DisplayValue}"
+                    + $"（错误码 {code}）：{exception.GetErrorMessage()}。"
+                    + "请核对该参数名与取值是否被当前采集接口支持。");
             }
         }
-        catch (HOperatorException exception)
+    }
+
+    private static void WriteParameter(HFramegrabber camera, HalconDeviceParameter parameter)
+    {
+        // 必须把两个实参都显式写成 HTuple：HTuple 与 string 之间存在双向隐式转换，
+        // 只写 (string, HTuple) 会让 (string, string) 与 (HTuple, HTuple) 两个重载同时可用而产生二义性。
+        using var name = (HTuple)parameter.Name;
+        using var value = parameter.Value switch
         {
-            throw HalconStreamFaults.Classify(exception.GetErrorCode(), exception.GetErrorMessage(), exception);
-        }
+            string text => (HTuple)text,
+            int number => (HTuple)number,
+            double number => (HTuple)number,
+            _ => throw new InvalidOperationException(
+                $"设备参数 {parameter.Name} 的取值类型不受支持：{parameter.Value?.GetType().FullName ?? "null"}。")
+        };
+        camera.SetFramegrabberParam(name, value);
     }
 
     /// <inheritdoc/>
@@ -299,13 +457,25 @@ internal sealed class HalconFramegrabberCamera : IHalconStreamCamera
     {
         var camera = RequireOpen();
 
+        lock (_sync)
+        {
+            if (_captureInFlight)
+            {
+                throw new InvalidOperationException(
+                    "HALCON 设备上已经有一次单次采集在进行中；持续取流不能与它并发。");
+            }
+        }
+
         try
         {
-            if (!_grabbing)
+            lock (_sync)
             {
-                // 官方示例的持续取流写法：start 激活一次，之后 async 在返回前自动启动下一轮。
-                camera.GrabImageStart(-1.0);
-                _grabbing = true;
+                if (!_grabbing)
+                {
+                    // 官方示例的持续取流写法：start 激活一次，之后 async 在返回前自动启动下一轮。
+                    camera.GrabImageStart(-1.0);
+                    _grabbing = true;
+                }
             }
 
             // MaxDelay 取 -1（停用"图像太旧就丢"的机制）：缓冲源要的是每一帧，而不是最新的一帧。
@@ -315,7 +485,8 @@ internal sealed class HalconFramegrabberCamera : IHalconStreamCamera
         catch (HOperatorException exception)
         {
             // 抓取链已经断了：下一轮必须重新 start，否则后续调用会一直失败。
-            _grabbing = false;
+            lock (_sync)
+                _grabbing = false;
             throw HalconStreamFaults.Classify(exception.GetErrorCode(), exception.GetErrorMessage(), exception);
         }
     }
@@ -327,13 +498,16 @@ internal sealed class HalconFramegrabberCamera : IHalconStreamCamera
     /// </remarks>
     public void AbortGrab()
     {
-        var camera = _camera;
+        HFramegrabber? camera;
+        lock (_sync)
+            camera = _camera;
+
         if (camera is null)
             return;
 
         try
         {
-            SetIntegerParam(camera, "do_abort_grab", -1);
+            WriteParameter(camera, new HalconDeviceParameter(HalconFramegrabberParameters.AbortGrab, -1));
         }
         catch (HOperatorException)
         {
@@ -359,15 +533,6 @@ internal sealed class HalconFramegrabberCamera : IHalconStreamCamera
     {
         if (_disposed != 0)
             throw new ObjectDisposedException(nameof(HalconFramegrabberCamera));
-    }
-
-    private static void SetIntegerParam(HFramegrabber camera, string name, int value)
-    {
-        // 必须把两个实参都显式写成 HTuple：HTuple 与 string 之间存在双向隐式转换，
-        // 只写 (string, HTuple) 会让 (string, string) 与 (HTuple, HTuple) 两个重载同时可用而产生二义性。
-        using var nameTuple = (HTuple)name;
-        using var valueTuple = (HTuple)value;
-        camera.SetFramegrabberParam(nameTuple, valueTuple);
     }
 }
 #endif

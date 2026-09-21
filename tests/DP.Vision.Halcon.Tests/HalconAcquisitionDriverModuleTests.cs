@@ -32,8 +32,8 @@ public sealed class HalconAcquisitionDriverModuleTests
         Assert.IsTrue(registration.Capabilities.SupportsFreeRun);
         Assert.IsTrue(registration.Capabilities.SupportsSoftwareTrigger);
         // 外部触发与完整帧回调只在SDK编译进程序集时声明；缺SDK时由Provider健康报告单独给出诊断。
-        Assert.AreEqual(HalconCameraCapture.IsSdkEnabled, registration.Capabilities.SupportsCompleteFrameCallback);
-        Assert.AreEqual(HalconCameraCapture.IsSdkEnabled, registration.Capabilities.SupportsExternalTrigger);
+        Assert.AreEqual(HalconStreamCameras.IsSdkEnabled, registration.Capabilities.SupportsCompleteFrameCallback);
+        Assert.AreEqual(HalconStreamCameras.IsSdkEnabled, registration.Capabilities.SupportsExternalTrigger);
     }
 
     /// <summary>插件目录被扫描后Catalog列出HALCON面阵Type；全程不需要Manifest与机器配置。</summary>

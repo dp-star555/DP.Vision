@@ -6,7 +6,7 @@ using DP.Vision.Acquisition;
 
 namespace DP.Vision.Halcon;
 
-/// <summary>HALCON采集Provider；把现有HalconCameraCapture包装为公共Provider契约，阶段A不改变设备行为。</summary>
+/// <summary>HALCON采集Provider；按绑定创建持有唯一 <c>HFramegrabber</c> 的设备适配器，公共契约不暴露任何 HALCON 类型。</summary>
 public sealed class HalconAcquisitionProvider : IVisionAcquisitionProvider
 {
     /// <summary>HALCON Provider稳定身份。</summary>

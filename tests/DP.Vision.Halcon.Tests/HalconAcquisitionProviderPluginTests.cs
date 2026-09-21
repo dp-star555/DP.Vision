@@ -83,8 +83,8 @@ public sealed class HalconAcquisitionProviderPluginTests
         var availability = result.ProviderAvailability
             .Single(item => item.ProviderId == HalconAcquisitionProvider.ProviderIdentity);
 
-        Assert.AreEqual(HalconCameraCapture.IsSdkEnabled, availability.IsAvailable);
-        if (HalconCameraCapture.IsSdkEnabled)
+        Assert.AreEqual(HalconStreamCameras.IsSdkEnabled, availability.IsAvailable);
+        if (HalconStreamCameras.IsSdkEnabled)
             Assert.IsNull(availability.Diagnostic);
         else
             StringAssert.Contains(availability.Diagnostic, HalconAcquisitionProvider.ProviderIdentity);

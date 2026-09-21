@@ -6,11 +6,11 @@
 
 目标 `net48;net8.0-windows`，沿用底座 x64 配置。通过 `HALCONROOT/bin/dotnet35/halcondotnet.dll` 或显式 MSBuild `HalconDotNetPath` 引用本机合法安装的 SDK；部署必须提供对应 HALCON runtime、采集接口、设备驱动及有效许可证。
 
-没有 SDK 也可构建：`HalconCameraCapture.IsSdkEnabled == false`，采集明确抛出 `PlatformNotSupportedException`，绝不生成模拟帧。此属性只描述构建能力，不证明设备在线、原生 DLL 或许可证可用。宿主不应注册不可用的实现。
+没有 SDK 也可构建：`HalconStreamCameras.IsSdkEnabled == false`，造设备时明确抛出 `VisionProviderUnavailableException`，绝不生成模拟帧。此属性只描述构建能力，不证明设备在线、原生 DLL 或许可证可用。宿主不应注册不可用的实现。
 
 ## 相机
 
-工作流侧通过中立采集入口使用本Provider，不直接接触 `ICameraCapture`：
+工作流侧只通过中立采集入口使用本Provider：
 
 ```csharp
 var captured = await acquisition.CaptureAsync(
@@ -20,17 +20,12 @@ var captured = await acquisition.CaptureAsync(
     token);
 ```
 
-`ICameraCapture` 仍是本程序集内部的设备适配细节（`HalconAcquisitionDevice` 用它打开设备并复制中立图像），已不再是工作流能力契约：
-
-```csharp
-ICameraCapture camera = new HalconCameraCapture(grabTimeoutMilliseconds: 5000);
-using var image = await camera.CaptureAsync("GigEVision2|设备标识", new CameraCaptureOptions(), token);
-```
-
-- CameraId 是 `HALCON接口名|设备名`，例如 GigEVision2、USB3Vision、GenICamTL 的设备；不自动选择第一台相机。该格式现在只出现在Provider私有配置里，不进入工作流文档。
-- 主动单次采集（OnDemand）每次请求独立打开/关闭 HFramegrabber。并发打开同一设备是否允许由驱动决定，不保证高帧率吞吐。
-- Exposure 非零写入 `ExposureTime`（GenICam 微秒）；Gain 非零写入 `Gain`（设备单位）；零不写参数。
-- 触发模式按三态处理：`KeepCurrent` 打开参数取 `'default'`（**一个触发参数都不写**），`FreeRun` 写 `'false'`，`External` 写 `'true'`；`Software` 明确拒绝（无法用打开参数表达）。把"保持当前设置"写成 `'false'` 会在打开设备时显式关闭外部触发，把硬件触发的相机改成自由运行。
+- **一个绑定一个设备适配器，一个设备适配器只持有一个 `HFramegrabber`**：主动单次采集（OnDemand）与外部回调长连接（BufferedExternal）共用同一句柄，句柄在设备释放时才关闭。先前的"每次请求独立打开/关闭设备"已删除——同一物理设备只有一条取流通道，反复打开既丢失设备侧设置，也让两条路径无法互斥。
+- 绑定身份来自Provider私有配置（`interfaceName`/`deviceName`/`serialNumber`），例如 GigEVision2、USB3Vision、GenICamTL 的设备；不自动选择第一台相机。该格式不进入工作流文档。
+- 参数写入只有一条路径（`HalconFramegrabberParameters` 决策 + `HalconFramegrabberCamera.WriteParameters` 执行）：先写 `grab_timeout`，再写曝光/增益，最后写触发。
+- Exposure 给出时先关 `ExposureAuto` 再写 `ExposureTime`（GenICam 微秒）；Gain 给出时先关 `GainAuto` 再写 `Gain`（**分贝**，SFNC 约定的 dB 单位）。参数为 `null` 表示"不动设备当前设置"，显式 `0` 是真实取值、必须写入——两者语义不同，不再用 `> 0` 判断混淆。
+- 触发模式四态都真实成立：`KeepCurrent` **一个触发参数都不写**（保持设备当前设置）；`FreeRun` 写 `external_trigger=false`；`External` 写 `external_trigger=true` + `TriggerSelector=FrameStart` + `TriggerSource`（私有配置未声明触发源时抛 `VisionSourceConfigurationException`，不猜物理接线）；`Software` 按 MVTec 官方示例实现——`[Consumer]trigger=Software` + `AcquisitionMode=Continuous`，每帧前 `[Consumer]trigger_software=1` 再 `grab_image`，不写 `external_trigger`。
+- **两条取流通道双向互斥**：会话在布防中时按请求单次采集被拒绝（设备已结束则报 `VisionDeviceOfflineException`，否则报 `VisionSourceConfigurationException`）；相机句柄上已有单次采集在飞时布防被拒绝（`InvalidOperationException`）。同一物理设备一次只能有一种采集模式，因此不做静默排队。
 - SDK 阻塞操作在线程池执行，协作取消在 SDK 调用边界检查；`grab_timeout` 限制采集等待，但不能保证中断设备打开或不遵守超时的驱动。宿主必须等请求退出再释放关联资源。
 
 ## 长连接与外部回调（BufferedExternal）
@@ -87,4 +82,4 @@ using var image = await camera.CaptureAsync("GigEVision2|设备标识", new Came
 
 真正的像素落地与布局/预算判定在 `HalconNeutralFrames`，主动单次采集与外部回调长连接**共用同一份实现**——两条路径各写一份通道排布，只会在现场以"偶发图像错位"的形式暴露。
 
-测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；长连接侧另有 102 例（含双 TFM）覆盖布防/复用/停止等待/回调边界纪律/错误码分类，全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**，也不代表曝光、触发精度、`do_abort_grab` 支持情况或现场吞吐已验证。
+测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；另有 129 例（含双 TFM）覆盖触发/曝光/增益参数决策、句柄复用、单次采集与取流的双向互斥、停止等待、回调边界纪律与错误码分类，全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**：`Software` 触发按 MVTec 官方示例实现（`[Consumer]trigger` + 抓取前 `[Consumer]trigger_software`），是否被现场接口接受、曝光/触发精度、`do_abort_grab` 支持情况与吞吐都必须现场确认。

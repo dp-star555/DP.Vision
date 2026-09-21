@@ -19,17 +19,21 @@ public sealed class HalconBoundaryTests
     [TestMethod]
     public void DependencyDirection_IsIndependent()
     {
-        Assert.IsFalse(typeof(HalconCameraCapture).Assembly.GetReferencedAssemblies().Any(a =>
+        Assert.IsFalse(typeof(HalconAcquisitionDevice).Assembly.GetReferencedAssemblies().Any(a =>
             a.Name!.StartsWith("DP.WorkFlow", StringComparison.Ordinal) || a.Name.StartsWith("MachineVision", StringComparison.Ordinal)));
     }
 
-    /// <summary>无效设备配置或已取消请求不进入SDK打开。</summary>
+    /// <summary>未装配SDK的构建不会伪造帧：工厂在造设备时就明确失败，而不是静默降级。</summary>
     [TestMethod]
-    public void Camera_RejectsInvalidSettingsBeforeOpening()
+    public void MissingSdk_IsExplicitlyUnavailable()
     {
-        var camera = new HalconCameraCapture();
-        Assert.ThrowsExactly<ArgumentException>(() => camera.CaptureAsync("invalid", new CameraCaptureOptions()));
-        Assert.ThrowsExactly<OperationCanceledException>(() => camera.CaptureAsync("GigEVision2|device", new CameraCaptureOptions(), new CancellationToken(true)));
+#if HALCON_SDK
+        Assert.IsTrue(HalconStreamCameras.IsSdkEnabled);
+#else
+        Assert.IsFalse(HalconStreamCameras.IsSdkEnabled);
+        Assert.ThrowsExactly<VisionProviderUnavailableException>(
+            () => HalconStreamCameras.Create(new HalconAcquisitionBinding("cam", "GigEVision2", "dev")));
+#endif
     }
 
 #if HALCON_SDK
@@ -91,15 +95,6 @@ public sealed class HalconBoundaryTests
             CollectionAssert.AreEqual(new byte[] { 50, 100, 200, 51, 101, 201 }, bytes);
         }
         finally { r.Free(); g.Free(); b.Free(); }
-    }
-#else
-    /// <summary>未装配SDK的构建不会返回伪造帧。</summary>
-    [TestMethod]
-    public void MissingSdk_IsExplicitlyUnavailable()
-    {
-        Assert.IsFalse(HalconCameraCapture.IsSdkEnabled);
-        Assert.ThrowsExactly<PlatformNotSupportedException>(() =>
-            new HalconCameraCapture().CaptureAsync("GigEVision2|device", new CameraCaptureOptions()));
     }
 #endif
 }

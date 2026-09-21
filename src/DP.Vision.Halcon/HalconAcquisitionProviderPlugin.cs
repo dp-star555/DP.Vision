@@ -19,7 +19,7 @@ public sealed class HalconAcquisitionProviderPlugin : IVisionAcquisitionProvider
 
     /// <summary>创建插件入口；SDK部署状态取自本程序集的编译期开关。</summary>
     public HalconAcquisitionProviderPlugin()
-        : this(static () => HalconCameraCapture.IsSdkEnabled)
+        : this(static () => HalconStreamCameras.IsSdkEnabled)
     {
     }
 

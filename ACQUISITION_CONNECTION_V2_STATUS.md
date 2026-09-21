@@ -40,9 +40,9 @@ net8.0-windows 分套件：
 | V2-2 机器相机定义与不可变 Composition | ✅ 已完成（见下文） |
 | V2-3 应用级连接生命周期 | ✅ 已完成（见下文） |
 | V2-4 TransferPolicy 与 Epoch 解耦 | ✅ 已完成（见下文） |
-| V2-5 面阵/线扫双节点模型 | ⏳ 待实施 |
-| V2-6 Basler 迁移 | ⏳ 待实施 |
-| V2-7 HALCON 迁移 | ⏳ 待实施 |
+| V2-5 面阵/线扫双节点模型 | ✅ 已完成（见下文） |
+| V2-6 Basler 迁移 | ✅ 已完成（见下文） |
+| V2-7 HALCON 迁移 | ✅ 已完成（见下文） |
 | V2-8 线扫与采集卡首个 Adapter | ⏳ 待实施 |
 | V2-9 Acquisition UI、审计和运行优化 | ⏳ 待实施 |
 
@@ -288,3 +288,240 @@ WorkFlow 侧（独立仓库）：`DP.WorkFlow.Nodes.Vision.Acquisition.Tests` 8 
 `上一根运行未领取的帧不会进入下一根运行` StreamStartCount 2→1，
 `运行准备校验失败时设备没有被布防` → `运行准备校验失败时本轮没有活动代次`（StreamStartCount==1）；
 `DP.WorkFlow.Nodes.Vision.Tests` 39 通过、`DP.WorkFlow.Runtime.Tests` 32 通过，无回归。
+
+## V2-5：面阵/线扫双节点模型
+
+状态：**已完成**（2026-09-21）· 仅 WorkFlow 仓库（DP.Vision 无改动）
+
+### 需求覆盖（§20 V2-5）
+
+1. **面阵节点**：`CaptureAreaFrameNodeModel`/`Handler`（`Vision.CaptureAreaFrame`，显示名"采集面阵帧"）、输出 `ImageFrame`。
+2. **线扫节点**：`CaptureLineScanFrameNodeModel`/`Handler`（`Vision.CaptureLineScanFrame`，显示名"采集线扫帧"）、输出 `ImageFrame`。
+   线扫节点不预设触发模式（触发时序属设备/Adapter 的工艺约定），`VisionCaptureRequest` 固定用 `KeepCurrent`。
+3. **Source 候选按 AcquisitionKind 过滤**：`WorkflowVisionSourceInfo` 追加可选 `Kind`（`FromAcquisition` 从 `VisionAcquisitionSourceInfo.Kind` 投影），
+   `WorkflowVisionSourceChoices.CreateProvider` 按编辑器键投影面阵/线扫两份候选；`Kind` 未声明的源在两个列表都保留并标注"采集类型未声明"（不猜测）。
+4. **共享无状态执行与输出提交**：`VisionCaptureNodeExecution.ExecuteAsync` 承载"源非空校验 → `IVisionAcquisition.CaptureAsync` → 源事实 Trace → `LoadVisionFileNodeHandler.Output` 提交"，
+   两个 Handler 均为单行转发，没有共享基类。
+5. **~~旧 `Vision.CaptureFrame` 迁移器~~（偏离，按用户决定取消）**：用户明确要求"彻底抛弃旧兼容，直接删除掉"，
+   因此删除旧节点 `CaptureVisionFrameNode.cs` 与持久化层旧兼容迁移（`MigrateCaptureNodeConfig`/`MigrateLegacyPhysicalQuantity`/`CreateEnumValueNode` 共 ~73 行）。
+   旧文档中的 `Vision.CaptureFrame` 不再被静默转换，而是按未注册节点降级为 `UnknownWorkflowNodeModel`、`RawConfig` 保真保留，
+   载入时给出迁移警告、编译/绑定时明确报错，不产生静默行为改变。
+6. **WinForms/WPF PropertyGrid 回归**：`VisionFrameEditorPage` 预览页与两个样例的 ChoiceProvider 同步接入；
+   `WorkflowPropertyInspectorModel.IsChoiceEditor` 识别两个新编辑器键，属性面板按节点自身的键取候选。
+
+完成条件达成：两个节点输出相同的 `ImageFrame`，无厂商类型进入 Workflow。
+
+### 验收证据（§21）
+
+| 验收（§21） | 证据 |
+|---|---|
+| 面阵/线扫节点均输出中立 `ImageFrame`（§21.21/22） | `VisionModuleTests.Module_RegistersOnlyNewContractsAndUniqueHandlers`（两节点 `OutputType == typeof(ImageFrame)`）· `VisionAcquisitionNodeTests.线扫节点输出与面阵节点相同的中立ImageFrame` |
+| Source 候选按类型过滤（§21.23） | `NewVisionCompletionTests.VisionSourceChoices_FilterCandidatesByAcquisitionKind`（面阵列表 = 面阵源 + 不可用面阵源 + 未声明源；线扫列表 = 未声明源 + 线扫源；未知键返回空） |
+| 不匹配类型在首节点执行前被拒绝（§21.24） | `线扫节点绑定面阵源时在首节点前拒绝` · `面阵节点绑定线扫源时在首节点前拒绝`（均断言首节点未执行、异常文案含面阵/线扫语义） |
+| 形态未声明的源不做类型拒绝（不猜测） | `形态未声明的源不做类型拒绝` |
+| 属性面板按节点键区分候选（§21.25） | `WorkflowPropertyInspectorTests.Inspector_UsesKindSpecificChoiceEditorsForCaptureNodes`（键原样传给 provider、面阵有 TriggerMode 且线扫没有） |
+| 旧节点不再静默转换（偏离后的替代验收） | `VisionModuleTests.OldNodeType_IsNotSilentlyConvertedOnLoad` · `旧采集节点类型未注册时按未知节点保真保留配置`（`UnknownWorkflowNodeModel` + CameraId/Exposure/Gain/Triggered 全保真） |
+| Type 形态投影 | `WorkflowVisionSourceCatalogProjectionTests.线扫Type投影为线扫形态` |
+
+### 新增/变更契约与实现
+
+新增（WorkFlow）：
+
+- `Nodes.Vision/Acquisition/CaptureAreaFrameNode.cs` · `CaptureLineScanFrameNode.cs` · `VisionCaptureNodeExecution.cs`（共享执行主干，internal static）。
+- `Vision.UI/Editors/WorkflowVisionSourceChoices.cs`（按编辑器键投影候选）。
+- `WorkflowVisionSourceInfo.Kind`（尾部可选参数，既有 6 参位置调用行为不变）。
+
+删除（WorkFlow）：
+
+- `Nodes.Vision/Acquisition/CaptureVisionFrameNode.cs`（旧 `Vision.CaptureFrame`）。
+- `WorkflowDocumentJsonStore` 中 3 个旧兼容迁移方法与调用点；旧文档降级为未知节点保真。
+
+变更（WorkFlow）：
+
+- `WorkflowPropertyEditorKeys`：`VisionSource` → `VisionAreaSource` + `VisionLineScanSource`；`IsChoiceEditor` 同步。
+- `WorkflowVisionFrameScope`：重复 ID 检查与 `ValidateCaptureNodes` 改为枚举两种采集节点的 `CaptureCandidates`，
+  并在源 `Kind` 与节点 `RequiredKind` 不一致时拒绝（`Kind` 为 null 放行）；`CreateRequest` 延迟构造，使绑定错误先于参数错误暴露。
+- `WorkflowImageRuntimePluginModule`：注册两个节点与两个 Handler。
+- `VisionFrameEditorPage`、WinForms 样例 `Form1.cs`、Legacy WPF 样例 `MainWindow.xaml.cs` 同步。
+
+### 测试结果
+
+`dotnet test DP.WorkFlow.sln`：**843 通过 / 0 失败**（全部 14 个测试工程；`tests/Platform/ModernUI.*` 不在解决方案内）。
+
+相关套件：
+
+- `DP.WorkFlow.Nodes.Vision.Tests` 39 → 43（+4：线扫输出等价、两个跨类型拒绝、形态未声明放行；旧迁移用例改为未知节点保真）。
+- `DP.WorkFlow.Nodes.Vision.Acquisition.Tests` 8 → 9（+1：线扫 Type 形态投影；`BufferedExternalRunScopeEndToEndTests` 改用面阵节点）。
+- `DP.WorkFlow.UI.Shared.Tests` 62 → 63（+1：属性面板按节点键区分候选）。
+- `DP.WorkFlow.UI.Windows.Tests` 352 通过（`VisionSourceChoices_FilterCandidatesByAcquisitionKind` 等按新节点迁移；无回归）。
+- 其余套件不变：Core 46 · Standard 48 · Process 56 · Composite 7 · Motion 12 · Persistence 10 · Runtime 32 · ScriptEngine 各套件不变。
+
+DP.Vision 侧无改动，仍为 V2-4 的 `dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：541 通过 / 0 失败。
+
+## V2-6：Basler 迁移
+
+状态：**已完成**（2026-09-21）· 仅 DP.Vision 仓库
+
+### 需求覆盖（§20 V2-6）
+
+1. **OnDemand 与 Callback 共用同一个已连接 `Camera`**：`BaslerAcquisitionDevice` 只保留一个相机字段 `_camera`，
+   由 `_cameraFactory` 在**第一次被用到时创建一次**；`CaptureAsync` 与 `StartStreamAsync` 都取用同一个对象
+   （`_camera ??= _cameraFactory(_binding)`），设备不再区分"单次采集用的相机"和"布防用的相机"。
+   相机写入入口收敛为契约 `IBaslerStreamCamera`：主动单次采集 `CaptureSingleFrame` 与持续取流 `StartContinuousGrab`
+   都在这一个设备侧对象上发生，`pylon` 的 `StreamGrabber` 只有一条通道。
+2. **删除每次 Capture 的 `new Camera/Open/Close`**：`BaslerAcquisitionDevice.CaptureAsync` 不再有 `#if BASLER_SDK` 分支，
+   也不再构造 / 打开 / 关闭任何设备；原 `Grab(Camera, …)` 中"新建相机 → Open → 抓图 → Close"整段（约 90 行）已删除，
+   抓图职责迁移到 `PylonStreamCamera.CaptureSingleFrame`。相机只在设备释放时 `Close` 一次。
+3. **PerRequest 与 OnConnect 不能同时创建两个 StreamGrabber 状态**：互斥由两层保证——
+   设备适配器在 `_sync` 锁下拒绝"已作为缓冲源布防时再来单次采集"（`_session is not null`，断线时优先报断线原因）；
+   反向的"单次采集在途时布防"由共享相机的单通道检查拦下（真实实现是 `StreamGrabber.IsGrabbing`，
+   假相机在 `_grabArmed || _capturing` 时同样抛异常），失败发生在任何设备动作之前。
+   `StopContinuousGrab` 只收尾本侧真正开始过的持续取流（`_onFrame is not null` 才停），不会误停他人取流。
+4. **保留回调边界中立像素复制**：回调路径仍走 `BaslerNeutralFrames.Copy`，
+   `PylonGrabFrame.ForCallback` / `ForRetrieved` 的释放语义区分未动；单次采集路径继续在返回前把像素落地为中立图像
+   （`new VisionProviderFrame(BaslerNeutralFrames.Copy(grabFrame), …)`），不把 pylon 缓冲交给上层。
+5. **验证关闭顺序和断线状态**：释放顺序仍是"先 `session.DisposeAsync()`（停流并等在途回调退出）→ 再 `camera.Dispose()`"；
+   断线（`GrabSucceeded == false`）经 `onFailure` 结束会话、源标记故障且**不关闭相机**，
+   此后 `CaptureAsync` 优先报 `VisionDeviceOfflineException` 并带上断线原因，而不是误报"正在布防"。
+
+完成条件达成：真实 SDK 路径上同一台 Basler 设备只存在一个已连接 `Camera` 与一条取流通道，两种采集模式互斥且复用同一对象。
+
+### 验收证据（§21）
+
+| 验收（§21） | 证据 |
+|---|---|
+| 第二根运行复用同一个 SDK 对象（§21.18） | `BaslerAcquisitionDeviceStreamTests.ThreeRuns_ShareSingleConnectedCameraAndCloseOnce`（OpenCount==1、StartGrab==3、StopGrab==3、释放前 Close==0）· `SecondArm_ReusesOpenCameraInsteadOfOpeningAgain` |
+| 多次 OnDemand Capture 不重复 Open/Close（§21.6，Basler 侧） | `CaptureAsync_ReusesSingleConnectedCameraAcrossRequests`（3 次采集 OpenCount==1、事件序列 `open,capture-single,capture-single,capture-single`） |
+| Runtime Dispose 等待在途回调与在途 Capture 退出（§21.19） | `BaslerStreamSessionTests.Dispose_WaitsForInFlightCallback` · `StartStream_WhileCapturing_IsRejected`（单次采集在途时布防被拒且 `StartGrabCount==0`） |
+| Shutdown 事件顺序：停流先于关设备（§21.20） | `DeviceDispose_StopsStreamBeforeClosingCamera`（`open,apply-parameters,start-grab,stop-grab,close`）· `DeviceDispose_AfterCaptureOnly_ClosesCameraOnce` · `DeviceDispose_IsIdempotent` · `DeviceDispose_WithoutArming_DoesNotTouchCamera` |
+| 断线状态可解释且不关闭相机（§20.5） | `StreamFailure_EndsSessionWithoutClosingCamera` · `CaptureAsync_AfterStreamFailure_ReportsDisconnect`（消息含断线原因） |
+| 单次采集失败后相机保持打开可重试 | `CaptureAsync_Failure_KeepsCameraOpenForNextRequest` |
+| 两种模式互斥，不产生两个 StreamGrabber 状态（§20.3） | `CaptureAsync_WhileArmed_IsRejected` · `StartStream_WhileCapturing_IsRejected` · `SecondArm_WhileArmed_IsRejectedWithoutReplacingSink` |
+| 回调边界中立像素复制保留（§20.4） | `BaslerStreamSessionTests.Frame_IsDeliveredAsNeutralImageWithDeviceSequence` · `Frame_WideMonoLandsOnGray16Layout` · `BaslerNeutralFramesTests.DirectFormat_StillGoesThroughDeviceConverter`（§21.28：交付后的 `ImageFrame` 不引用设备缓冲） |
+
+### 变更文件
+
+- `src/DP.Vision.Basler/BaslerStreamContracts.cs`：`IBaslerStreamCamera` 新增 `CaptureSingleFrame(...)`；
+  接口与 `BaslerStreamCameras` 文档改为"一台相机上全部设备侧动作的唯一入口、物理设备上只有一条取流通道"。
+- `src/DP.Vision.Basler/PylonStreamCamera.cs`：实现 `CaptureSingleFrame`（参数写入 → `OneByOne`/`ProvidedByStreamGrabber` →
+  软件触发 → `RetrieveResult(timeout, ThrowException)` → `GrabSucceeded` 校验 → `PylonGrabFrame.ForRetrieved`，
+  `finally` 中停掉本次抓图）；`StartContinuousGrab` 在 `IsGrabbing` 时明确失败；`StopContinuousGrab` 按是否真正开始过持续取流决定是否 `Stop`。
+- `src/DP.Vision.Basler/BaslerAcquisitionDevice.cs`：字段收敛为 `_camera`；`CaptureAsync` 移除 `#if BASLER_SDK` 分支与 per-Capture 设备生命周期；
+  `DisposeAsync` 顺序改为 `session.DisposeAsync()` → `camera.Dispose()`；删除旧 `#if` 抓图实现。
+- `tests/DP.Vision.Basler.Tests/TestDoubles/StreamTestDoubles.cs`：假相机模拟单条取流通道（`_grabArmed`/`_capturing` 互斥、
+  `SingleCaptureCount`、可阻塞的 `CaptureEntered`/`CaptureRelease`、参数记录）。
+- `tests/DP.Vision.Basler.Tests/BaslerAcquisitionDeviceStreamTests.cs`：新增 7 个用例（见上表），既有释放顺序与布防用例保留。
+- `src/DP.Vision.Basler/README.md`：改为"一台设备只有一个已连接相机"，补充"单次采集与持续取流互斥"与断线语义。
+
+### 测试结果
+
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**548 通过 / 0 失败**（V2-4 基线 541 + 新增 7）。
+
+分套件：DP.Vision.Basler.Tests 91 → 98（+7）· DP.Vision.Tests 115 · DP.Vision.Acquisition.Tests 153 · DP.Vision.Halcon.Tests 111 ·
+DP.Vision.Algorithms.Tests 67 · DP.Vision.Acquisition.Integration.Tests 4。
+
+`dotnet build DP.Vision.sln -c Debug`（net48 + net8.0-windows）：0 错误；仅剩 3 个与本次改动无关的预存 net48 可空警告
+（`HalconDeviceSettingsParser.cs(100)` CS8604 ×2、`TestDeviceSettingsParser.cs(20)` CS8604）。
+
+### 记录（相对计划的偏离）
+
+- **相机仍在"第一次使用时打开"，未在 `BaslerAcquisitionProvider.OpenAsync` 急打开**。理由：
+  `CrossVendorProviderCoexistenceTests.TwoRealVendors_CoexistAndRouteBySourceId` 会在无相机的开发机上调用
+  `baslerProvider.OpenAsync` 并断言设备身份；急打开会让 `CameraFinder.Enumerate()` 找不到设备而抛 `VisionDeviceOfflineException`，
+  破坏该"无硬件可验证"的测试意图。懒打开同样满足 V2-3 完成条件（多次 Capture 的 OpenCount 恒为 1，直到 Runtime 停止才 Close 一次），
+  也满足 V2-6 第 1/2 条（两种模式复用同一已连接对象、无 per-Capture 生命周期）。
+- 单次采集在途时**拒绝布防**（而不是排队等待），这是"一条取流通道"的直接推论；宿主若要两种模式交替，需自行等待前一次采集返回。
+
+## V2-7：HALCON 迁移
+
+状态：**已完成**（2026-09-21）· 仅 DP.Vision 仓库
+
+### 需求覆盖（§20 V2-7）
+
+1. **`HalconAcquisitionDevice` 持有唯一 `HFramegrabber`**：字段收敛为 `_camera`（`IHalconStreamCamera`），
+   由 `_cameraFactory` 在第一次被用到时创建一次（`_camera ??= _cameraFactory(_binding)`）；
+   `CaptureAsync` 与 `StartStreamAsync` 取用同一个对象，设备只在 `DisposeAsync` 时 `Close` 一次。
+   已删除 `HalconCameraCapture`（public `ICameraCapture` 实现，每次采集新建/打开/关闭 `HFramegrabber`）与其测试。
+2. **OnDemand 重复使用同一句柄**：`CaptureAsync` 不再有 `#if HALCON_SDK` 分支、不再构造设备，
+   抓图职责迁移到 `HalconFramegrabberCamera.CaptureSingleFrame`。单次采集失败后相机保持打开，下一次请求可直接重试。
+3. **OnConnect 流复用同一句柄和采集线程**：`HalconStreamSession` 仍在自建线程上循环 `GrabOnce()`，
+   但句柄来自设备适配器的同一个 `_camera`；同一设备第二次布防复用已打开相机（OpenCount 恒为 1），
+   停止只停流、不关设备（关设备统一由设备释放负责）。
+4. **修正 `KeepCurrent`、`Software` 与 `Gain` 单位语义**：
+   - 新增 SDK 无关的决策点 `HalconFramegrabberParameters`（可无相机、无许可证验证）：
+     写入顺序固定为 `grab_timeout` → 曝光/增益 → 触发，两条采集路径共用同一份决策。
+   - `KeepCurrent`：**一个触发参数都不写**（旧实现把"保持当前设置"写成 `external_trigger='default'` 这类打开参数，语义与结果都不确定）。
+   - `Software`：按 MVTec 官方示例 `genicamtl_software_trigger.hdev` 实现——`[Consumer]trigger=Software` +
+     `AcquisitionMode=Continuous`，每帧前写 `[Consumer]trigger_software=1` 再 `grab_image`，不写 `external_trigger`；
+     `HalconAcquisitionDriverModule` 声明的 `SupportsSoftwareTrigger: true` 由此成为真实能力（旧实现明确拒绝）。
+   - `Gain`：公开单位统一为**分贝**，写 SFNC `Gain` 节点前先关 `GainAuto`；曝光同理先关 `ExposureAuto` 再写 `ExposureTime`。
+   - `null`（不动设备当前设置）与显式 `0`（真实取值）严格分离，不再用 `> 0` 守卫把两者混为一谈。
+5. **不覆盖当前并发在研实现，先做差异合并**：在研流式分支（`1361204`）的文件保留，只在其上收敛契约与生命周期，
+   未重写同名文件；`HalconStreamFaults`、`HalconNeutralFrames`、`HalconImageSource`、会话线程纪律与停止顺序均未改动。
+
+完成条件达成：真实 SDK 路径上同一台 HALCON 设备只存在一个 `HFramegrabber`，两种采集模式复用同一句柄且双向互斥。
+
+### 验收证据（§21）
+
+| 验收（§21） | 证据 |
+|---|---|
+| 多次 OnDemand Capture 不重复 Open/Close（§21.6） | `HalconAcquisitionDeviceStreamTests.CaptureAsync_ReusesSingleConnectedCameraAcrossRequests`（3 次采集 OpenCount==1、事件序 `Open,CaptureSingle×3`、`AppliedExposure==1500`、`AppliedGain==2.5`）· `DeviceDispose_AfterCaptureOnly_ClosesCameraOnce` |
+| 第二根运行复用同一个 SDK 对象（§21.18） | `ThreeRuns_ShareSingleConnectedCameraAndCloseOnce`（OpenCount==1）· `SecondArm_ReusesOpenCameraInsteadOfOpeningAgain` |
+| Shutdown 事件顺序：停流先于关设备（§21.20） | `DeviceDispose_StopsStreamBeforeClosingCamera` · `DeviceDispose_IsIdempotent` · `DeviceDispose_WithoutArming_DoesNotTouchCamera` |
+| 断线状态可解释且不关闭相机（§20.5） | `StreamFailure_EndsSessionWithoutClosingCamera` · `CaptureAsync_AfterStreamFailure_ReportsDisconnect`（消息含断线原因） |
+| 两种模式互斥，不产生两条取流通道（§20.3） | `CaptureAsync_WhileArmed_IsRejected` · `StartStream_WhileCapturing_IsRejected`（单次采集在途时布防被拒且 `GrabCount==0`） |
+| `KeepCurrent` 不改动设备触发设置 | `HalconFramegrabberParametersTests.KeepCurrent_WritesNoTriggerParameter` |
+| `FreeRun` / `External` 触发写入正确 | `FreeRun_DisablesExternalTrigger` · `External_WritesDeclaredTriggerSource` · `External_WithoutDeclaredTriggerSource_IsRejected` · `HalconAcquisitionDeviceStreamTests.ArmTriggerMode_FollowsBindingTriggerSource`（DataRow 四态） |
+| `Software` 触发真实可用 | `Software_ConfiguresConsumerTriggerAndContinuousAcquisition` · `RequiresSoftwareTriggerCommand_OnlyForSoftware` · `SoftwareTriggerCommand_IsAnExplicitSingleShotWrite` · `DriverModule_ContributesAreaScanType`（`SupportsSoftwareTrigger`） |
+| 曝光/增益单位语义与显式 0 | `CaptureParameters_NothingGiven_WritesNothing` · `CaptureParameters_WritesManualValuesWithAutomaticAlgorithmsOff` · `CaptureParameters_ExplicitZeroIsWrittenToTheDevice` · `CaptureParameters_OnlyGainGiven_LeavesExposureUntouched` · `DisplayValue_UsesInvariantCulture` |
+| 缺 SDK 时不伪造帧、不留悬空入口 | `HalconBoundaryTests.MissingSdk_IsExplicitlyUnavailable`（工厂在造设备时抛 `VisionProviderUnavailableException`）· `HalconAcquisitionProviderPluginTests.PluginHealth_ReportsSdkAvailability` |
+| 厂商适配不依赖 Workflow / 旧视觉程序集 | `HalconBoundaryTests.DependencyDirection_IsIndependent`（按 `HalconAcquisitionDevice` 所在程序集断言引用方向） |
+
+### 变更文件
+
+- `src/DP.Vision.Halcon/HalconStreamContracts.cs`：`IHalconStreamCamera.ApplyArmParameters` 增补 `grabTimeoutMilliseconds`；
+  新增 `CaptureSingleFrame(...)`（与持续取流互斥）；新增 `HalconStreamCameras.IsSdkEnabled`（从被删除的 `HalconCameraCapture` 迁入）。
+- `src/DP.Vision.Halcon/HalconFramegrabberParameters.cs`（新增）：`HalconDeviceParameter` 值与全部参数名常量、
+  `ResolveTrigger` / `ResolveCaptureParameters` / `RequiresSoftwareTriggerCommand` / `SoftwareTriggerCommand`，
+  承载 `KeepCurrent`、`Software`、dB 增益与"null 与 0 分离"的全部决策。
+- `src/DP.Vision.Halcon/HalconStreamCamera.cs`：`HalconFramegrabberCamera` 增加 `_sync`/`_captureInFlight` 互斥状态；
+  实现 `ApplyArmParameters`（与单次采集互斥）与 `CaptureSingleFrame`（单次采集与 `_grabbing` 互斥、写参数 → 软触发 → `GrabImage` → 中立帧）；
+  参数写入收敛为 `WriteParameters`/`WriteParameter` 一条路径；超时与 `HOperatorException` 一律翻译为 Provider 级异常。
+- `src/DP.Vision.Halcon/HalconStreamSession.cs`：`Arm` 签名带上布防参数，委托相机执行后起自建线程（线程纪律不变）。
+- `src/DP.Vision.Halcon/HalconAcquisitionDevice.cs`：单一 `_camera`、`CaptureAsync` 改为镜像 Basler 的非 async 形态并删除 per-Capture 生命周期。
+- `src/DP.Vision.Halcon/HalconAcquisitionProviderPlugin.cs` / `HalconAcquisitionDriverModule.cs` / `HalconAcquisitionProvider.cs`：
+  `IsSdkEnabled` 迁址；类文档改为"按绑定创建持有唯一 `HFramegrabber` 的设备适配器"。
+- `src/DP.Vision.Halcon/README.md`：改为"一个绑定一个设备适配器、一个适配器一个句柄"，
+  补充四态触发、dB 增益、"null 与 0 分离"、双向互斥与 `Software` 的现场确认要求。
+- `tests/DP.Vision.Halcon.Tests/HalconFramegrabberParametersTests.cs`（新增）：14 个参数决策用例。
+- `tests/DP.Vision.Halcon.Tests/TestDoubles/StreamTestDoubles.cs`：假相机模拟单条取流通道
+  （`_grabbing`/`_captureInFlight` 互斥、`SingleCaptureCount`、可阻塞的 `CaptureEntered`/`CaptureRelease`、四参记录）。
+- `tests/DP.Vision.Halcon.Tests/HalconAcquisitionDeviceStreamTests.cs`：新增 7 个用例（句柄复用、双向互斥、断线可解释、释放顺序）。
+- `tests/DP.Vision.Halcon.Tests/HalconStreamSessionTests.cs` / `HalconBoundaryTests.cs`：随签名与 SDK 探测迁址更新。
+- **已删除**：`src/DP.Vision.Halcon/HalconCameraCapture.cs`、`tests/DP.Vision.Halcon.Tests/HalconTriggerMappingTests.cs`。
+
+### 测试结果
+
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**566 通过 / 0 失败**（V2-6 基线 548 + 18）。
+
+分套件：DP.Vision.Halcon.Tests 111 → 129（+18，新增 14 个参数决策用例 + 7 个句柄/互斥用例，随删除 `HalconTriggerMappingTests` 抵减）·
+DP.Vision.Tests 115 · DP.Vision.Acquisition.Tests 153 · DP.Vision.Basler.Tests 98 ·
+DP.Vision.Algorithms.Tests 67 · DP.Vision.Acquisition.Integration.Tests 4。
+
+`dotnet build`（HALCON 源码与测试项目，net8.0-windows）：0 警告 0 错误。
+整解加 `-f net8.0-windows` 会因 `DP.Vision.Algorithms`（`netstandard2.0`）等基础项目不提供该目标框架而报 `NETSDK1005`，
+这是既有配置，与本次改动无关；测试按各套件的目标框架执行。
+
+### 记录（相对计划的偏离与待办）
+
+- **`DP.Vision.Algorithms` 的 `ICameraCapture` / `CameraCaptureOptions` 推迟清理**：该接口与选项类型由旧采集路径引入，
+  现已无实现者，但定义在跨项目契约程序集内（`DP.Vision.Algorithms` 还被 WorkFlow 侧引用），
+  删除会波及本阶段之外的仓库，故只删除本Provider内的实现与测试，接口保留并在本记录中标记待清理。
+- **`DP.WorkFlow/docs` 旧 SOP 文档待同步**：`vision-architecture.md`、`vision-acquisition-providers.md`、
+  `nodes/new-vision-file-pipeline.md` 仍描述 `HalconCameraCapture` / `ICameraCapture` / "每次采集打开关闭设备"，
+  属于跨仓文档同步，需在 WorkFlow 仓库单独提交。本仓 `README.md` 的同类表述已随本次改动更正；
+  `UNIFIED_IMAGE_SOURCE.md` 仍把 `ICameraCapture.CaptureAsync` 列为统一入口，属历史迁移记录，未改。
+- **`Software` 触发未经现场验收**：实现依据 MVTec 官方示例与本机 SDK 反射结果，缺少真实相机验证；
+  现场若所用采集接口不接受 `[Consumer]trigger`，会以 `VisionParameterNotSupportedException` 明确失败（不静默降级）。
+- **提交状态**：本次改动**尚未提交**。沙箱禁止在 `C:\Data\PiProgects\WorkFlow\DP.Vision\.git` 下创建 `index.lock`，
+  `git commit` 无法执行；提交前需按约定再次确认。

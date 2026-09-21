@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision.Acquisition;
@@ -88,14 +88,23 @@ internal sealed class HalconStreamSession : IVisionAcquisitionStream
     /// </para>
     /// </summary>
     /// <param name="triggerMode">触发模式。</param>
-    /// <param name="triggerSource">外部触发的触发源；只在外部触发模式下使用。</param>
+    /// <param name="exposureMicroseconds">曝光，单位微秒；空表示保持设备当前设置。缓冲源不接受节点级覆盖，通常传空。</param>
+    /// <param name="gainDecibels">增益，单位分贝；空表示保持设备当前设置。</param>
     /// <param name="grabTimeoutMilliseconds">单次抓取等待上限；它同时是停止等待的上界。</param>
-    public void Arm(EVisionTriggerMode triggerMode, string? triggerSource, int grabTimeoutMilliseconds)
+    public void Arm(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int grabTimeoutMilliseconds)
     {
         try
         {
             _camera.Open();
-            _camera.ApplyArmParameters(triggerMode, triggerSource, grabTimeoutMilliseconds);
+            _camera.ApplyArmParameters(
+                triggerMode,
+                exposureMicroseconds,
+                gainDecibels,
+                grabTimeoutMilliseconds);
 
             var loop = new Thread(RunGrabLoop)
             {

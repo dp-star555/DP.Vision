@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using DP.Vision.Acquisition;
 
 namespace DP.Vision.Halcon;
@@ -47,10 +48,16 @@ internal interface IHalconGrabFrame : IDisposable
 }
 
 /// <summary>
-/// 真实长连接会话所依赖的设备侧动作；由 HALCON 实现或由测试替身实现。
+/// 一台 HALCON 采集设备上全部设备侧动作的唯一入口；由 HALCON 实现或由测试替身实现。
+/// <para>
+/// 本接口代表<b>同一个 <c>HFramegrabber</c> 句柄</b>：主动单次采集与外部回调持续取流都走它，
+/// 因此一台物理设备上只会存在一个设备对象与一条取流通道，两种模式不能同时进行。
+/// 设备在 Device 释放之前保持打开，跨采集请求与跨布防复用——真实 SDK 上重复打开同一台相机
+/// 通常直接失败，而且每次打开/关闭都会把采集参数重置回默认。
+/// </para>
 /// <para>
 /// 与 pylon 的**结构差异**：HALCON 没有 <c>ImageGrabbed</c> 那样的事件回调，
-/// 只有阻塞式的异步抓取，因此本接口只暴露"抓一帧"，
+/// 只有阻塞式的抓取，因此本接口只暴露"抓一帧"，
 /// **采集循环、线程所有权、停止等待与"停流后不得再交付"全部由 <see cref="HalconStreamSession"/> 自建**，
 /// 不依赖 SDK 提供任何保证。
 /// </para>
@@ -78,14 +85,50 @@ internal interface IHalconStreamCamera : IDisposable
     /// <summary>关闭并释放设备对象；未打开时为空操作。之后 <see cref="Open"/> 会重新创建一个设备对象。</summary>
     void Close();
 
-    /// <summary>把布防参数写到设备上；为空的 <paramref name="triggerSource"/> 表示不指定触发源。</summary>
+    /// <summary>
+    /// 把采集参数写到设备上；为空的物理量表示保持设备当前设置。
+    /// <para>
+    /// 主动单次采集与长连接布防共用这一条写入路径：两处各写一份会让"先关自动曝光再写手动值"
+    /// 或"保持当前触发设置"这类语义各自漂移。参数到设备参数的翻译全部由
+    /// <see cref="HalconFramegrabberParameters"/> 决定，本方法只负责执行。
+    /// </para>
+    /// <para>
+    /// 与 <see cref="CaptureSingleFrame"/> 互斥：句柄正被一次单次采集占用时必须明确失败，
+    /// 否则布防会把那次采集的设备设置改掉，采到的就不是请求那一刻的图。
+    /// </para>
+    /// </summary>
     /// <param name="triggerMode">触发模式。</param>
-    /// <param name="triggerSource">外部触发的触发源，例如 GenICam 的 <c>Line1</c>；只在外部触发模式下使用。</param>
+    /// <param name="exposureMicroseconds">曝光，单位微秒；空表示不改写。</param>
+    /// <param name="gainDecibels">增益，单位分贝；空表示不改写。</param>
     /// <param name="grabTimeoutMilliseconds">单次抓取等待上限；到点未出图按超时处理而不是设备故障。</param>
-    void ApplyArmParameters(EVisionTriggerMode triggerMode, string? triggerSource, int grabTimeoutMilliseconds);
+    void ApplyArmParameters(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int grabTimeoutMilliseconds);
 
     /// <summary>
-    /// 阻塞抓取一帧。
+    /// 按请求单次抓取一帧，并把请求参数写到设备上。
+    /// <para>
+    /// 与 <see cref="GrabOnce"/> 共用同一条取流通道：设备正在持续取流时本调用必须明确失败，
+    /// 而不是抢占通道；实现必须在返回前结束本次抓图，不把残留状态留给下一次布防。
+    /// </para>
+    /// </summary>
+    /// <param name="triggerMode">触发模式。</param>
+    /// <param name="exposureMicroseconds">曝光，单位微秒；空表示不改写设备设置。</param>
+    /// <param name="gainDecibels">增益，单位分贝；空表示不改写设备设置。</param>
+    /// <param name="timeoutMilliseconds">等待一帧的最长时间。</param>
+    /// <param name="cancellationToken">协作取消；在调用边界检查，无法中断已经进入 SDK 的阻塞抓取。</param>
+    /// <returns>抓到的设备帧；所有权随返回值转给调用方，调用方负责释放。</returns>
+    IHalconGrabFrame CaptureSingleFrame(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int timeoutMilliseconds,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 阻塞抓取一帧；长连接采集循环每次拉取一帧。
     /// <para>
     /// 超时（HALCON 错误码 5322）必须抛 <see cref="HalconGrabTimeoutException"/>，
     /// 因为外部触发下"这一轮没有触发到来"是正常现象，不能当成设备故障。
@@ -113,6 +156,25 @@ internal sealed class HalconGrabTimeoutException : VisionAcquisitionException
 /// <summary>创建真实长连接设备；未装配 HALCON SDK 时明确失败，而不是静默降级。</summary>
 internal static class HalconStreamCameras
 {
+    /// <summary>
+    /// 当前程序集是否包含 SDK 实现；不是设备在线或许可证通过的证明。
+    /// <para>
+    /// 它与 <see cref="Create"/> 出自同一个条件编译开关，因此"插件报告可用"与"工厂能真的造出设备"
+    /// 不会被两条各自演化的事实描述拆开——旧的 OnDemand 读取器已删除，本属性是唯一入口。
+    /// </para>
+    /// </summary>
+    public static bool IsSdkEnabled
+    {
+        get
+        {
+#if HALCON_SDK
+            return true;
+#else
+            return false;
+#endif
+        }
+    }
+
     /// <summary>创建绑定对应的长连接设备。</summary>
     /// <param name="binding">Provider 私有绑定。</param>
     /// <returns>尚未打开的设备对象。</returns>

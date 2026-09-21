@@ -18,6 +18,10 @@ namespace DP.Vision.Halcon.Tests;
 /// <see cref="AbortGrab"/> 默认只发出**一次性**中止信号：真实 HALCON 的 <c>do_abort_grab</c>
 /// 是否被支持取决于采集接口，所以"中止成功"与"中止无效、只能等满抓取超时"两种情形都要能表达。
 /// </para>
+/// <para>
+/// 与真实设备一样，单次采集在途时拒绝写入布防参数：一台设备只有一条取流通道，
+/// 布防不能在单次采集占用句柄的同时开始。
+/// </para>
 /// </summary>
 internal sealed class FakeHalconStreamCamera : IHalconStreamCamera
 {
@@ -26,14 +30,17 @@ internal sealed class FakeHalconStreamCamera : IHalconStreamCamera
     private readonly SemaphoreSlim _grabEntered = new SemaphoreSlim(0);
     private readonly object _eventsSync = new object();
     private readonly List<string> _events = new List<string>();
+    private readonly object _captureSync = new object();
 
     private int _openCount;
     private int _closeCount;
     private int _disposeCount;
     private int _grabCount;
+    private int _singleCaptureCount;
     private int _abortCount;
     private int _abortPending;
     private int _disposed;
+    private bool _captureInFlight;
 
     /// <summary>打开时抛出的异常；用于覆盖"布防在打开阶段就失败"。</summary>
     public Exception? OpenFailure { get; set; }
@@ -43,6 +50,15 @@ internal sealed class FakeHalconStreamCamera : IHalconStreamCamera
 
     /// <summary>中止抓取是否真的能打断阻塞中的拉取；为 <see langword="false"/> 表示该接口不支持 do_abort_grab。</summary>
     public bool AbortUnblocksGrab { get; set; } = true;
+
+    /// <summary>单次采集返回的设备帧工厂；为空时返回一帧 2x1 的 byte 灰度。</summary>
+    public Func<IHalconGrabFrame>? CaptureFrameFactory { get; set; }
+
+    /// <summary>在单次采集内部进入时置位，用于确定性地观察"单次采集已在途"。</summary>
+    public ManualResetEventSlim? CaptureEntered { get; set; }
+
+    /// <summary>在单次采集内部等待它，用于把采集卡在设备侧。</summary>
+    public ManualResetEventSlim? CaptureRelease { get; set; }
 
     /// <summary>设备是否已打开。</summary>
     public bool IsOpen { get; private set; }
@@ -59,14 +75,20 @@ internal sealed class FakeHalconStreamCamera : IHalconStreamCamera
     /// <summary>抓取调用次数（含被中止的那一次）。</summary>
     public int GrabCount => Volatile.Read(ref _grabCount);
 
+    /// <summary>按请求单次采集次数。</summary>
+    public int SingleCaptureCount => Volatile.Read(ref _singleCaptureCount);
+
     /// <summary>中止抓取的调用次数。</summary>
     public int AbortCount => Volatile.Read(ref _abortCount);
 
     /// <summary>最近一次写入的触发模式。</summary>
     public EVisionTriggerMode? AppliedTriggerMode { get; private set; }
 
-    /// <summary>最近一次写入的触发源。</summary>
-    public string? AppliedTriggerSource { get; private set; }
+    /// <summary>最近一次写入的曝光，单位微秒。</summary>
+    public double? AppliedExposure { get; private set; }
+
+    /// <summary>最近一次写入的增益，单位分贝。</summary>
+    public double? AppliedGain { get; private set; }
 
     /// <summary>最近一次写入的抓取超时。</summary>
     public int? AppliedGrabTimeout { get; private set; }
@@ -121,15 +143,69 @@ internal sealed class FakeHalconStreamCamera : IHalconStreamCamera
     /// <inheritdoc/>
     public void ApplyArmParameters(
         EVisionTriggerMode triggerMode,
-        string? triggerSource,
+        double? exposureMicroseconds,
+        double? gainDecibels,
         int grabTimeoutMilliseconds)
     {
         Record("Apply");
         if (ApplyFailure is not null)
             throw ApplyFailure;
+
+        lock (_captureSync)
+        {
+            if (_captureInFlight)
+            {
+                throw new InvalidOperationException(
+                    "假设备上已经有一次单次采集在占用句柄；布防不能与它并发。");
+            }
+        }
+
         AppliedTriggerMode = triggerMode;
-        AppliedTriggerSource = triggerSource;
+        AppliedExposure = exposureMicroseconds;
+        AppliedGain = gainDecibels;
         AppliedGrabTimeout = grabTimeoutMilliseconds;
+    }
+
+    /// <inheritdoc/>
+    public IHalconGrabFrame CaptureSingleFrame(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int timeoutMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        lock (_captureSync)
+        {
+            if (!IsOpen)
+                throw new InvalidOperationException("假设备尚未打开。");
+            if (_captureInFlight)
+                throw new InvalidOperationException("假设备上已经有一次单次采集在进行中。");
+
+            _captureInFlight = true;
+        }
+
+        try
+        {
+            Interlocked.Increment(ref _singleCaptureCount);
+            AppliedTriggerMode = triggerMode;
+            AppliedExposure = exposureMicroseconds;
+            AppliedGain = gainDecibels;
+            AppliedGrabTimeout = timeoutMilliseconds;
+            Record("CaptureSingle");
+
+            CaptureEntered?.Set();
+            CaptureRelease?.Wait(TimeSpan.FromSeconds(10));
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return CaptureFrameFactory is null
+                ? new FakeHalconGrabFrame(2, 1, "byte", new byte[] { 5, 6 })
+                : CaptureFrameFactory();
+        }
+        finally
+        {
+            lock (_captureSync)
+                _captureInFlight = false;
+        }
     }
 
     /// <inheritdoc/>

@@ -32,7 +32,7 @@ public sealed class HalconAcquisitionDriverModule : IVisionAcquisitionDriverModu
 
         // 外部触发与完整帧回调依赖流式实现，只在SDK已编译进本程序集时声明；
         // 缺SDK时的可用性由Provider健康报告单独给出，不伪造Type能力。
-        var supportsStreaming = HalconCameraCapture.IsSdkEnabled;
+        var supportsStreaming = HalconStreamCameras.IsSdkEnabled;
         builder.Register(new VisionAcquisitionTypeRegistration(
             AreaScanTypeId,
             HalconAcquisitionProviderPlugin.PluginIdentity,
