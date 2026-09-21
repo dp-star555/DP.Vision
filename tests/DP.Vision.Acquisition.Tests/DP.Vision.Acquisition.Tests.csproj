@@ -7,6 +7,7 @@
     <ItemGroup>
         <ProjectReference Include="../../src/DP.Vision.Acquisition.Abstractions/DP.Vision.Acquisition.Abstractions.csproj" />
         <ProjectReference Include="../../src/DP.Vision.Acquisition.Runtime/DP.Vision.Acquisition.Runtime.csproj" />
+        <ProjectReference Include="../../src/DP.Vision.UI/DP.Vision.UI.csproj" />
         <PackageReference Include="MSTest.TestFramework" Version="4.1.0" />
         <PackageReference Include="MSTest.TestAdapter" Version="4.1.0" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />

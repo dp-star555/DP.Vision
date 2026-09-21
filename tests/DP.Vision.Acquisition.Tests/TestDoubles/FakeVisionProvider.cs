@@ -6,13 +6,14 @@ using DP.Vision.Acquisition;
 
 namespace DP.Vision.Acquisition.Tests;
 
-/// <summary>确定性内存Provider；记录打开过的绑定身份，可注入打开失败。</summary>
-internal sealed class FakeVisionProvider : IVisionAcquisitionProvider
+/// <summary>确定性内存Provider；记录打开过的绑定身份，可注入打开失败，也可充当设备发现Provider。</summary>
+internal sealed class FakeVisionProvider : IVisionAcquisitionProvider, IVisionDeviceDiscovery
 {
     private readonly Func<string, IVisionAcquisitionDevice> _deviceFactory;
     private readonly List<string> _opened = new List<string>();
     private readonly object _gate = new object();
     private int _disposeCount;
+    private int _discoveryCount;
 
     /// <summary>创建Provider。</summary>
     /// <param name="providerId">Provider稳定身份。</param>
@@ -37,6 +38,16 @@ internal sealed class FakeVisionProvider : IVisionAcquisitionProvider
     /// <summary>已执行的释放次数。</summary>
     public int DisposeCount => Volatile.Read(ref _disposeCount);
 
+    /// <summary>发现返回的候选设备；默认为空，代表现场没有设备。</summary>
+    public IReadOnlyList<VisionDeviceDescriptor> Devices { get; set; } =
+        Array.Empty<VisionDeviceDescriptor>();
+
+    /// <summary>发现时抛出的异常；用于验证"缺SDK的Provider不拖垮整体发现"。</summary>
+    public Exception? DiscoveryFailure { get; set; }
+
+    /// <summary>已执行的发现次数。</summary>
+    public int DiscoveryCount => Volatile.Read(ref _discoveryCount);
+
     /// <summary>创建每次打开都返回确定性设备的Provider。</summary>
     /// <param name="providerId">Provider稳定身份。</param>
     /// <param name="capture">可选采集行为。</param>
@@ -59,6 +70,17 @@ internal sealed class FakeVisionProvider : IVisionAcquisitionProvider
         lock (_gate)
             _opened.Add(providerBindingId);
         return new ValueTask<IVisionAcquisitionDevice>(_deviceFactory(providerBindingId));
+    }
+
+    /// <inheritdoc/>
+    /// <exception cref="VisionProviderUnavailableException">注入了发现失败。</exception>
+    public ValueTask<IReadOnlyList<VisionDeviceDescriptor>> DiscoverAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _discoveryCount);
+        if (DiscoveryFailure is not null)
+            throw DiscoveryFailure;
+        return new ValueTask<IReadOnlyList<VisionDeviceDescriptor>>(Devices);
     }
 
     /// <inheritdoc/>

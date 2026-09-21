@@ -44,7 +44,7 @@ net8.0-windows 分套件：
 | V2-6 Basler 迁移 | ✅ 已完成（见下文） |
 | V2-7 HALCON 迁移 | ✅ 已完成（见下文） |
 | V2-8 线扫与采集卡首个 Adapter | ✅ 已完成（见下文） |
-| V2-9 Acquisition UI、审计和运行优化 | ✅ 已完成服务端部分（V2-9a，见下文）；UI 与监控面板留待 V2-9b |
+| V2-9 Acquisition UI、审计和运行优化 | ✅ 已完成（V2-9a 服务端 + V2-9b 表现层与 WinForms 控件，见下文） |
 
 每阶段完成时更新本文并记录提交、测试结果与验收证据。
 
@@ -752,4 +752,104 @@ HALCON 采集接口（`hAcqGigEVision2`/`hAcqUSB3Vision`/`hAcqGenICamTL` 及采�
   用了 net48 不存在的 `string.Contains(char, StringComparison)`），属既有问题，本阶段未改；
   测试与验收仍按 `-f net8.0-windows` 执行。
 - **提交状态**：已提交为 `0c0fe40`（feat(acquisition): V2-9 设备发现与配置修订——发现能力、运行制品与像素落地观测，30 文件 +2524/-32）。
+
+## V2-9b：采集管理界面（表现层与 WinForms 控件）
+
+状态：**已完成**（2026-09-21）· 仅 DP.Vision 仓库
+
+分层：把界面拆成"可单元测试的表现层"（`DP.Vision.UI`，`netstandard2.0`，不依赖任何UI框架）与"薄视图"（`DP.Vision.Winform`，`net48;net8.0-windows`）。
+这样设备发现、配置修订、监视与试拍的编排逻辑全部可以在没有相机、没有许可证、没有窗体的机器上被验证，WinForms 控件只负责绑定与显示。
+
+### 需求覆盖（§20 V2-9）
+
+1. **设备发现与绑定（第 1 条）**：`AcquisitionManagementPresenter.DiscoverAsync` 遍历组合中已注册的 Provider，
+   对实现 `IVisionDeviceDiscovery` 的逐一枚举并合并候选。
+   - **只用 `ProviderManifest`（已注册的 Provider 清单），不用已发布的 Source**：发现的用途正是"还没给这个 Provider 配置任何源时先看见现场有哪些设备"，
+     按已发布 Source 反推会让尚未配置的 Provider 永远发现不到设备。
+   - **单个 Provider 失败被隔离为一条诊断**，不整体失败，也绝不伪装成"现场没有设备"——缺 SDK 与"确实没有相机"在界面上必须能分开看。
+   - 候选按 ProviderId → 规范资源键 → 显示名 → 绑定身份依次排序，两次枚举同序，界面不抖动。
+   - 候选与当前机器配置比对（`CanonicalKey` 对已发布 `ResourceKey`），标出"已被配置引用"；控件提供"复制资源键"（缺规范资源键时退回序列号）供操作员写配置。
+2. **配置修订（第 1 条）**：`SetCandidate` / `ValidateCandidate` / `Publish` / `Rollback(revision)` 全部经表现层暴露，
+   快照给出当前修订号与 CompositionId、候选错误、已发布源行（含 Kind、采集模式、共享策略、可用性、配置摘要）、
+   历史行（Revision / CompositionId / PublishedAtUtc / RestoredFromRevision / IsRollback）；
+   校验结果里的 `UnavailableSourceIds` 与全部错误文本一次性显示——现场最易混淆的"插件没部署"与"相机没接"因此可以分开。
+3. **连接/取流/Inbox 监控面板（第 2 条）**：`CaptureMonitor` 把运行时状态与每个 Source 的一行诊断投影成快照；
+   控件按固定间隔刷新（可暂停），逐源显示连接状态与消息、取流状态、连接修订号、Epoch、
+   接收/领取/超龄/无代次拒绝/溢出拒绝、待领取数与字节与水位、设备序号缺口、像素落地（次数/总字节/总耗时/最近字节/最近耗时）与最后故障类别与消息。
+   - **运行时未启动或已停止时同样能采样**：行来自组合而不是来自已打开的会话，因此面板在这两段时间里显示"Created/Stopped + 尚未打开"，而不是空白。
+   - **`Transfer` 为空显示占位符而不是 0**：把"Provider 没上报观测"与"观测到 0 字节"在界面上分开（后者只可能是上报实现出错）。
+4. **试拍（第 1 条）**：`TrialCaptureAsync` 先确保运行时已 `StartAsync`（未启动则启动并保持，停止后无法重启 → 作为失败结果返回原因），
+   然后对指定逻辑源执行一次 `CaptureAsync`。**除取消外的不成功都结果化**：配置错误、资源冲突、设备离线、参数不支持、采集超时、数据异常、
+   SDK 不可用、其他采集异常共 8 类落在 `FailureKind` 上，界面显示原因即可；取消原样传播为 `OperationCanceledException`。
+   试拍遵守与节点采集相同的共享策略（占用资源键上的采集互斥门）。
+
+### 验收证据
+
+| 依据 | 证据 |
+|---|---|
+| §20 V2-9.1 发现合并与"是否已配置"标记 | `AcquisitionManagementPresenterTests.DiscoverAsync_MergesCandidatesInDeterministicOrderAndMarksConfiguration` |
+| 单个 Provider 发现失败被隔离为诊断（缺 SDK ≠ 没有设备） | `DiscoverAsync_IsolatesProviderFailuresAsDiagnostics` |
+| §20 V2-9.1 校验失败时快照携带全部错误 | `InvalidCandidate_ExposesErrorsInConfigurationSnapshot` |
+| §20 V2-9.1 发布后修订号与 CompositionId 进入快照 | `Publish_ExposesRevisionCompositionAndSourceRows` |
+| 发布失败不写历史 | `PublishFailure_CarriesAllErrorsAndLeavesHistoryUntouched` |
+| §20 V2-9.1 回滚追加新修订并体现在历史 | `Rollback_AppendsRevisionVisibleInHistory` |
+| §20 V2-9.2 未启动时仍可采样、无观测时为空 | `CaptureMonitor_BeforeStart_ReportsCreatedRowsAndEmptyTransfer` |
+| §20 V2-9.2 像素落地与取流状态进入监控行 | `CaptureMonitor_MapsTransferObservationAndStreamingState` |
+| §20 V2-9.2 停止后仍可采样 | `CaptureMonitor_AfterStop_ReportsStoppedStateWithRows` |
+| §20 V2-9.1 试拍成功并自动启动运行时 | `TrialCapture_SucceedsAndStartsRuntime` |
+| 试拍失败结果化（配置/离线/停止/空源） | `TrialCapture_UnboundSource_ReturnsConfigurationFailure` · `TrialCapture_DeviceUnavailable_ReturnsOfflineFailure` · `TrialCapture_StoppedRuntime_ReturnsFailureInsteadOfThrowing` · `TrialCapture_EmptySourceId_IsRejected` |
+| 取消原样传播 | `TrialCapture_CancellationPropagates` |
+
+### 变更文件
+
+表现层（`src\DP.Vision.UI\Acquisition\`，全部新增）：
+
+- `AcquisitionMonitorSnapshot.cs`：`AcquisitionMonitorSnapshot` + `AcquisitionMonitorRow`（搬运 `VisionSourceDiagnostics` 全部字段，`Transfer` 可空）。
+- `AcquisitionConfigurationSnapshot.cs`：配置面板快照 + 已发布源行 + 修订历史行。
+- `AcquisitionDiscoverySnapshot.cs`：候选设备行（含"是否已被配置引用"）、Provider 发现失败行。
+- `AcquisitionTrialCaptureResult.cs`：试拍结果（成败、耗时、失败类别与消息、图像元数据）。
+- `AcquisitionManagementPresenter.cs`：发现编排、配置修订编排、监视采样、试拍。
+- `DP.Vision.UI.csproj`：新增对 `DP.Vision.Acquisition.Runtime` 的 ProjectReference。
+
+视图（`src\DP.Vision.Winform\Acquisition\AcquisitionManagementControl.cs`，新增）：
+`public sealed class AcquisitionManagementControl : UserControl`，三页（设备发现 / 配置修订 / 运行监控），
+只做绑定与显示；`Dispose` 停表并取消在途动作。
+
+测试：
+
+- `tests\DP.Vision.Acquisition.Tests\Ui\AcquisitionManagementPresenterTests.cs`（新增，15 例）。
+- `tests\DP.Vision.Acquisition.Tests\TestDoubles\FakeVisionProvider.cs`：实现 `IVisionDeviceDiscovery`，可注入候选与发现失败。
+- `tests\DP.Vision.Acquisition.Tests\DP.Vision.Acquisition.Tests.csproj`：新增对 `DP.Vision.UI` 的 ProjectReference。
+
+依赖与锁文件：引用 `DP.Vision.UI` 的工程（`DP.Vision.Demo`、`DP.Vision.WPF`、`DP.Vision.Winform`、`DP.Vision.Probe`、两个测试工程）
+因传递依赖（`Acquisition.Runtime` → `System.Text.Json` 等）由 restore 更新了 `packages.lock.json`，属依赖图真实变化的正常结果。
+
+### 测试结果
+
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**624 通过 / 0 失败**（V2-9a 基线 609 + 新增 15）。
+
+分套件：DP.Vision.Acquisition.Tests 174 → 189（+15）· DP.Vision.Tests 115 · DP.Vision.Algorithms.Tests 67 ·
+DP.Vision.Basler.Tests 104 · DP.Vision.Halcon.Tests 145 · DP.Vision.Acquisition.Integration.Tests 4。
+
+`dotnet build src\DP.Vision.UI\DP.Vision.UI.csproj -c Debug`（netstandard2.0）：0 警告 0 错误。
+`dotnet build src\DP.Vision.Winform\DP.Vision.Winform.csproj -c Debug`（net48 + net8.0-windows）：0 警告 0 错误。
+
+### 记录（相对计划的偏离与待办）
+
+- **界面尚未接入任何宿主样例**：两个采集样例都在 DP.WorkFlow 仓库（`samples\DP.WorkFlow.WinForms.Sample`、`samples\Legacy\WpfApptest`），
+  它们目前都没有引用 `DP.Vision.Winform`。把 `AcquisitionManagementControl` 挂进样例、并让样例改用修订存储发布配置，
+  属跨仓集成，需在 WorkFlow 仓库单独提交（与既有的跨仓 SOP 文档同步待办同类）。
+- **"发现 → 一键生成 deviceSettings"做不到**：`VisionDeviceDescriptor` 只给出绑定身份与规范资源键，
+  **不给出厂商私有 deviceSettings 的字段结构**，而宿主编译期不允许引用厂商类型。因此界面只能把资源键/序列号交给操作员，
+  无法一键生成 `deviceSettings`。要支持一键回填，需要 Provider 侧新增"候选 → deviceSettings 投影"能力（公共契约的增量扩展），
+  与 V2-2 的工厂缺陷同源，列入后续立项。
+- **真实设备试拍在机器配置路径上必然失败**（V2-2 遗留缺陷：Provider 工厂无参，解析出的绑定注入不进去）。
+  这是**预期行为**：界面会把失败类别与原因显示出来，而不是绕过它去自己 new 一个厂商 Provider。
+  缺陷修复前，试拍只在测试 Provider 与"已配置绑定"的路径上可用。
+- **Provider 身份取自 `ProviderManifest` 的 `providerId@version` 切分**：组合尚未暴露"已注册 Provider 清单"这一只读属性，
+  为不改 Runtime 公共契约而采用按最后一个 `@` 切分的办法（已核对生成端就是 `ProviderId + "@" + Version`）。
+  后续若在 Composition 上补一个只读注册清单，应替换掉这处解析。
+- **`DP.Vision.UI` 未新增 `Compatibility\IsExternalInit.cs`**：该工程既有类型不使用 `record`，
+  新类型改用 internal 构造器 + 只读属性以保持在 `netstandard2.0` 下零警告（`record` 仍需占位类型，故回避）。
+- **提交状态**：本次改动随 V2-9b 提交（提交号见"提交记录"）。
 

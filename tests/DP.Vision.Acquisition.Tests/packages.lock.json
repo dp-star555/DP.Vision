@@ -219,6 +219,13 @@
           "DP.Vision.Acquisition.Abstractions": "[0.1.0-preview.2, )",
           "System.Text.Json": "[8.0.5, )"
         }
+      },
+      "dp.vision.ui": {
+        "type": "Project",
+        "dependencies": {
+          "DP.Vision": "[0.1.0-preview.2, )",
+          "DP.Vision.Acquisition.Runtime": "[0.1.0-preview.2, )"
+        }
       }
     },
     "net8.0-windows7.0": {
@@ -376,6 +383,13 @@
         "dependencies": {
           "DP.Vision.Acquisition.Abstractions": "[0.1.0-preview.2, )",
           "System.Text.Json": "[8.0.5, )"
+        }
+      },
+      "dp.vision.ui": {
+        "type": "Project",
+        "dependencies": {
+          "DP.Vision": "[0.1.0-preview.2, )",
+          "DP.Vision.Acquisition.Runtime": "[0.1.0-preview.2, )"
         }
       }
     }
