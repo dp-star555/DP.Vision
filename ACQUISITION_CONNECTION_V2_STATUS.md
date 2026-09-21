@@ -36,7 +36,7 @@ net8.0-windows 分套件：
 | 阶段 | 状态 |
 |---|---|
 | V2-0 冻结证据与合并在研改动 | ✅ 已完成 |
-| V2-1 AcquisitionTypeCatalog 与自动 Module 发现 | ⏳ 待实施 |
+| V2-1 AcquisitionTypeCatalog 与自动 Module 发现 | ✅ 已完成（见下文） |
 | V2-2 机器相机定义与不可变 Composition | ⏳ 待实施 |
 | V2-3 应用级连接生命周期 | ⏳ 待实施 |
 | V2-4 TransferPolicy 与 Epoch 解耦 | ⏳ 待实施 |
@@ -47,3 +47,53 @@ net8.0-windows 分套件：
 | V2-9 Acquisition UI、审计和运行优化 | ⏳ 待实施 |
 
 每阶段完成时更新本文并记录提交、测试结果与验收证据。
+
+## V2-1：AcquisitionTypeCatalog 与自动 Module 发现
+
+状态：**已完成**（2026-09-21）
+
+### 验收证据
+
+| 验收（§21） | 证据 |
+|---|---|
+| DLL Module 自动发现且顺序确定 | `VisionAcquisitionDriverModuleLoaderTests.DiscoveryOrder_IsDeterministic` |
+| 重复 AcquisitionTypeId 拒绝发布 | `VisionAcquisitionTypeCatalogComposerTests.DuplicateAcquisitionTypeId_IsRejected` |
+| 不读取机器相机配置列出已安装 Type | `VisionAcquisitionDriverModuleLoaderTests.CatalogTypes_AreListableWithoutMachineConfiguration` |
+
+### 新增契约与实现
+
+Abstractions（公共契约层）：
+
+- `EVisionAcquisitionKind`：`AreaScan`/`LineScan`，面阵/线扫节点 Source 下拉过滤依据。
+- `IVisionAcquisitionDriverModule`：Driver Module 入口（`ExtensionId` + `Contribute`）。
+- `IVisionAcquisitionTypeContributionBuilder` + `VisionAcquisitionTypeRegistration`（候选注册）+
+  `VisionAcquisitionTypeCapabilities`（自由运行/软件触发/外部触发/完整帧回调能力集）。
+
+Runtime（实现层）：
+
+- `VisionAcquisitionTypeDescriptor`：冻结后不可变的 Type 描述。
+- `VisionAcquisitionTypeCatalog`：一次 Freeze 的 Catalog；`TryGetType`、`GetByKind`、`CatalogId`/`Manifest`。
+- `VisionAcquisitionTypeCatalogComposer`：候选贡献 → 完整验证 → 一次 Freeze；
+  校验重复 TypeId/Module 身份、空工厂、未知配置版本、能力一致性（外部触发必须带完整帧回调）、无取图路径拒绝。
+- `VisionAcquisitionDriverModuleLoader`：扫描受信任插件目录递归发现 `IVisionAcquisitionDriverModule`；
+  Manifest 不作为加载依据；原生 SDK 依赖 DLL 静默跳过、托管依赖无 Module 静默跳过、失败被报告但不阻断。
+
+厂商贡献：
+
+- `HalconAcquisitionDriverModule`：`dp.acquisition.halcon.area`（外部触发/完整帧回调按 SDK 编译开关声明）。
+- `BaslerAcquisitionDriverModule`：`dp.acquisition.basler.area`。
+- LineScan：`dp.acquisition.test.line` 测试 Type 先允许冻结（测试程序集）。
+
+禁止依赖保持：厂商 Adapter 不反向引用 DP.WorkFlow；公共采集契约不引入厂商 SDK；机器配置不引用 CLR 完整类型名。
+
+### 测试结果
+
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**504 通过 / 0 失败**（基线 480 + 新增 24）。
+
+分套件增量：
+
+- DP.Vision.Acquisition.Tests 110 → 130（+20：Catalog Composer 14 · Driver Module Loader 6）
+- DP.Vision.Halcon.Tests 102 → 104（+2：Driver Module 贡献与插件目录扫描）
+- DP.Vision.Basler.Tests 82 → 84（+2：Driver Module 贡献与插件目录扫描）
+
+其余套件（DP.Vision.Tests 115、Algorithms 67、Integration 4）不变。
