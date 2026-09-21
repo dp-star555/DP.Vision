@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+    <!--
+      Basler.Pylon.NET.x64 自带的 build/Basler.Pylon.NET.x64.targets 只在 $(Platform)=='x64' 时
+      才把 lib/native/Basler.Pylon.dll 加为引用；而 $(Platform) 由解决方案配置映射决定，
+      直接依赖它会让本项目在 AnyCPU 配置下静默丢掉整个 Basler.Pylon 命名空间。
+      这里改用 GeneratePathProperty 自己加引用，结果与解决方案平台无关。
+    -->
+    <BaslerPylonVersion>10.3.2.636</BaslerPylonVersion>
+    <BaslerSdkEnabled Condition="'$(BaslerSdkEnabled)' == ''">true</BaslerSdkEnabled>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(BaslerSdkEnabled)' == 'true'">
+    <DefineConstants>$(DefineConstants);BASLER_SDK</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DP.Vision/DP.Vision.csproj" />
+    <ProjectReference Include="../DP.Vision.Acquisition.Abstractions/DP.Vision.Acquisition.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BaslerSdkEnabled)' == 'true'">
+    <!-- 只用包里的原生程序集路径，不用它自带的 targets（原因见上）。 -->
+    <PackageReference Include="Basler.Pylon.NET.x64" Version="$(BaslerPylonVersion)" GeneratePathProperty="true" ExcludeAssets="build;buildTransitive" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BaslerSdkEnabled)' == 'true'">
+    <Reference Include="Basler.Pylon">
+      <HintPath>$(PkgBasler_Pylon_NET_x64)\lib\native\Basler.Pylon.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 插件私有配置由本Provider自己解析；公共契约层不引入JSON。 -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 插件Manifest随程序集一起输出，使该目录本身就是一个可被插件加载器扫描的插件包。 -->
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

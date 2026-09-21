@@ -8,7 +8,7 @@
 
 `DP.Vision.Algorithms/Calibration` 提供独立仿射标定、旋转中心拟合和坐标变换，中心化/尺度归一并拒绝退化观测；RMS不是产品合格判定。Workflow已直接使用新版强类型标定、文件/文件夹采集、Blob、RGB均值、线圆边缘拟合、平移定位和原生双平台ROI页面，旧Workflow视觉兼容已删除。相机通过独立 [DP.Vision.Halcon](src/DP.Vision.Halcon/README.md) 直接调用SDK并复制中立图像，不经过旧设备Adapter；当前每次请求打开/关闭，不宣称长连接或高帧率。
 
-采集已经按插件组织：`DP.Vision.Acquisition.Abstractions` 定义中立契约，`DP.Vision.Acquisition.Runtime` 负责不可变Provider组合、机器级逻辑Source绑定、设备生命周期和按物理ResourceKey互斥，`DP.Vision.Halcon` 发布 `plugin.json` 并由宿主扫描插件目录发现，`ICameraCapture` 已退回为 DP.Vision 内部设备适配细节。工作流文档只保存逻辑SourceId，换机器只改机器配置。公共契约、插件组合、Source绑定、设备生命周期和分阶段验收见[图像采集Provider实施基线](../DP.WorkFlow/docs/vision-acquisition-providers.md)：阶段A–D已完成，阶段E（第二个真实厂商Provider）与阶段F（RunScope与高级共享模式）受外部依赖阻塞。真实SDK像素测试不代替相机现场验收。既有Workflow接入记录见 `../DP.WorkFlow/docs/dp-vision-integration-plan.md`。
+采集已经按插件组织：`DP.Vision.Acquisition.Abstractions` 定义中立契约，`DP.Vision.Acquisition.Runtime` 负责不可变Provider组合、机器级逻辑Source绑定、设备生命周期和按物理ResourceKey互斥，`DP.Vision.Halcon` 与 `DP.Vision.Basler` 各自发布 `plugin.json` 并由宿主扫描插件目录发现，`ICameraCapture` 已退回为 DP.Vision 内部设备适配细节。工作流文档只保存逻辑SourceId，换机器只改机器配置。公共契约、插件组合、Source绑定、设备生命周期和分阶段验收见[图像采集Provider实施基线](../DP.WorkFlow/docs/vision-acquisition-providers.md)：阶段A–E已完成（两个真实厂商Provider可在同一进程组合并按SourceId路由），阶段F（RunScope与高级共享模式）受外部依赖阻塞。真实SDK像素测试不代替相机现场验收。既有Workflow接入记录见 `../DP.WorkFlow/docs/dp-vision-integration-plan.md`。
 
 ### 模板定位坐标系
 
@@ -50,6 +50,7 @@
 | `src/DP.Vision.Acquisition.Runtime` | netstandard2.0 | 不可变Provider组合、机器级逻辑源绑定、设备生命周期与按ResourceKey互斥、`plugin.json` 插件加载 |
 | `src/DP.Vision.OpenCv` | net48 / net8.0-windows，x64 | 文件、Blob、测量、定位及既有业务算法的真实OpenCV实现 |
 | `src/DP.Vision.Halcon` | net48 / net8.0-windows，x64 | 独立SDK相机采集和Gray8/Gray16/RGB像素复制；可选SDK构建；发布 `plugin.json` 作为采集Provider插件 |
+| `src/DP.Vision.Basler` | net48 / net8.0-windows，x64 | Basler pylon 相机采集（官方 NuGet 包 `Basler.Pylon.NET.x64`，免费）；显式像素格式映射；发布 `plugin.json` 作为采集Provider插件 |
 | `src/DP.Vision.UI` | netstandard2.0 | ROI编辑、画布接口、共享结果浏览会话与呈现器 |
 | `src/DP.Vision.Winform` | net48 / net8.0-windows，x64 | `VisionCanvasControl`及`ResultBrowserControl`，GDI+ |
 | `src/DP.Vision.WPF` | net48 / net8.0-windows，x64 | `VisionCanvasControl`及`ResultBrowserControl`，WriteableBitmap/原生DrawingContext |
@@ -175,6 +176,7 @@ dotnet samples/DP.Vision.Demo/bin/Release/net8.0-windows/DP.Vision.Demo.dll --wp
 见[VALIDATION.md](VALIDATION.md)、[PERFORMANCE.md](PERFORMANCE.md)。
 
 - 共享模块每框架75项测试，算法每框架27项测试，两框架通过。
+- 采集Provider：`DP.Vision.Acquisition.Tests`、`DP.Vision.Halcon.Tests`、`DP.Vision.Basler.Tests`、`DP.Vision.Acquisition.Integration.Tests` 两框架合计282项通过，覆盖契约边界、组合/路由/并发、插件目录加载、两个真实Provider并存、Basler像素格式映射与绑定选择器、缺运行时诊断。**不含真实相机出图验收。**
 - 原生WinForms/WPF×net48/net8：图层/孔洞/分离岛/XLD、缩放平移、旧帧拒绝、6种像素格式、8K/16K分块缓存探针通过。
 - WPF分块细缝经过失败复现与修复，均匀像素边界检查通过。
 - ROI编辑：WinForms实际Windows消息检查；WPF统一指针接口＋原生渲染/Dispatcher检查。WPF物理输入在本机命中其他窗口，因此未标记为物理鼠标路由已验证。两框架Demo工具栏烟测通过。

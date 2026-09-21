@@ -10,6 +10,9 @@ _Avoid_：可写帧槽位、预览队列
 **图像采集 Provider（Image Acquisition Provider）**：独立管理某类厂商SDK、设备发现、连接、配置、采集和关闭的硬件适配模块；它向公共层返回中立图像租约，不包含工作流节点语义。
 _Avoid_：工作流视觉插件、全局图像仓、节点内部SDK对象
 
+**厂商原生运行时（Vendor Native Runtime）**：某个Provider的托管程序集之外、必须由进程在运行期解析到的厂商本地库。托管程序集在编译期存在，不等于原生运行时已部署；两者缺失的时机不同（编译期 vs 运行期），但都必须让采集节点在首节点执行前失败，而不是等到采集时抛原生异常。
+_Avoid_：编译开关、许可证有效性、设备在线
+
 **逻辑采集源（Logical Acquisition Source）**：流程和业务使用的稳定SourceId，由机器配置绑定到一个Provider设备配置；更换Provider不要求修改流程文档。
 _Avoid_：HALCON接口字符串、设备数组下标、厂商SDK句柄
 

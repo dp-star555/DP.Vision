@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <HalconDotNetPath Condition="'$(HalconDotNetPath)' == '' and '$(HALCONROOT)' != ''">$(HALCONROOT)\bin\dotnet35\halcondotnet.dll</HalconDotNetPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="Exists('$(HalconDotNetPath)')"><DefineConstants>$(DefineConstants);HALCON_SDK</DefineConstants></PropertyGroup>
+  <ItemGroup>
+    <!--
+      本项目是DP.Vision里唯一同时看得见两个真实厂商Provider的地方：
+      它的存在就是为了验证"同一进程两个真实Provider各管理自己的设备"。
+      这里引用厂商程序集是被允许的——被禁止的是公共程序集反向引用它们，那由AssemblyBoundaryTests守住。
+    -->
+    <ProjectReference Include="../../src/DP.Vision.Halcon/DP.Vision.Halcon.csproj" />
+    <ProjectReference Include="../../src/DP.Vision.Basler/DP.Vision.Basler.csproj" />
+    <ProjectReference Include="../../src/DP.Vision.Acquisition.Runtime/DP.Vision.Acquisition.Runtime.csproj" />
+    <PackageReference Include="MSTest.TestFramework" Version="4.1.0" />
+    <PackageReference Include="MSTest.TestAdapter" Version="4.1.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(HalconDotNetPath)')"><Reference Include="halcondotnet" HintPath="$(HalconDotNetPath)" Private="true" /></ItemGroup>
+</Project>
