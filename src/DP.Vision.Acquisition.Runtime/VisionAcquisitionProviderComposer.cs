@@ -83,6 +83,7 @@ public sealed class VisionAcquisitionProviderComposer
     {
         var sourceIds = new HashSet<string>(StringComparer.Ordinal);
         var byResourceKey = new Dictionary<string, VisionAcquisitionSourceBinding>(StringComparer.Ordinal);
+        var bufferedByResourceKey = new Dictionary<string, VisionAcquisitionSourceBinding>(StringComparer.Ordinal);
 
         foreach (var binding in bindings)
         {
@@ -93,6 +94,8 @@ public sealed class VisionAcquisitionProviderComposer
             if (!providers.ContainsKey(binding.ProviderId))
                 throw new VisionSourceConfigurationException(
                     $"逻辑源 {binding.SourceId} 绑定的Provider {binding.ProviderId} 不在本次组合中；拒绝发布。");
+
+            ValidateAcquisitionMode(binding, bufferedByResourceKey);
 
             if (!byResourceKey.TryGetValue(binding.ResourceKey, out var existing))
             {
@@ -110,7 +113,42 @@ public sealed class VisionAcquisitionProviderComposer
             if (existing.SharingPolicy != binding.SharingPolicy)
                 throw new VisionSourceConfigurationException(
                     $"资源键 {binding.ResourceKey} 上的共享策略不一致（{existing.SharingPolicy} 与 {binding.SharingPolicy}）；拒绝发布。");
+
+            // 同一资源键混用两种采集模式会让"帧从哪来"不可判定，因此要求模式一致。
+            if (existing.AcquisitionMode != binding.AcquisitionMode)
+                throw new VisionSourceConfigurationException(
+                    $"资源键 {binding.ResourceKey} 上的采集模式不一致（{existing.AcquisitionMode} 与 {binding.AcquisitionMode}）；"
+                    + "同一物理相机不能同时被当成主动采集源和外部回调缓冲源。拒绝发布。");
         }
+    }
+
+    /// <summary>
+    /// 外部回调缓冲在组合期可判定的约束。
+    /// <para>
+    /// 另有四项只能在打开设备或读取Provider私有配置之后判定，不在本方法职责内，也不应在此伪造结论：
+    /// Provider绑定存在、设备声明流式能力、触发配置为External、设备规范身份与资源键一致。
+    /// 它们由运行期布防阶段负责，失败必须带ProviderId诊断。
+    /// </para>
+    /// </summary>
+    private static void ValidateAcquisitionMode(
+        VisionAcquisitionSourceBinding binding,
+        IDictionary<string, VisionAcquisitionSourceBinding> bufferedByResourceKey)
+    {
+        if (binding.AcquisitionMode != EVisionAcquisitionMode.BufferedExternal)
+            return;
+
+        // V1：一台物理相机只有一个接收队列，因此一个资源键只能有一个被动Source。
+        if (bufferedByResourceKey.TryGetValue(binding.ResourceKey, out var existing))            throw new VisionSourceConfigurationException(
+                $"资源键 {binding.ResourceKey} 上同时发布了两个外部回调缓冲Source（{existing.SourceId} 与 {binding.SourceId}）；"
+                + "V1只支持一台物理相机对应一个逻辑源，不支持用多个SourceId形成多个独立队列。拒绝发布。");
+
+        // 被动Source允许帧先于节点到达，必须由根运行独占，否则无法界定"哪根运行的帧"。
+        if (binding.SharingPolicy != EVisionSourceSharingPolicy.ExclusiveRun)
+            throw new VisionSourceConfigurationException(
+                $"外部回调缓冲Source {binding.SourceId} 的共享策略是 {binding.SharingPolicy}，必须是 ExclusiveRun；"
+                + "否则旧运行的帧可能被下一根运行领取。拒绝发布。");
+
+        bufferedByResourceKey.Add(binding.ResourceKey, binding);
     }
 
     private static string ComputeCompositionId(
@@ -121,11 +159,22 @@ public sealed class VisionAcquisitionProviderComposer
         foreach (var item in manifest)
             builder.Append(item).Append('\n');
         foreach (var binding in bindings.OrderBy(item => item.SourceId, StringComparer.Ordinal))
+        {
             builder.Append(binding.SourceId).Append('|')
                 .Append(binding.ProviderId).Append('|')
                 .Append(binding.ProviderBindingId).Append('|')
                 .Append(binding.ResourceKey).Append('|')
-                .Append((int)binding.SharingPolicy).Append('\n');
+                .Append((int)binding.SharingPolicy).Append('|')
+                .Append((int)binding.AcquisitionMode).Append('|')
+                // 队列策略直接决定"能收多少、留多久"，必须进组合身份；否则改容量不会产生新身份。
+                .Append(binding.InboxPolicy is null
+                    ? "-"
+                    : string.Join(",",
+                        binding.InboxPolicy.Capacity.ToString(CultureInfo.InvariantCulture),
+                        binding.InboxPolicy.ByteBudget.ToString(CultureInfo.InvariantCulture),
+                        binding.InboxPolicy.MaximumFrameAge.Ticks.ToString(CultureInfo.InvariantCulture)))
+                .Append('\n');
+        }
 
         using (var algorithm = SHA256.Create())
         {
