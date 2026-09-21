@@ -33,6 +33,7 @@ public sealed class SecondAcquisitionDriverModule : IVisionAcquisitionDriverModu
             1,
             "第二个测试面阵",
             new VisionAcquisitionTypeCapabilities(SupportsSoftwareTrigger: true),
-            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionProviderPlugin.ProviderIdentity)));
+            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionProviderPlugin.ProviderIdentity),
+            TestDeviceSettingsParser.Parse));
     }
 }

@@ -45,6 +45,7 @@ public sealed class HalconAcquisitionDriverModule : IVisionAcquisitionDriverModu
                 SupportsSoftwareTrigger: true,
                 SupportsExternalTrigger: supportsStreaming,
                 SupportsCompleteFrameCallback: supportsStreaming),
-            () => new HalconAcquisitionProvider()));
+            () => new HalconAcquisitionProvider(),
+            HalconDeviceSettingsParser.Parse));
     }
 }

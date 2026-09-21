@@ -25,10 +25,8 @@ public sealed class VisionAcquisitionProviderComposer
         if (sources is null)
             throw new ArgumentNullException(nameof(sources));
 
-        var providers = new Dictionary<string, VisionAcquisitionProviderRegistration>(StringComparer.Ordinal);
+        var registrations = new List<VisionAcquisitionProviderRegistration>();
         var moduleIds = new HashSet<string>(StringComparer.Ordinal);
-        var manifest = new List<string>();
-
         foreach (var module in modules)
         {
             if (module is null)
@@ -44,25 +42,57 @@ public sealed class VisionAcquisitionProviderComposer
             module.Contribute(candidate);
 
             foreach (var registration in candidate.Registrations)
-            {
-                Validate(registration);
-                if (providers.ContainsKey(registration.ProviderId))
-                    throw new VisionSourceConfigurationException(
-                        $"Provider身份重复：{registration.ProviderId}；同一进程不能组合两个同身份Provider。");
-                providers.Add(registration.ProviderId, registration);
-                manifest.Add(registration.ProviderId + "@" + registration.Version);
-            }
+                registrations.Add(registration);
+        }
+
+        return Compose(registrations, sources, sourceInfos: null, configurationSummaries: null);
+    }
+
+    /// <summary>
+    /// 组合Provider注册与Source绑定；V2机器配置组合器把AcquisitionTypeDescriptor投影为Provider注册后调用本方法。
+    /// 私有配置摘要进入CompositionId，因此设备参数变化会产生新的组合身份。
+    /// </summary>
+    /// <param name="providers">候选Provider注册。</param>
+    /// <param name="sources">机器级公共Source绑定。</param>
+    /// <param name="sourceInfos">已发布逻辑源目录投影；为空时按绑定推导为全部可用。</param>
+    /// <param name="configurationSummaries">每个Source的Plugin私有配置摘要；为空表示不提供。</param>
+    /// <returns>验证通过后一次发布的不可变组合。</returns>
+    /// <exception cref="ArgumentNullException">参数为空。</exception>
+    /// <exception cref="VisionSourceConfigurationException">Provider身份重复、注册非法、Source绑定不完整或不一致。</exception>
+    public VisionAcquisitionProviderComposition Compose(
+        IEnumerable<VisionAcquisitionProviderRegistration> providers,
+        IEnumerable<VisionAcquisitionSourceBinding> sources,
+        IReadOnlyDictionary<string, VisionAcquisitionSourceInfo>? sourceInfos = null,
+        IReadOnlyDictionary<string, string>? configurationSummaries = null)
+    {
+        if (providers is null)
+            throw new ArgumentNullException(nameof(providers));
+        if (sources is null)
+            throw new ArgumentNullException(nameof(sources));
+
+        var providerById = new Dictionary<string, VisionAcquisitionProviderRegistration>(StringComparer.Ordinal);
+        var manifest = new List<string>();
+        foreach (var registration in providers)
+        {
+            Validate(registration);
+            if (providerById.ContainsKey(registration.ProviderId))
+                throw new VisionSourceConfigurationException(
+                    $"Provider身份重复：{registration.ProviderId}；同一进程不能组合两个同身份Provider。");
+            providerById.Add(registration.ProviderId, registration);
+            manifest.Add(registration.ProviderId + "@" + registration.Version);
         }
 
         var bindings = sources.ToArray();
-        ValidateBindings(bindings, providers);
+        ValidateBindings(bindings, providerById);
 
         var orderedManifest = manifest.OrderBy(value => value, StringComparer.Ordinal).ToArray();
         return new VisionAcquisitionProviderComposition(
-            ComputeCompositionId(orderedManifest, bindings),
-            providers.Values,
+            ComputeCompositionId(orderedManifest, bindings, configurationSummaries),
+            providerById.Values,
             bindings,
-            orderedManifest);
+            orderedManifest,
+            sourceInfos,
+            configurationSummaries);
     }
 
     private static void Validate(VisionAcquisitionProviderRegistration registration)
@@ -153,7 +183,8 @@ public sealed class VisionAcquisitionProviderComposer
 
     private static string ComputeCompositionId(
         IReadOnlyList<string> manifest,
-        IReadOnlyList<VisionAcquisitionSourceBinding> bindings)
+        IReadOnlyList<VisionAcquisitionSourceBinding> bindings,
+        IReadOnlyDictionary<string, string>? configurationSummaries)
     {
         var builder = new StringBuilder();
         foreach (var item in manifest)
@@ -174,6 +205,13 @@ public sealed class VisionAcquisitionProviderComposer
                         binding.InboxPolicy.ByteBudget.ToString(CultureInfo.InvariantCulture),
                         binding.InboxPolicy.MaximumFrameAge.Ticks.ToString(CultureInfo.InvariantCulture)))
                 .Append('\n');
+        }
+
+        // Plugin私有配置摘要进入组合身份：改序列号/触发源/曝光参数都会产生新的CompositionId。
+        if (configurationSummaries is not null)
+        {
+            foreach (var item in configurationSummaries.OrderBy(item => item.Key, StringComparer.Ordinal))
+                builder.Append("settings|").Append(item.Key).Append('|').Append(item.Value).Append('\n');
         }
 
         using (var algorithm = SHA256.Create())

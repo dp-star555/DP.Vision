@@ -56,6 +56,7 @@ public sealed record VisionAcquisitionTypeCapabilities(
 /// <param name="DisplayName">面向操作员的Type显示名。</param>
 /// <param name="Capabilities">设备就绪后支持的取图与触发路径。</param>
 /// <param name="Factory">创建设备Adapter（Provider实例）的工厂。</param>
+/// <param name="DeviceSettingsParser">解析本Type的deviceSettings原始JSON；生成内部绑定、规范资源键与配置摘要。为空会在Catalog冻结前被拒绝。</param>
 public sealed record VisionAcquisitionTypeRegistration(
     string AcquisitionTypeId,
     string PluginId,
@@ -64,4 +65,5 @@ public sealed record VisionAcquisitionTypeRegistration(
     int DeviceSettingsVersion,
     string DisplayName,
     VisionAcquisitionTypeCapabilities Capabilities,
-    Func<IVisionAcquisitionProvider> Factory);
+    Func<IVisionAcquisitionProvider> Factory,
+    Func<string?, VisionDeviceSettingsParseResult>? DeviceSettingsParser = null);

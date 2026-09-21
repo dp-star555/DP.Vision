@@ -47,7 +47,8 @@ public sealed class ConfigurableAcquisitionDriverModule : IVisionAcquisitionDriv
                 SupportsSoftwareTrigger: true,
                 SupportsExternalTrigger: true,
                 SupportsCompleteFrameCallback: true),
-            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionProviderPlugin.ProviderIdentity)));
+            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionProviderPlugin.ProviderIdentity),
+            TestDeviceSettingsParser.Parse));
 
         builder.Register(new VisionAcquisitionTypeRegistration(
             LineScanTestTypeId,
@@ -60,6 +61,7 @@ public sealed class ConfigurableAcquisitionDriverModule : IVisionAcquisitionDriv
                 SupportsFreeRun: true,
                 SupportsExternalTrigger: true,
                 SupportsCompleteFrameCallback: true),
-            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionProviderPlugin.ProviderIdentity)));
+            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionProviderPlugin.ProviderIdentity),
+            TestDeviceSettingsParser.Parse));
     }
 }

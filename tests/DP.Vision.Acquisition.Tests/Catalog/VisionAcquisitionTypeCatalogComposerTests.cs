@@ -222,6 +222,27 @@ public sealed class VisionAcquisitionTypeCatalogComposerTests
         Assert.AreNotEqual(freeRun.CatalogId, callbackOnly.CatalogId);
     }
 
+    /// <summary>空设备配置解析器在冻结前被拒绝（V2-2：机器配置无法解析其deviceSettings）。</summary>
+    [TestMethod]
+    public void MissingDeviceSettingsParser_IsRejected()
+    {
+        var registration = new VisionAcquisitionTypeRegistration(
+            "dp.acquisition.test.area",
+            "dp.vision.test",
+            "1.0.0",
+            EVisionAcquisitionKind.AreaScan,
+            1,
+            "测试",
+            new VisionAcquisitionTypeCapabilities(SupportsFreeRun: true),
+            () => FakeVisionProvider.WithDevices("dp.vision.test.provider"),
+            null);
+
+        var failure = Assert.ThrowsExactly<VisionSourceConfigurationException>(() => _composer.Compose(
+            new[] { Module("module.one", registration) }));
+
+        StringAssert.Contains(failure.Message, "缺少设备配置解析器");
+    }
+
     private static FakeAcquisitionDriverModule Module(
         string extensionId,
         params VisionAcquisitionTypeRegistration[] registrations) =>
@@ -243,5 +264,6 @@ public sealed class VisionAcquisitionTypeCatalogComposerTests
             settingsVersion,
             "测试",
             capabilities ?? new VisionAcquisitionTypeCapabilities(SupportsFreeRun: true),
-            factory ?? (() => FakeVisionProvider.WithDevices("dp.vision.test.provider")));
+            factory ?? (() => FakeVisionProvider.WithDevices("dp.vision.test.provider")),
+            TestDeviceSettingsParser.Parse);
 }

@@ -95,6 +95,9 @@ public sealed class VisionAcquisitionTypeCatalogComposer
         if (registration.Factory is null)
             throw new VisionSourceConfigurationException(
                 $"Type {registration.AcquisitionTypeId} 缺少设备Adapter工厂。");
+        if (registration.DeviceSettingsParser is null)
+            throw new VisionSourceConfigurationException(
+                $"Type {registration.AcquisitionTypeId} 缺少设备配置解析器；机器配置无法解析其deviceSettings。");
 
         var displayName = string.IsNullOrWhiteSpace(registration.DisplayName)
             ? registration.AcquisitionTypeId
@@ -107,7 +110,8 @@ public sealed class VisionAcquisitionTypeCatalogComposer
             registration.DeviceSettingsVersion,
             displayName,
             registration.Capabilities,
-            registration.Factory);
+            registration.Factory,
+            registration.DeviceSettingsParser);
     }
 
     private static string FormatManifestLine(VisionAcquisitionTypeDescriptor descriptor)

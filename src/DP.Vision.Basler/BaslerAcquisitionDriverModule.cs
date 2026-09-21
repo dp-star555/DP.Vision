@@ -42,6 +42,7 @@ public sealed class BaslerAcquisitionDriverModule : IVisionAcquisitionDriverModu
                 SupportsSoftwareTrigger: true,
                 SupportsExternalTrigger: true,
                 SupportsCompleteFrameCallback: true),
-            () => new BaslerAcquisitionProvider()));
+            () => new BaslerAcquisitionProvider(),
+            BaslerDeviceSettingsParser.Parse));
     }
 }

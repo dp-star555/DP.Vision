@@ -16,7 +16,8 @@ public sealed class VisionAcquisitionTypeDescriptor
         int deviceSettingsVersion,
         string displayName,
         VisionAcquisitionTypeCapabilities capabilities,
-        Func<IVisionAcquisitionProvider> factory)
+        Func<IVisionAcquisitionProvider> factory,
+        Func<string?, VisionDeviceSettingsParseResult> deviceSettingsParser)
     {
         AcquisitionTypeId = acquisitionTypeId;
         PluginId = pluginId;
@@ -26,6 +27,7 @@ public sealed class VisionAcquisitionTypeDescriptor
         DisplayName = displayName;
         Capabilities = capabilities;
         Factory = factory;
+        DeviceSettingsParser = deviceSettingsParser;
     }
 
     /// <summary>Type稳定身份，例如dp.acquisition.basler.area。</summary>
@@ -51,4 +53,7 @@ public sealed class VisionAcquisitionTypeDescriptor
 
     /// <summary>创建设备Adapter（Provider实例）的工厂；Catalog冻结后按需调用。</summary>
     public Func<IVisionAcquisitionProvider> Factory { get; }
+
+    /// <summary>解析本Type的deviceSettings原始JSON；生成内部绑定、规范资源键与配置摘要。冻结前保证非空。</summary>
+    public Func<string?, VisionDeviceSettingsParseResult> DeviceSettingsParser { get; }
 }
