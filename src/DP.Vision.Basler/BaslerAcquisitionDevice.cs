@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision.Acquisition;
@@ -12,20 +11,43 @@ namespace DP.Vision.Basler;
 /// <summary>
 /// Basler pylon 采集设备适配器。
 ///
-/// 与 HALCON Adapter 一致：每次采集独立打开/关闭设备，不承诺长连接；像素一律复制为中立图像，
-/// 不把 pylon 的缓冲或指针交给调用方。设备选择要求唯一匹配，不做"取第一台"的回退。
+/// 两种模式共用同一份像素落地与参数写入逻辑，但设备生命周期不同：
+/// <list type="bullet">
+/// <item>OnDemand：每次采集独立打开/关闭设备，不承诺长连接。</item>
+/// <item>BufferedExternal：由长连接会话持有相机，跨布防复用，只在设备释放时关闭；
+/// 回调帧在回调边界内复制为中立图像，绝不把 pylon 的缓冲或指针交给调用方。</item>
+/// </list>
+/// 设备选择要求唯一匹配，不做"取第一台"的回退。
 /// </summary>
-public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice
+public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionStreamingAcquisitionDevice
 {
     private readonly BaslerAcquisitionBinding _binding;
+    private readonly Func<BaslerAcquisitionBinding, IBaslerStreamCamera> _cameraFactory;
+    private readonly object _sync = new object();
+
+    private IBaslerStreamCamera? _streamCamera;
+    private BaslerStreamSession? _session;
+    private bool _arming;
     private bool _disposed;
 
     /// <summary>创建设备Adapter。</summary>
     /// <param name="binding">Provider私有绑定。</param>
     /// <exception cref="ArgumentNullException">绑定为空。</exception>
     public BaslerAcquisitionDevice(BaslerAcquisitionBinding binding)
+        : this(binding, BaslerStreamCameras.Create)
+    {
+    }
+
+    /// <summary>创建设备Adapter，并注入长连接设备工厂（供测试替身使用）。</summary>
+    /// <param name="binding">Provider私有绑定。</param>
+    /// <param name="cameraFactory">长连接设备工厂。</param>
+    /// <exception cref="ArgumentNullException">参数为空。</exception>
+    internal BaslerAcquisitionDevice(
+        BaslerAcquisitionBinding binding,
+        Func<BaslerAcquisitionBinding, IBaslerStreamCamera> cameraFactory)
     {
         _binding = binding ?? throw new ArgumentNullException(nameof(binding));
+        _cameraFactory = cameraFactory ?? throw new ArgumentNullException(nameof(cameraFactory));
         Identity = new VisionDeviceIdentity(
             BaslerAcquisitionProvider.ProviderIdentity,
             binding.BindingId,
@@ -37,6 +59,19 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice
     /// <inheritdoc/>
     public VisionDeviceIdentity Identity { get; }
 
+    /// <summary>
+    /// 外部回调缓冲源的布防触发模式：绑定声明了触发源就显式设为外部触发；
+    /// 否则保持设备当前设置，不猜物理接线。
+    /// </summary>
+    /// <param name="binding">Provider私有绑定。</param>
+    /// <returns>布防时写入设备的触发模式。</returns>
+    internal static EVisionTriggerMode ResolveArmTriggerMode(BaslerAcquisitionBinding binding)
+    {
+        if (binding is null)
+            throw new ArgumentNullException(nameof(binding));
+        return binding.TriggerSource is null ? EVisionTriggerMode.KeepCurrent : EVisionTriggerMode.External;
+    }
+
     /// <inheritdoc/>
     public ValueTask<VisionProviderFrame> CaptureAsync(
         VisionCaptureRequest request,
@@ -44,8 +79,18 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice
     {
         if (request is null)
             throw new ArgumentNullException(nameof(request));
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(BaslerAcquisitionDevice));
+        lock (_sync)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(BaslerAcquisitionDevice));
+            if (_session is not null)
+            {
+                throw new VisionSourceConfigurationException(
+                    $"Basler 设备 {_binding.BindingId} 正在作为外部回调缓冲源布防，不能同时按请求单次采集；"
+                    + "同一物理设备只能有一种采集模式。");
+            }
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 #if BASLER_SDK
         // pylon 的打开/抓图是阻塞调用，隔离到线程池；取消在调用边界检查。
@@ -58,17 +103,101 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice
 #endif
     }
 
-    /// <inheritdoc/>
-    public ValueTask DisposeAsync()
+    /// <summary>
+    /// 布防长连接并把后续回调帧交给接收方。
+    /// <para>
+    /// 相机在两次布防之间保持打开，因此第二根根运行不会重新打开设备；只有设备被释放时才关闭相机。
+    /// </para>
+    /// <para>
+    /// 上一次布防已经停止时允许再次布防（宿主每根根运行都会重新布防），此时先收尾旧会话再建立新会话；
+    /// 上一次布防仍在进行中则明确拒绝，不静默替换接收方。
+    /// </para>
+    /// </summary>
+    /// <param name="sink">帧接收方。</param>
+    /// <param name="cancellationToken">协作取消。</param>
+    /// <returns>停止本次接收的句柄。</returns>
+    /// <exception cref="ArgumentNullException">接收方为空。</exception>
+    /// <exception cref="InvalidOperationException">设备已经在布防状态，或已被释放。</exception>
+    public async ValueTask<IVisionAcquisitionStream> StartStreamAsync(
+        IVisionProviderFrameSink sink,
+        CancellationToken cancellationToken)
     {
-        _disposed = true;
-        return default;
+        if (sink is null)
+            throw new ArgumentNullException(nameof(sink));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        BaslerStreamSession? previous;
+        BaslerStreamSession session;
+        lock (_sync)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(BaslerAcquisitionDevice));
+
+            // 一台设备同时只能有一条接收流：仍在进行的布防不允许被替换，布防过程本身也不允许重入。
+            if (_arming || (_session is not null && !_session.Stopped))
+                throw new InvalidOperationException("该设备已经在布防状态；一台设备同时只允许一条接收流。");
+
+            _arming = true;
+            previous = _session;
+            _session = null;
+
+            _streamCamera ??= _cameraFactory(_binding);
+            session = new BaslerStreamSession(_streamCamera, sink);
+        }
+
+        try
+        {
+            // 旧会话已停止，但它的设备帧可能还没释放完；先收尾再布防（对已释放的会话是空操作）。
+            if (previous is not null)
+                await previous.DisposeAsync().ConfigureAwait(false);
+
+            // 布防参数来自机器配置而不是节点请求：缓冲源不接受节点级曝光/增益覆盖。
+            // 布防失败时 _session 保持为空，下一次布防可以重试，相机保持打开以便复用。
+            session.Arm(ResolveArmTriggerMode(_binding), exposureMicroseconds: null, gainDecibels: null);
+
+            lock (_sync)
+                _session = session;
+        }
+        catch
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            lock (_sync)
+                _arming = false;
+        }
+
+        return session;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>顺序是契约的一部分：先停流（并等待已进入的回调退出），再关闭相机。</remarks>
+    public async ValueTask DisposeAsync()
+    {
+        BaslerStreamSession? session;
+        IBaslerStreamCamera? camera;
+        lock (_sync)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            session = _session;
+            _session = null;
+            camera = _streamCamera;
+            _streamCamera = null;
+        }
+
+        if (session is not null)
+            await session.DisposeAsync().ConfigureAwait(false);
+        camera?.Dispose();
     }
 
 #if BASLER_SDK
     private VisionProviderFrame Capture(VisionCaptureRequest request, CancellationToken cancellationToken)
     {
-        var cameraInfo = ResolveCamera();
+        var cameraInfo = BaslerCameraSelection.Resolve(_binding);
         cancellationToken.ThrowIfCancellationRequested();
 
         var timeoutMilliseconds = ToTimeoutMilliseconds(request.Timeout);
@@ -87,125 +216,19 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice
 
         try
         {
-            ApplyRequest(camera, request);
-            using var grabResult = Grab(camera, request.TriggerMode, timeoutMilliseconds, cancellationToken);
+            BaslerCameraParameters.Apply(
+                camera, _binding, request.TriggerMode, request.ExposureMicroseconds, request.GainDecibels);
+            using var grabFrame = PylonGrabFrame.ForRetrieved(
+                Grab(camera, request.TriggerMode, timeoutMilliseconds, cancellationToken));
             return new VisionProviderFrame(
-                CopyToNeutralImage(grabResult),
-                DateTimeOffset.UtcNow,
-                grabResult.ImageNumber);
+                BaslerNeutralFrames.Copy(grabFrame),
+                grabFrame.CapturedAtUtc,
+                grabFrame.ImageNumber);
         }
         finally
         {
             if (camera.IsOpen)
                 camera.Close();
-        }
-    }
-
-    /// <summary>按绑定唯一解析目标相机；匹配不到或多于一台都明确失败，不回退到"第一台"。</summary>
-    /// <returns>唯一匹配的相机信息。</returns>
-    /// <exception cref="VisionDeviceOfflineException">没有匹配的设备。</exception>
-    /// <exception cref="VisionSourceConfigurationException">匹配到多于一台设备，配置无法确定目标。</exception>
-    private ICameraInfo ResolveCamera()
-    {
-        // 选择键使用 pylon 自己的常量，避免依赖字符串字面量与SDK定义恰好一致。
-        var key = _binding.SerialNumber is not null ? CameraInfoKey.SerialNumber : CameraInfoKey.UserDefinedName;
-        var expected = _binding.SelectorValue;
-
-        var matches = new List<ICameraInfo>();
-        foreach (var info in CameraFinder.Enumerate())
-        {
-            if (info.ContainsKey(key) && string.Equals(info[key], expected, StringComparison.Ordinal))
-                matches.Add(info);
-        }
-
-        if (matches.Count == 1)
-            return matches[0];
-        if (matches.Count == 0)
-        {
-            throw new VisionDeviceOfflineException(
-                $"Basler 设备 {_binding.BindingId} 未找到：没有相机满足 {key}={expected}。"
-                + "请确认设备已上电联网，或修正Provider私有配置中的绑定。");
-        }
-
-        throw new VisionSourceConfigurationException(
-            $"Basler 设备 {_binding.BindingId} 的 {key}={expected} 匹配到 {matches.Count} 台相机；"
-            + "绑定必须唯一确定一台设备，请改用序列号区分。");
-    }
-
-    /// <summary>把公共请求写到设备参数上；只有调用方明确给出数值时才改写设备设置。</summary>
-    /// <param name="camera">已打开的相机。</param>
-    /// <param name="request">采集请求。</param>
-    /// <exception cref="VisionParameterNotSupportedException">设备不接受给定数值或触发模式无法表达。</exception>
-    private void ApplyRequest(Camera camera, VisionCaptureRequest request)
-    {
-        if (request.ExposureMicroseconds is { } exposure)
-        {
-            // 先关自动曝光：否则手动值会被自动算法覆盖，操作员看到的是"设置了但不生效"。
-            camera.Parameters[PLCamera.ExposureAuto].TrySetValue(PLCamera.ExposureAuto.Off);
-            SetFloat(camera, PLCamera.ExposureTime, exposure, "曝光");
-        }
-
-        if (request.GainDecibels is { } gain)
-        {
-            camera.Parameters[PLCamera.GainAuto].TrySetValue(PLCamera.GainAuto.Off);
-            SetFloat(camera, PLCamera.Gain, gain, "增益");
-        }
-
-        ApplyTrigger(camera, request.TriggerMode);
-    }
-
-    private static void SetFloat(Camera camera, FloatName name, double value, string label)
-    {
-        if (!camera.Parameters[name].TrySetValue(value))
-        {
-            throw new VisionParameterNotSupportedException(
-                $"Basler 设备不接受{label} {value}；该值超出设备允许范围或该参数当前不可写。");
-        }
-    }
-
-    private static void SetEnum(Camera camera, EnumName name, string value, string label)
-    {
-        if (!camera.Parameters[name].TrySetValue(value))
-        {
-            throw new VisionParameterNotSupportedException(
-                $"Basler 设备不接受{label} {value}；该参数当前不可写或设备不支持该取值。");
-        }
-    }
-
-    /// <summary>把公共触发模式写到设备上；无法表达的模式明确拒绝，而不是静默按自由运行采集。</summary>
-    /// <param name="camera">已打开的相机。</param>
-    /// <param name="mode">公共触发模式。</param>
-    /// <exception cref="VisionParameterNotSupportedException">外部触发未声明触发源，或模式未知。</exception>
-    private void ApplyTrigger(Camera camera, EVisionTriggerMode mode)
-    {
-        switch (mode)
-        {
-            case EVisionTriggerMode.KeepCurrent:
-                // 保持设备当前设置：不写任何触发参数。
-                return;
-
-            case EVisionTriggerMode.FreeRun:
-                SetEnum(camera, PLCamera.TriggerSelector, PLCamera.TriggerSelector.FrameStart, "触发选择器");
-                SetEnum(camera, PLCamera.TriggerMode, PLCamera.TriggerMode.Off, "触发模式");
-                return;
-
-            case EVisionTriggerMode.Software:
-                SetEnum(camera, PLCamera.TriggerSelector, PLCamera.TriggerSelector.FrameStart, "触发选择器");
-                SetEnum(camera, PLCamera.TriggerSource, PLCamera.TriggerSource.Software, "触发源");
-                SetEnum(camera, PLCamera.TriggerMode, PLCamera.TriggerMode.On, "触发模式");
-                return;
-
-            case EVisionTriggerMode.External:
-                var source = _binding.TriggerSource ?? throw new VisionParameterNotSupportedException(
-                    $"Basler 绑定 {_binding.BindingId} 使用外部触发，但Provider私有配置没有声明 triggerSource"
-                    + "（例如 \"triggerSource\": \"Line1\"）。为避免猜错物理接线，这里明确拒绝而不是沿用设备当前设置。");
-                SetEnum(camera, PLCamera.TriggerSelector, PLCamera.TriggerSelector.FrameStart, "触发选择器");
-                SetEnum(camera, PLCamera.TriggerSource, source, "触发源");
-                SetEnum(camera, PLCamera.TriggerMode, PLCamera.TriggerMode.On, "触发模式");
-                return;
-
-            default:
-                throw new VisionParameterNotSupportedException($"Basler Adapter 不支持触发模式 {mode}。");
         }
     }
 
@@ -253,45 +276,6 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice
             if (camera.StreamGrabber.IsGrabbing)
                 camera.StreamGrabber.Stop();
         }
-    }
-
-    /// <summary>
-    /// 把设备帧复制为中立图像。
-    /// 统一走 pylon 的 <see cref="PixelDataConverter"/>：它同时处理行填充与格式转换，
-    /// 目标格式由 <see cref="BaslerPixelFormats"/> 显式决定，不做隐式位深或通道语义改变。
-    /// </summary>
-    /// <param name="grabResult">已成功抓取、由调用方释放的设备帧。</param>
-    /// <returns>所有权交给调用方的中立图像。</returns>
-    /// <exception cref="VisionDataException">像素格式不受支持，或目标布局尺寸与转换结果不一致。</exception>
-    private static IImageSource CopyToNeutralImage(IGrabResult grabResult)
-    {
-        var sourceFormat = grabResult.PixelTypeValue.ToString();
-        var conversion = BaslerPixelFormats.Resolve(sourceFormat);
-        var target = ParsePixelType(conversion.TargetPixelFormat);
-
-        var width = grabResult.Width;
-        var height = grabResult.Height;
-        var info = new ImageInfo(width, height, conversion.Layout);
-
-        var converter = new PixelDataConverter { OutputPixelFormat = target };
-        var expected = converter.GetBufferSizeForConversion(grabResult.PixelTypeValue, width, height);
-        if (expected != info.ByteLength)
-        {
-            throw new VisionDataException(
-                $"Basler 像素转换结果尺寸与中立布局不一致：转换报告 {expected} 字节，"
-                + $"布局 {conversion.Layout} 需要 {info.ByteLength} 字节。这表示格式映射表有误，已拒绝发布该帧。");
-        }
-
-        var pixels = new byte[info.ByteLength];
-        converter.Convert(pixels, grabResult);
-        return VisionImage.CopyFrom(info, pixels);
-    }
-
-    private static PixelType ParsePixelType(string name)
-    {
-        if (Enum.TryParse<PixelType>(name, ignoreCase: false, out var value) && Enum.IsDefined(typeof(PixelType), value))
-            return value;
-        throw new VisionDataException($"Basler 像素格式 {name} 不是本Provider所依赖 pylon 版本的已知格式。");
     }
 
     private static int ToTimeoutMilliseconds(TimeSpan timeout) =>
