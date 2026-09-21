@@ -43,7 +43,7 @@ net8.0-windows 分套件：
 | V2-5 面阵/线扫双节点模型 | ✅ 已完成（见下文） |
 | V2-6 Basler 迁移 | ✅ 已完成（见下文） |
 | V2-7 HALCON 迁移 | ✅ 已完成（见下文） |
-| V2-8 线扫与采集卡首个 Adapter | ⏳ 待实施 |
+| V2-8 线扫与采集卡首个 Adapter | ✅ 已完成（见下文） |
 | V2-9 Acquisition UI、审计和运行优化 | ⏳ 待实施 |
 
 每阶段完成时更新本文并记录提交、测试结果与验收证据。
@@ -523,5 +523,76 @@ DP.Vision.Algorithms.Tests 67 · DP.Vision.Acquisition.Integration.Tests 4。
   `UNIFIED_IMAGE_SOURCE.md` 仍把 `ICameraCapture.CaptureAsync` 列为统一入口，属历史迁移记录，未改。
 - **`Software` 触发未经现场验收**：实现依据 MVTec 官方示例与本机 SDK 反射结果，缺少真实相机验证；
   现场若所用采集接口不接受 `[Consumer]trigger`，会以 `VisionParameterNotSupportedException` 明确失败（不静默降级）。
-- **提交状态**：本次改动**尚未提交**。沙箱禁止在 `C:\Data\PiProgects\WorkFlow\DP.Vision\.git` 下创建 `index.lock`，
-  `git commit` 无法执行；提交前需按约定再次确认。
+- **提交状态**：V2-6 与 V2-7 已提交为 `ff2a873`（Basler 迁移）与 `c1a725b`（HALCON 迁移，含本文档）。
+
+## V2-8：线扫与采集卡首个 Adapter
+
+状态：**已完成**（2026-09-21）· 仅 DP.Vision 仓库
+
+选型：**扩展 HALCON 插件**（本机仅安装 MVTec HALCON 23.11；Basler pylon、Euresys、Silicon Software、Matrox、海康 MVS、大华均未安装）。
+HALCON 采集接口（`hAcqGigEVision2`/`hAcqUSB3Vision`/`hAcqGenICamTL` 及采集卡对应接口）本身即支持线扫相机与采集卡通道，
+因此线扫不需要新的Provider，只需要一个独立的AcquisitionType。
+
+### 需求覆盖（§20 V2-8）
+
+1. **选择真实线扫SDK**：HALCON 采集接口（现场为 GigE/USB3/GenICamTL 或采集卡接口）。选择依据是本机唯一可验证的 SDK，
+   不在无法验证的 SDK 上写适配器。
+2. **Plugin 贡献 LineScan AcquisitionType**：`HalconAcquisitionDriverModule` 新增 `dp.acquisition.halcon.line`
+   （`EVisionAcquisitionKind.LineScan`，显示名"HALCON 线扫相机"），与面阵 `dp.acquisition.halcon.area` 并列贡献；
+   `VisionAcquisitionTypeCatalogComposer` 按 Kind 分别列出，工作流线扫节点只显示 Line Source。
+3. **Adapter 只向上返回SDK完成的整张图**：线扫与面阵复用同一个 `HalconAcquisitionDevice`——
+   `grab_image` 返回的就是采集接口/采集卡组装好的整张图，适配器只做"设备帧 → 中立图像"的复制，
+   不做行拼接、不做分块交付；一次请求对应一张完整图像。
+4. **不引入 Line/Chunk 公共模型**：两个Type共用同一个 `HalconDeviceSettingsParser`，线扫没有额外 deviceSettings 字段；
+   公共契约程序集不新增任何 Line/Chunk/Block 类型或厂商原生类型（由用例断言）。
+5. **完成 Node PropertyGrid 和请求映射**：已由 V2-5 交付（`CaptureLineScanFrameNode` 使用
+   `WorkflowPropertyEditorKeys.VisionLineScanSource`，`CreateRequest()` 固定 `EVisionTriggerMode.KeepCurrent`），
+   本阶段只需把 HALCON 线扫 Source 以 `Kind = LineScan` 投影进 SourceCatalog 即可被该节点选中。
+
+### 验收证据（§21）
+
+| 验收（§21） | 证据 |
+|---|---|
+| 线扫节点只显示 Line Source（§21.22） | `HalconLineScanAcquisitionTests.MachineConfiguration_ProjectsLineScanSourceByKind`（线扫Source `Kind == LineScan`、面阵Source `Kind == AreaScan`）· `HalconAcquisitionDriverModuleTests.PluginDirectory_ContributesBothKindsWithoutManifest`（`GetByKind(LineScan)` 只含线扫Type） |
+| 面阵节点只显示 Area Source（§21.21） | 同上（`GetByKind(AreaScan)` 只含面阵Type） |
+| 两种节点都输出完整 ImageFrame（§21.23） | `LineScanBinding_DeliversSdkAssembledWholeFrame`（一次请求一张 4096×2048 整图、`Gray8`、`SingleCaptureCount == 1`） |
+| 线扫Provider不会把 Line/Block 对象越过公共 Interface（§21.24） | `LineScanBinding_DeliversSdkAssembledWholeFrame`（交付对象是 `VisionProviderFrame`，图像类型不在 HALCON 程序集）· `PublicContract_IntroducesNoLineChunkModel`（公共契约无 Line/Chunk/Block 与厂商原生类型） |
+| 两个Type能力与私有配置契约一致 | `DriverModule_ContributesLineScanType`（能力集与面阵相等）· `DriverModule_TypesSharePrivateDeviceSettingsContract`（同一份deviceSettings解析出相同绑定身份与资源键） |
+| 机器配置按 Type 注册 Provider | `MachineConfiguration_ProjectsLineScanSourceByKind`（`ProviderManifest == [area@1.0.0, line@1.0.0]`） |
+
+### 变更文件
+
+- `src/DP.Vision.Halcon/HalconAcquisitionDriverModule.cs`：新增 `LineScanTypeId`，贡献线扫Type；
+  类文档说明"整图由SDK组装、两个Type只在Kind上区分"。
+- `src/DP.Vision.Halcon/README.md`：新增"面阵与线扫两个 AcquisitionType"小节；测试数 129 → 134，
+  补充线扫的现场确认项（整图高度由相机帧触发还是采集接口/采集卡参数决定、行频与整图尺寸的对应关系）。
+- `tests/DP.Vision.Halcon.Tests/HalconAcquisitionDriverModuleTests.cs`：改为按 TypeId 收集注册，新增线扫Type用例与
+  "按Kind分别列出"用例。
+- `tests/DP.Vision.Halcon.Tests/HalconLineScanAcquisitionTests.cs`（新增）：机器配置投影、整图交付、公共契约无Line/Chunk模型共 3 例。
+
+### 测试结果
+
+`dotnet test DP.Vision.Halcon.Tests -c Debug -f net8.0-windows`：**134 通过 / 0 失败**（V2-7 基线 129 + 5）。
+`dotnet build`（HALCON 源码与测试项目，net8.0-windows）：0 警告 0 错误。
+
+### 记录（相对计划的偏离与待办）
+
+- **线扫没有独立 deviceSettings 解析器，也没有线扫专属参数**。计划只要求"Adapter只向上返回SDK完成的整张图"，
+  而 HALCON 线扫的整图高度由相机帧触发或采集接口/采集卡参数决定，属于**设备侧配置**而非适配器职责；
+  在无法现场验证的前提下新增 `imageHeight`/`lineRateHertz` 之类的参数只会把"猜接线"写进契约。
+  两个Type因此共用同一个解析器，另立第二份解析器只会让两侧校验逐渐分叉。
+- **线扫仍未经真实硬件验收**：本阶段只证明"线扫Type可贡献、可被机器配置投影、适配器交付整图"，
+  行频/整图高度/触发拓扑/采集卡多通道并行都必须在现场确认（见 README 的现场确认项）。
+- **发现既有缺陷（V2-2 遗留，本阶段未修）**：机器配置路径下 Provider 注册的工厂不带私有绑定。
+  `VisionAcquisitionMachineConfigurationComposer` 用 `descriptor.Factory`（HALCON 为 `() => new HalconAcquisitionProvider()`，
+  Basler 同理）注册 Provider，而 `VisionAcquisitionTypeRegistration.Factory` 是 `Func<IVisionAcquisitionProvider>`（无参），
+  **无法注入 `DeviceSettingsParser` 解析出的绑定**；`HalconAcquisitionProvider.OpenAsync(providerBindingId)` 查不到绑定即抛
+  `VisionSourceConfigurationException`。样例已删除插件私有配置加载（`Form1.cs` 只用机器配置路径），
+  因此当前**机器配置路径无法真正打开 HALCON/Basler 设备**，样例靠 `RuntimeState != Ready` 只显示诊断而未暴露。
+  证据：`VisionAcquisitionMachineConfigurationComposer.cs` L78-82 与 `HalconAcquisitionProvider.cs` L50-52；
+  机器配置用例用的是 `FakeVisionProvider.WithDevices(...)`（自带设备、不需要绑定），所以这条路径没有测试覆盖。
+  修复方向（跨 Abstractions/Runtime/Basler/HALCON 的契约变更，需单独立项）：
+  把 Type 工厂改为绑定感知（`Func<IReadOnlyList<VisionDeviceSettingsParseResult>, IVisionAcquisitionProvider>`，
+  并让解析结果携带不透明 `ProviderBinding` 载荷），或让工厂接收该 Type 的原始 deviceSettings 列表自行构建绑定。
+- **提交状态**：本次改动**尚未提交**，提交前按约定再次确认。
+

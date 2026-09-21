@@ -28,6 +28,19 @@ var captured = await acquisition.CaptureAsync(
 - **两条取流通道双向互斥**：会话在布防中时按请求单次采集被拒绝（设备已结束则报 `VisionDeviceOfflineException`，否则报 `VisionSourceConfigurationException`）；相机句柄上已有单次采集在飞时布防被拒绝（`InvalidOperationException`）。同一物理设备一次只能有一种采集模式，因此不做静默排队。
 - SDK 阻塞操作在线程池执行，协作取消在 SDK 调用边界检查；`grab_timeout` 限制采集等待，但不能保证中断设备打开或不遵守超时的驱动。宿主必须等请求退出再释放关联资源。
 
+## 面阵与线扫两个 AcquisitionType
+
+本插件贡献两个AcquisitionType，机器配置按 `acquisitionType` 引用：
+
+| AcquisitionTypeId | Kind | 显示名 |
+|---|---|---|
+| `dp.acquisition.halcon.area` | `AreaScan` | HALCON 面阵相机 |
+| `dp.acquisition.halcon.line` | `LineScan` | HALCON 线扫相机 |
+
+- 两者的区别只有 `Kind`：它决定工作流节点按几何形态过滤Source——面阵节点只显示Area Source，线扫节点只显示Line Source。两个Type的能力声明、私有配置契约和设备适配器**完全相同**。
+- **整图由SDK完成组装，适配器只向上交付整张图**：线扫相机在HALCON采集接口（`GigEVision2`/`USB3Vision`/`GenICamTL`，或采集卡的对应接口）下，`grab_image` 返回的就是采集接口/采集卡组装好的一张完整图像，因此本Provider不引入Line/Chunk公共模型，也不做行拼接、不做分块交付。一次请求对应一张完整图像，尺寸即设备侧整图尺寸。
+- 两个Type共用同一个 `HalconDeviceSettingsParser`，线扫没有额外deviceSettings字段。**不要**为线扫另立一份会漂移的解析器：私有配置契约相同，另立一份只会让两边的校验逐渐分叉。
+
 ## 长连接与外部回调（BufferedExternal）
 
 机器配置把逻辑源声明为 `BufferedExternal` 时，本Provider用长连接会话接管设备：外部触发帧先进入 Runtime 的有界 FIFO，采集节点稍后领取最早未消费帧。
@@ -82,4 +95,4 @@ var captured = await acquisition.CaptureAsync(
 
 真正的像素落地与布局/预算判定在 `HalconNeutralFrames`，主动单次采集与外部回调长连接**共用同一份实现**——两条路径各写一份通道排布，只会在现场以"偶发图像错位"的形式暴露。
 
-测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；另有 129 例（含双 TFM）覆盖触发/曝光/增益参数决策、句柄复用、单次采集与取流的双向互斥、停止等待、回调边界纪律与错误码分类，全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**：`Software` 触发按 MVTec 官方示例实现（`[Consumer]trigger` + 抓取前 `[Consumer]trigger_software`），是否被现场接口接受、曝光/触发精度、`do_abort_grab` 支持情况与吞吐都必须现场确认。
+测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；另有 134 例（含双 TFM）覆盖触发/曝光/增益参数决策、句柄复用、单次采集与取流的双向互斥、停止等待、回调边界纪律、错误码分类、两个AcquisitionType的Kind与整图交付，全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**：`Software` 触发按 MVTec 官方示例实现（`[Consumer]trigger` + 抓取前 `[Consumer]trigger_software`），是否被现场接口接受、曝光/触发精度、`do_abort_grab` 支持情况与吞吐都必须现场确认；线扫还需现场确认整图高度由哪一侧决定（相机帧触发 vs 采集接口/采集卡参数）以及行频与整图尺寸的对应关系。
