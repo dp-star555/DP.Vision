@@ -459,7 +459,9 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
                 // 先推进代次再布防：布防过程中到达的帧必须落在新代次里，否则会被当成上一轮的帧丢弃。
                 session.BeginEpoch(Epoch);
                 await session.ArmAsync(
-                    token => _runtime.OpenDeviceAsync(session, binding, ResolveRegistration(binding), token),
+                    // 设备在两次布防之间保持打开（退役只停流），因此必须复用会话里已有的设备：
+                    // 每次布防都重新打开会让真实相机第二次直接失败，并把上一根运行持有的设备对象漏掉。
+                    token => _runtime.GetOrOpenDeviceAsync(session, binding, ResolveRegistration(binding), token),
                     cancellationToken).ConfigureAwait(false);
 
                 lock (_armed)

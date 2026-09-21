@@ -256,6 +256,38 @@ public sealed class BufferedExternalInboxTests
         Assert.IsTrue(rig.Counter.IsBalanced, rig.Counter.ToString());
     }
 
+    /// <summary>
+    /// 第二根根运行复用同一台已打开的设备，不重新打开相机。
+    /// <para>
+    /// 设备在两次布防之间保持打开（退役只停流），所以第二轮必须复用会话里已有的设备：
+    /// 重新打开会让真实相机第二次直接失败（同一进程通常无法独占打开同一台相机），
+    /// 并且会把上一根运行持有的设备对象漏掉——它既不会停流，也不会被释放。
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task SecondRun_ReusesOpenDeviceInsteadOfOpeningCameraAgain()
+    {
+        await using var rig = new Rig(Policy());
+        await rig.ArmAsync("run-1");
+        Assert.IsTrue(rig.Device.Emit(1, seed: 1));
+        await rig.Lease.DisposeAsync();
+
+        await rig.ArmAsync("run-2");
+        Assert.AreEqual(2, rig.Lease.Epoch, "新一轮必须推进采集代次。");
+        Assert.IsTrue(rig.Device.Emit(2, seed: 2));
+
+        // 用块而不是 using 声明：均衡等式要求断言时帧句柄已经释放。
+        long? sequence;
+        using (var captured = await rig.CaptureAsync())
+            sequence = captured.Metadata.DeviceSequence;
+
+        Assert.AreEqual(2L, sequence, "第二轮必须领到自己代次的帧。");
+        Assert.AreEqual(2, rig.Device.StreamStartCount, "第二根根运行必须重新布防接收流。");
+        Assert.AreEqual(1, rig.Provider.OpenedBindings.Count, "设备在两次布防之间保持打开，不得重新打开相机。");
+        Assert.AreEqual(0, rig.Device.DisposeCount, "上一根运行持有的设备对象不得被静默丢弃。");
+        Assert.IsTrue(rig.Counter.IsBalanced, rig.Counter.ToString());
+    }
+
     /// <summary>§14-12：根运行所有权冲突明确失败，并报告当前持有者身份。</summary>
     [TestMethod]
     public async Task SecondRootRun_ConflictsWithHolderIdentity()
@@ -430,6 +462,7 @@ public sealed class BufferedExternalInboxTests
     private sealed class Rig : IAsyncDisposable
     {
         private readonly VisionAcquisitionRuntime _runtime;
+        private readonly FakeVisionProvider _provider;
         private FakeStreamingVisionDevice? _device;
         private IVisionAcquisitionRunLease? _lease;
         private bool _disposed;
@@ -443,6 +476,7 @@ public sealed class BufferedExternalInboxTests
                     imageFactory ?? (seed => new TrackingImageSource(Counter)));
                 return _device;
             });
+            _provider = provider;
 
             _runtime = new VisionAcquisitionRuntime(new VisionAcquisitionProviderComposer().Compose(
                 new[]
@@ -469,6 +503,9 @@ public sealed class BufferedExternalInboxTests
 
         /// <summary>被测运行时。</summary>
         public VisionAcquisitionRuntime Runtime => _runtime;
+
+        /// <summary>假Provider；用来观察相机到底被打开了几次。</summary>
+        public FakeVisionProvider Provider => _provider;
 
         /// <summary>已打开的假流式设备；未布防时访问会明确失败而不是返回空。</summary>
         public FakeStreamingVisionDevice Device =>
