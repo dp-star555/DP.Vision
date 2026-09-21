@@ -1,6 +1,6 @@
 # 图像采集深化 V1：主动请求与外部回调 FIFO
 
-状态：**V1-A、V1-B 已实施；V1-C 起待实现**
+状态：**V1-A、V1-B、V1-C 已实施；V1-D 起待实现**
 范围：`DP.Vision.Acquisition.*`、HALCON/Basler 采集 Adapter 及 Workflow 采集节点接线。  
 目的：解决“外部触发图像已经回调，但 Workflow 尚未运行到采集节点”的问题，同时保留现有主动采集路径。
 
@@ -241,6 +241,7 @@ BufferedExternal允许帧先于节点到达，但不允许上一产品的旧帧�
 - 根运行退役时释放未领取帧和被动Source所有权。
 - Source没有活动根所有者时，回调可以被丢弃并计数，或保持设备未布防；V1实现必须选择一种并固定，不能让旧帧进入下一Epoch。
 - 这一部分依赖Workflow根RunScope资源所有权契约（AR-01阶段3），不得用Nested传枚举自行清理替代。
+  （**V1-C 已落地该机制**：中立的 `IWorkflowRunScopeOwner` + 采集侧 `VisionAcquisitionRunScope` 桥接。）
 
 建议首个实现采用：
 
@@ -637,7 +638,7 @@ Streaming/FrameInboxUnitTests.cs         11 例  白盒：容量/字节预算/�
 `BeginRun` 由调用方显式驱动，宿主还没有在首节点前调用它。跨代次过滤已在队列层实现并有测试，
 但"上一根运行的帧不会进入下一运行"的端到端保证要等 V1-C。**没有任何真实厂商回调。**
 
-### V1-C：根运行Epoch接线
+### V1-C：根运行Epoch接线【已完成】
 
 前置：完成AR-01根RunScope资源所有权契约。
 
@@ -648,6 +649,109 @@ Streaming/FrameInboxUnitTests.cs         11 例  白盒：容量/字节预算/�
 5. 运行准备验证节点与Source模式兼容。
 
 验收：回调可早于Capture节点，但上一根运行帧不会进入下一运行。
+
+**实施记录（2026-09-21）**
+
+前置条件的落地方式：Kernel 不得引用 `DP.Vision`，因此"本轮作用域取得与退役"必须是运行时中立的契约，
+视觉侧只提供 Adapter。新增的 `IWorkflowRunScopeOwner` 就是 AR-01 阶段 3 所需的**所有权令牌机制**；
+阶段 3 剩下的"文件夹采集会话与帧仓的运行级状态也迁入 RunScope、`WorkflowRunScopeKind` 退场"
+仍待处理（见 §13 末"V1-C 的边界"）。
+
+新增文件（`DP.WorkFlow`）：
+
+```text
+src/Workflow/Kernel/DP.WorkFlow.Abstractions/Execution/IWorkflowRunScopeOwner.cs
+    IWorkflowRunScopeOwner + IWorkflowRunScopeLease：中立的运行级资源作用域契约。
+    与 AR-01 阶段 2 的 IWorkflowRunResourceOwner 分工明确：
+    后者负责"上一轮资源退役"，故意延迟到下一次根运行开始，使上一轮结果在查看窗口内仍然有效；
+    本接口负责"本轮作用域取得与退役"，必须在首节点之前生效、在本轮结束时归还。
+src/Workflow/Nodes/DP.WorkFlow.Nodes.Vision/Acquisition/VisionAcquisitionRunScope.cs
+    Kernel 与采集侧之间唯一的桥：IWorkflowRunScopeOwner → IVisionAcquisitionRunOwner。
+tests/Workflow/DP.WorkFlow.Nodes.Vision.Acquisition.Tests/
+    跨层端到端测试工程：DP.WorkFlow 里唯一同时看得见真实采集运行时与工作流根运行宿主的地方。
+    生产侧的依赖方向不变（采集节点仍只引用 Acquisition.Abstractions）。
+```
+
+演进文件：
+
+```text
+src/Workflow/Kernel/DP.WorkFlow.Runtime/Hosting/WorkflowRuntimeHost.cs
+    调用顺序固定为：准备 → 上一轮退役 → 本轮取得 → 引擎执行 → 本轮退役（finally）。
+src/Workflow/Nodes/DP.WorkFlow.Nodes.Vision/Acquisition/VisionSourceCatalog.cs
+    WorkflowVisionSourceInfo 增加 AcquisitionMode（追加在末尾，五参位置调用行为不变）。
+src/Workflow/Nodes/DP.WorkFlow.Nodes.Vision/Acquisition/WorkflowVisionFrameScope.cs
+    运行准备：缓冲源拒绝节点级曝光/增益覆盖；缓冲源存在但宿主未注册 IWorkflowRunScopeOwner 时
+    在首节点之前明确失败；主动采集源声明 ExclusiveRun 的拒绝理由改为"ExclusiveRun 只用于缓冲源"。
+samples/DP.WorkFlow.WinForms.Sample/Form1.cs、samples/Legacy/WpfApptest/MainWindow.xaml.cs
+    注册桥接，并把 binding.AcquisitionMode 一并发布到源目录。
+src/DP.Vision.Acquisition.Runtime/VisionAcquisitionRuntime.cs
+    RunLease.ArmAsync 改为复用会话里已打开的设备（见下"顺带修复的真实缺陷"）。
+```
+
+设计要点：
+
+- **取得时机只能靠顺序保证**：先准备、后取得。准备校验失败时设备根本没有被打开——跨层用例直接断言
+  `Provider.OpenCount == 0`，而不是断言"抛了异常"。
+- **嵌套运行是类型级保证**：引擎自身（含恢复子流程路径）一次都不解析 `IWorkflowRunScopeOwner`，
+  不依赖调用方传对 Root/Nested 枚举。这条由既有嵌套用例（`WorkflowRunPreparationScopeDeclarationTests`）
+  锁住，而不是靠文档约定。
+- **端到端用例的触发方式**：文档里放一个"触发节点"排在采集节点之前，它在首节点执行期间推动一次回调。
+  这样"回调早于采集节点"是确定性的：宿主若没有在首节点之前布防，设备直接丢弃该回调（`Emit` 返回 false），
+  采集节点随后只能超时。不用计时器，也不需要人工等待。
+
+**顺带修复的真实缺陷（DP.Vision）**
+
+`VisionAcquisitionRuntime.RunLease.ArmAsync` 原本每次布防都调用 `OpenDeviceAsync` 重新打开相机，
+而 `DisarmAsync` 的契约是"设备保持打开以便下次布防复用"。后果有两条：
+
+1. 第二根根运行会重新打开同一台相机——真实 SDK 通常直接失败（同一进程无法独占打开两次）；
+2. 上一根运行持有的设备对象既不会停流也不会被释放，被静默漏掉。
+
+修复为复用会话里已有的设备（`GetOrOpenDeviceAsync`）。回归用例
+`SecondRun_ReusesOpenDeviceInsteadOfOpeningCameraAgain` 在未修复代码上两个 TFM 都变红；
+跨层用例 `上一根运行未领取的帧不会进入下一根运行` 同时锁住 `Provider.OpenCount == 1`。
+
+测试（新增 17 例）：
+
+```text
+DP.WorkFlow.Runtime.Tests/WorkflowRuntimeHostTests.cs                     3 例  取得/退役顺序、无作用域所有者时不取得、取得失败即不执行
+DP.WorkFlow.Runtime.Tests/WorkflowRunPreparationScopeDeclarationTests.cs  1 例  嵌套路径一次都不取得
+DP.WorkFlow.Nodes.Vision.Tests/VisionAcquisitionNodeTests.cs              3 例  缓冲源缺作用域所有者、拒绝曝光覆盖、注册后可以运行
+DP.WorkFlow.Nodes.Vision.Tests/VisionAcquisitionRunScopeTests.cs          5 例  桥接：身份转换、所有权透传、释放转发、构造与取得失败
+DP.WorkFlow.Nodes.Vision.Acquisition.Tests/                               6 例  跨层端到端
+DP.Vision.Acquisition.Tests/BufferedExternalInboxTests.cs                 1 例  第二根根运行复用同一设备（双 TFM 各一套）
+```
+
+跨层端到端 6 例：
+
+```text
+回调早于采集节点到达时采集节点直接领取        触发节点在首节点执行期间推帧；宿主若未先布防，回调会被丢弃
+根运行退役后相机停流且不再交付回调            退役后 Emit 必须返回 false
+上一根运行未领取的帧不会进入下一根运行        第二根只拿到新代次的帧；相机只被打开一次
+运行准备校验失败时设备没有被打开              顺序：准备校验 → 取得作用域
+已有根运行持有采集所有权时本轮在首节点前失败  冲突在取得阶段暴露，不抢走别人的相机
+处置子流程不清空父运行的待领取队列            嵌套运行不重新布防、不清空队列
+```
+
+**实测**：`DP.WorkFlow.sln` **834 例 0 失败**（817 → 834），Debug 构建 0 警告 0 错误；
+`DP.Vision.sln` **752 例 0 失败**（750 → 752）。
+
+**变异验证**（撤销后全部复绿）：
+
+| 停用/改坏的行为 | 精确变红 |
+|---|---|
+| 宿主不在首节点之前取得运行作用域 | 8 例（跨 3 个工程） |
+| 宿主在运行结束时不退役运行作用域 | 4 例 |
+| 运行准备不拒绝缓冲源的曝光/增益覆盖 | 2 例 |
+| 运行准备不检查作用域所有者是否存在 | 1 例 |
+| 布防时重新打开相机而不是复用设备 | 3 例（DP.Vision 双 TFM + 跨层 1 例） |
+| 桥接不转发租约释放 | 1 例 |
+| 桥接把运行身份写成带连字符格式 | 1 例 |
+
+**V1-C 的边界**：接线与所有权语义已完成，但**没有任何真实厂商回调**——OnDemand 与 BufferedExternal
+都只由可控假流式设备驱动；真实长连接、断线、重连与停流时序属于 V1-D/V1-E。AR-01 阶段 3 只落地了
+所有权令牌机制，`WorkflowVisionAcquisitionSession` 仍兼"文件夹采集会话 + 帧作用域准备"两职责，
+`WorkflowRunScopeKind` 尚未退场。
 
 ### V1-D：Basler真实回调Adapter
 
@@ -695,7 +799,7 @@ Streaming/FrameInboxUnitTests.cs         11 例  白盒：容量/字节预算/�
 17. 每个被拒绝、超龄和未领取帧最终只Dispose一次。
 18. Provider设备关闭后，已返回Frame仍可读。
 
-当前覆盖（V1-B 完成时）：
+当前覆盖（V1-C 完成时）：
 
 | 项 | 状态 | 覆盖用例 |
 |---|---|---|
@@ -709,7 +813,7 @@ Streaming/FrameInboxUnitTests.cs         11 例  白盒：容量/字节预算/�
 | 8 容量满后 Source 进入 Faulted 且新帧被释放 | 已覆盖 | `InboxOverflow_FaultsSourceAndReleasesFrames`、`Enqueue_RejectsWhenCapacityReached`、`Enqueue_RejectsWhenByteBudgetExceeded` |
 | 9 超龄帧被释放且不能成功返回 | 已覆盖 | `ExpiredFrame_IsReleasedAndNeverReturned`、`Claim_DropsExpiredFramesInsteadOfReturningThem` |
 | 10 新 Epoch 不能领取旧 Epoch 帧 | 已覆盖 | `PreviousRunFrames_DoNotEnterNextRun`、`Claim_DoesNotReturnFramesFromAnotherEpoch`、`Claim_RejectsStaleEpochEvenWhenInboxWasNotDrained`、`DropStaleEpochs_KeepsOnlyCurrentEpoch` |
-| 11 Nested 准备不清空父 Epoch | 待 V1-C | 需要宿主侧运行所有权接线 |
+| 11 Nested 准备不清空父 Epoch | 已覆盖 | `处置子流程不清空父运行的待领取队列`（真实宿主 + 真实采集运行时：嵌套运行后第二个采集节点仍能领到父运行布防期间到达的第二帧，且布防次数保持 1）、`恢复子流程的准备请求声明嵌套作用域并携带父节点ID`（引擎路径一次都不解析 `IWorkflowRunScopeOwner`） |
 | 12 根运行所有权冲突明确失败 | 已覆盖 | `SecondRootRun_ConflictsWithHolderIdentity` |
 | 13 DeviceSequence 原样进入 Metadata | 已覆盖 | `Stream_DeliversFramesInArrivalOrder`、`CaptureMetadata_BufferedExternalPreservesReceivedFacts` |
 | 14 Stream 异常完成后所有等待者失败 | 已覆盖 | `StreamCompletion_FailsWaitersImmediately` |
@@ -718,9 +822,10 @@ Streaming/FrameInboxUnitTests.cs         11 例  白盒：容量/字节预算/�
 | 17 每个被拒绝、超龄和未领取帧只 Dispose 一次 | 已覆盖 | `EveryFrame_IsDisposedExactlyOnce`（观察真实 `IImageSource`）、`Drain_ReturnsAllEntriesWithoutReleasingThem` |
 | 18 Provider 设备关闭后已返回 Frame 仍可读 | 已覆盖 | `ReturnedFrame_RemainsReadableAfterDeviceDisposed` |
 | 19 队列高水位可观测 | 补充 | `HighWatermarks_TrackPeakOccupancy`、`Enqueue_AssignsMonotonicSequenceEvenWhenRejected` |
+| 20 宿主在首节点前取得 Source 所有权（端到端） | 已覆盖（V1-C） | `回调早于采集节点到达时采集节点直接领取`、`根运行退役后相机停流且不再交付回调`、`运行准备校验失败时设备没有被打开`、`已有根运行持有采集所有权时本轮在首节点前失败` |
 
-**仍未覆盖（属于 V1-C/V1-D/E）**：宿主在首节点前取得 Source 所有权的端到端路径、
-Nested 继承语义、真实厂商回调下的断线与停止。
+**仍未覆盖（属于 V1-D/E）**：真实厂商回调下的断线、重连与停流时序；DeviceSequence 在真实相机上的
+可靠性；长时间吞吐与内存回收。这些只能在现场验收（§15）中签署，不能用假设备替代。
 
 ## 15. 现场验收清单
 
@@ -744,7 +849,8 @@ Nested 继承语义、真实厂商回调下的断线与停止。
 1. 两种时序（帧先到/节点先到）均通过自动化测试。
 2. FIFO、容量、超龄、Epoch和所有权语义均有接口级测试。
 3. Runtime关闭不再与活动Capture/Publish竞态。
-4. 根运行与Nested的资源所有权完成结构性收口。
+4. 根运行与Nested的资源所有权完成结构性收口。（**采集侧已满足**：根宿主是唯一解析
+   `IWorkflowRunScopeOwner` 的位置，Nested 在类型上拿不到；AR-01 阶段 3 的其余运行级状态迁移不在本版范围。）
 5. 至少一个真实Provider完成长连接外触发回调现场验收。
 6. 文档明确列出另一个Provider未验收的状态。
 7. 没有把FrameInbox暴露为Workflow公共帧仓。
