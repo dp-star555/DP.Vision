@@ -305,7 +305,7 @@ public sealed class BufferedExternalInboxTests
         Assert.AreEqual(EVisionSourceSharingPolicy.ExclusiveRun, conflict.Diagnostics.Policy);
     }
 
-    /// <summary>§14-14：接收流异常结束后所有等待者立即失败，不等到超时。</summary>
+    /// <summary>§14-14：接收流异常结束后所有等待者立即失败，不等到超时；且会话进入故障态。</summary>
     [TestMethod]
     public async Task StreamCompletion_FailsWaitersImmediately()
     {
@@ -319,8 +319,12 @@ public sealed class BufferedExternalInboxTests
         Assert.IsTrue(rig.Device.CompleteStream(new InvalidOperationException("相机断线")));
 
         var failure = await Assert.ThrowsExactlyAsync<VisionDeviceOfflineException>(async () => await pending);
-        StringAssert.Contains(failure.Message, "接收流已结束");
+        StringAssert.Contains(failure.Message, "StreamFailure", "断线必须表现为故障态，而不是一句泛泛的'流已结束'。");
         StringAssert.Contains(failure.Message, "相机断线", "必须保留底层结束原因，否则现场无法判断是断线还是正常停止。");
+
+        // 故障是终态：后续领取同样失败，而不是继续等到超时。
+        var after = await Assert.ThrowsExactlyAsync<VisionDeviceOfflineException>(async () => await rig.CaptureAsync());
+        StringAssert.Contains(after.Message, "相机断线");
     }
 
     /// <summary>§14-17：被拒绝、超龄与未领取的帧最终都只释放一次。</summary>

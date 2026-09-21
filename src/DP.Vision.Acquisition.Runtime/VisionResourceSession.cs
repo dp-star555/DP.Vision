@@ -425,6 +425,14 @@ internal sealed class VisionResourceSession : IAsyncDisposable
             _streamFailure = failure?.Message;
         }
 
+        if (failure is not null)
+        {
+            // 取流意外结束（断线、设备故障）后不会再有帧到达：把会话标为故障，
+            // 使后续领取拿到带原因的诊断，而不是继续等到超时后收到一句"没有帧到达"。
+            // 正常停止（状态为 Stopping）时 MarkFaulted 会直接返回，不会把退役误判成故障。
+            MarkFaulted("StreamFailure", $"接收流意外结束：{failure.Message}");
+        }
+
         WakeWaiters();
     }
 
