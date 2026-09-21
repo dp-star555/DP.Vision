@@ -119,7 +119,8 @@ public sealed class VisionAcquisitionMachineConfigurationComposer
             parseResult.ResourceKey,
             DeriveSharingPolicy(camera),
             DeriveAcquisitionMode(camera),
-            inbox);
+            inbox,
+            camera.IsRequired);
         return new ValidatedBinding(binding, parseResult.ConfigurationSummary);
     }
 

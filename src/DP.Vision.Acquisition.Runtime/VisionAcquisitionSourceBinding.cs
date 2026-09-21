@@ -13,6 +13,7 @@ public sealed record VisionAcquisitionSourceBinding
     /// <param name="sharingPolicy">同一资源键上的并发协调策略。</param>
     /// <param name="acquisitionMode">该Source采用主动单次采集还是外部回调缓冲。</param>
     /// <param name="inboxPolicy">外部回调缓冲的有界策略；主动单次采集必须为空。</param>
+    /// <param name="isRequired">该源是否必需；必需源在Runtime启动阶段必须成功打开，否则Runtime不得就绪。</param>
     /// <exception cref="ArgumentException">任一身份为空、资源键含空白字符，或模式与缓冲策略不匹配。</exception>
     public VisionAcquisitionSourceBinding(
         string sourceId,
@@ -21,7 +22,8 @@ public sealed record VisionAcquisitionSourceBinding
         string resourceKey,
         EVisionSourceSharingPolicy sharingPolicy = EVisionSourceSharingPolicy.ExclusiveOperation,
         EVisionAcquisitionMode acquisitionMode = EVisionAcquisitionMode.OnDemand,
-        VisionFrameInboxPolicy? inboxPolicy = null)
+        VisionFrameInboxPolicy? inboxPolicy = null,
+        bool isRequired = true)
     {
         SourceId = Require(sourceId, "逻辑源标识", nameof(sourceId));
         ProviderId = Require(providerId, "Provider身份", nameof(providerId));
@@ -48,6 +50,7 @@ public sealed record VisionAcquisitionSourceBinding
         SharingPolicy = sharingPolicy;
         AcquisitionMode = acquisitionMode;
         InboxPolicy = inboxPolicy;
+        IsRequired = isRequired;
     }
 
     /// <summary>逻辑视觉源标识。</summary>
@@ -70,6 +73,9 @@ public sealed record VisionAcquisitionSourceBinding
 
     /// <summary>外部回调缓冲的有界策略；主动单次采集时为空。</summary>
     public VisionFrameInboxPolicy? InboxPolicy { get; }
+
+    /// <summary>该源是否必需；必需源在Runtime启动阶段必须成功打开，否则Runtime不得就绪。</summary>
+    public bool IsRequired { get; }
 
     private static string Require(string value, string label, string parameterName)
     {

@@ -38,7 +38,7 @@ net8.0-windows 分套件：
 | V2-0 冻结证据与合并在研改动 | ✅ 已完成 |
 | V2-1 AcquisitionTypeCatalog 与自动 Module 发现 | ✅ 已完成（见下文） |
 | V2-2 机器相机定义与不可变 Composition | ✅ 已完成（见下文） |
-| V2-3 应用级连接生命周期 | ⏳ 待实施 |
+| V2-3 应用级连接生命周期 | ✅ 已完成（见下文） |
 | V2-4 TransferPolicy 与 Epoch 解耦 | ⏳ 待实施 |
 | V2-5 面阵/线扫双节点模型 | ⏳ 待实施 |
 | V2-6 Basler 迁移 | ⏳ 待实施 |
@@ -169,3 +169,62 @@ WorkFlow 侧（独立仓库）：`DP.WorkFlow.Nodes.Vision.Acquisition.Tests` +2
 
 - 样例的 SDK 健康可用性（真实设备在不在线）在 V2-2 中由"配置级可用性"（Type 已安装且解析成功）替代；
   Provider 打开路径（OpenAsync 带绑定）按计划推迟到 V2-3/V2-6/V2-7 迁移，本阶段只完成组合层。
+
+## V2-3：应用级连接生命周期
+
+状态：**已完成**（2026-09-21）
+
+### 需求覆盖（§20）
+
+1. **Runtime 增加 StartAsync/Ready/StopAsync**：`VisionAcquisitionRuntime` 新增 `StartAsync`（按 ResourceKey 去重打开设备，同一物理资源只打开一次）、
+   `StopAsync`（原 DisposeAsync 关闭顺序：先关接受门、再停流清退未领取帧、等在途操作退出、释放唯一 SDK 设备对象、释放 Provider；Stopped 幂等）、
+   `RuntimeState`/`IsReady`/`IsDegraded`。DisposeAsync 委托给 StopAsync。
+2. **Provider OpenAsync 真正打开设备**：设备连接属于软件生命周期，只由 Runtime Start 打开；`GetOrOpenDeviceAsync` 在会话已有设备时直接复用。
+3. **一个 ResourceKey 一个 Device Adapter 与一个 SDK 对象**：多个 Source 有意映射同一 ResourceKey 时共享同一设备与 Provider 实例。
+4. **OnDemand 复用已连接对象**：`CaptureAsync`/`BeginRunAsync` 严格要求 Runtime 已启动（未启动抛 `VisionDeviceOfflineException` 并提示调用 StartAsync）；
+   `CaptureOnDemandAsync` 删除惰性打开，节点不得隐式 Open/Reconnect/关闭设备。
+5. **ConnectionState 与连接诊断**：新增 `EVisionConnectionState`（Created/Connecting/Connected/Faulted/Disconnecting/Disposed）与 `EVisionRuntimeState`
+   （Created/Starting/Ready/Degraded/NotReady/Stopped）；`VisionSourceDiagnostics` 追加尾部参数 `ConnectionState`/`ConnectionMessage`（默认值保持兼容），
+   连接成功报告设备规范身份、失败报告原因；`VisionAcquisitionSourceBinding` 追加 `IsRequired`（可选参数默认 true，机器配置可声明）。
+6. **宿主进入可运行状态前启动 Runtime**：Required 源打开失败 → `NotReady`；Optional 源失败只降级 `Degraded` 且该 Source 保留完整诊断；
+   WinForms / Legacy WPF 样例构造 Runtime 后立即 `StartAsync`，并将未就绪状态并入 Source 诊断；WorkFlow 端到端测试装配同步。
+
+### 验收证据
+
+| 验收（§21） | 证据 |
+|---|---|
+| 同一 ResourceKey 只创建一个 Device（§21.4） | `RuntimeConnectionLifecycleTests.SameResourceKey_StartsSingleDevice` |
+| Runtime Start 真实 Open 一次（§21.5） | `MultipleCaptures_OpenOnceAndNeverCloseUntilStop` |
+| 多次 OnDemand Capture 不重复 Open/Close（§21.6） | 同上：连续 3 次 Capture `OpenedBindings.Count` 恒为 1、Stop 前 `DisposeCount == 0`、Stop 后 `== 1` |
+| 节点无法直接关闭 Device（§21.7） | `UnstartedRuntime_NodeCaptureFailsWithoutImplicitOpen` · `UnstartedRuntime_RootRunFailsWithoutImplicitOpen`（均断言 `Created.Count == 0`） |
+| Required 设备失败时 Runtime 不 Ready（§21.8） | `RequiredFailure_RuntimeIsNotReady`（NotReady + Source Faulted + Capture 明确失败） |
+| Optional 设备失败时 Source 不可用但 Runtime 可 Degraded（§21.9） | `OptionalFailure_RuntimeDegradesAndSourceUnavailable`（Degraded + 失败源 Faulted 保真 + Required 源仍可采集） |
+
+### 新增契约与实现
+
+Abstractions（公共契约层）：
+
+- `EVisionConnectionState` / `EVisionRuntimeState` 枚举（状态机注释写明连接与取流分开维护、Ready/Degraded/NotReady 语义）。
+- `VisionSourceDiagnostics` 追加 `ConnectionState`/`ConnectionMessage`（尾部带默认值的定位参数）。
+
+Runtime（实现层）：
+
+- `VisionAcquisitionSourceBinding.IsRequired`（机器配置 `camera.IsRequired` 透传，第 8 个可选参数）。
+- `VisionResourceSession` 连接状态跟踪：`MarkConnecting`/`MarkConnected`、`MarkFaulted` 同步 Faulted 连接态、`DisposeAsync` 记录 Disconnecting→Disposed。
+- `VisionAcquisitionRuntime.StartAsync`：Starting→按 ResourceKey 去重打开→`ComputeStartState`（Required 失败 NotReady，否则 Optional 失败 Degraded）；
+  `StartResourceAsync` 失败不自动切换 Provider，按 `VisionSourceConfigurationException`/其他分别标记 SourceConfiguration/OpenFailure。
+- `CaptureAsync`/`BeginRunAsync` 严格要求 `RuntimeState != Created`；`CaptureOnDemandAsync` 用 `session.Device` 直接复用并拒绝空设备。
+
+### 测试结果
+
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**538 通过 / 0 失败**（基线 532 + 新增 6）。
+
+- DP.Vision.Acquisition.Tests 144 → 150（+6：`RuntimeConnectionLifecycleTests`）。
+- 其余套件不变：DP.Vision.Tests 115 · Integration 4 · Algorithms 67 · Basler 91 · Halcon 111。
+- 既有测试按严格 Start 契约更新：SharingPolicyTests / RoutingTests 各用例补 `StartAsync`，
+  `OpenFailure_ReleasesLease` 重写为 `OpenFailure_DuringStart_LeavesRuntimeNotReady`（NotReady 语义），
+  `CanonicalKeyMismatch_IsRejected` 改为 Start 阶段拒绝（NotReady + Capture 抛 `VisionDeviceOfflineException`）；
+  BufferedExternalInboxTests 的 Rig 构造即启动。
+
+WorkFlow 侧（独立仓库）：`DP.WorkFlow.Nodes.Vision.Acquisition.Tests` 8 通过（`FakeStreamingRuntime` 构造即启动；
+`运行准备校验失败时设备没有被布防` 改 V2-3 语义：OpenCount==1 且 StreamStartCount==0）；两个样例工程构建 0 警告 0 错误。

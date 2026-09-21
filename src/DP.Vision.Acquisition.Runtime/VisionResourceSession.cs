@@ -47,6 +47,8 @@ internal sealed class VisionResourceSession : IAsyncDisposable
     private readonly ResourceFrameSink _sink;
 
     private EVisionResourceState _state = EVisionResourceState.Created;
+    private EVisionConnectionState _connectionState = EVisionConnectionState.Created;
+    private string? _connectionMessage;
     private VisionAcquisitionOwner? _holder;
     private IVisionAcquisitionDevice? _device;
     private IVisionAcquisitionStream? _stream;
@@ -106,6 +108,18 @@ internal sealed class VisionResourceSession : IAsyncDisposable
         get { lock (_sync) return _state == EVisionResourceState.Faulted; }
     }
 
+    /// <summary>连接状态；连接属于软件生命周期，与取流状态分开维护。</summary>
+    public EVisionConnectionState ConnectionState
+    {
+        get { lock (_sync) return _connectionState; }
+    }
+
+    /// <summary>连接诊断说明；成功时报告设备规范身份，失败时报告原因。</summary>
+    public string? ConnectionMessage
+    {
+        get { lock (_sync) return _connectionMessage; }
+    }
+
     /// <summary>故障原因。</summary>
     public string? FaultMessage
     {
@@ -134,6 +148,28 @@ internal sealed class VisionResourceSession : IAsyncDisposable
             _device = device;
     }
 
+    /// <summary>标记正在打开设备；由Runtime在调用Provider.OpenAsync之前设置。</summary>
+    /// <param name="message">面向操作员的连接诊断。</param>
+    public void MarkConnecting(string message)
+    {
+        lock (_sync)
+        {
+            _connectionState = EVisionConnectionState.Connecting;
+            _connectionMessage = message;
+        }
+    }
+
+    /// <summary>标记设备已连接；由Runtime在打开成功并校验规范身份之后设置。</summary>
+    /// <param name="message">面向操作员的连接诊断，报告设备规范身份。</param>
+    public void MarkConnected(string message)
+    {
+        lock (_sync)
+        {
+            _connectionState = EVisionConnectionState.Connected;
+            _connectionMessage = message;
+        }
+    }
+
     /// <summary>
     /// 把会话标记为故障并释放待领取帧。
     /// <para>
@@ -153,6 +189,8 @@ internal sealed class VisionResourceSession : IAsyncDisposable
             _state = EVisionResourceState.Faulted;
             _faultKind = kind;
             _faultMessage = message;
+            _connectionState = EVisionConnectionState.Faulted;
+            _connectionMessage = message;
             changed = true;
         }
 
@@ -354,7 +392,9 @@ internal sealed class VisionResourceSession : IAsyncDisposable
                 _deviceSequenceGaps,
                 _callbackFaults,
                 _faultKind,
-                _faultMessage);
+                _faultMessage,
+                _connectionState,
+                _connectionMessage);
         }
     }
 
@@ -447,6 +487,8 @@ internal sealed class VisionResourceSession : IAsyncDisposable
             if (_state == EVisionResourceState.Disposed)
                 return;
             _state = EVisionResourceState.Stopping;
+            _connectionState = EVisionConnectionState.Disconnecting;
+            _connectionMessage = "正在按关闭顺序释放设备…";
             stream = _stream;
             _stream = null;
             device = _device;
@@ -480,7 +522,11 @@ internal sealed class VisionResourceSession : IAsyncDisposable
             await device.DisposeAsync().ConfigureAwait(false);
 
         lock (_sync)
+        {
             _state = EVisionResourceState.Disposed;
+            _connectionState = EVisionConnectionState.Disposed;
+            _connectionMessage = "设备已关闭，会话已释放。";
+        }
     }
 
     private void PublishCore(VisionProviderFrame frame)

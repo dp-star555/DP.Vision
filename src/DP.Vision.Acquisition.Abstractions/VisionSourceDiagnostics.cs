@@ -26,6 +26,8 @@ namespace DP.Vision.Acquisition;
 /// <param name="CallbackFaults">回调边界吞掉的异常次数。</param>
 /// <param name="FaultKind">故障类别；未故障时为空。</param>
 /// <param name="FaultMessage">故障说明；未故障时为空。</param>
+/// <param name="ConnectionState">连接状态（Created/Connecting/Connected/Faulted/Disconnecting/Disposed）。</param>
+/// <param name="ConnectionMessage">连接诊断说明：成功时报告设备规范身份，失败时报告原因。</param>
 public sealed record VisionSourceDiagnostics(
     string SourceId,
     string ResourceKey,
@@ -43,7 +45,9 @@ public sealed record VisionSourceDiagnostics(
     long DeviceSequenceGaps,
     long CallbackFaults,
     string? FaultKind,
-    string? FaultMessage)
+    string? FaultMessage,
+    EVisionConnectionState ConnectionState = EVisionConnectionState.Created,
+    string? ConnectionMessage = null)
 {
     /// <summary>是否处于故障状态。</summary>
     public bool IsFaulted => FaultKind is not null;

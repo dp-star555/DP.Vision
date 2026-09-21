@@ -18,6 +18,7 @@ public sealed class SharingPolicyTests
     {
         var blocking = new BlockingCapture();
         await using var runtime = BuildRuntime("Camera.Top", "camera:serial:A", EVisionSourceSharingPolicy.ExclusiveOperation, blocking.Capture);
+        await runtime.StartAsync(CancellationToken.None);
 
         var first = runtime.CaptureAsync(Source, Request, new VisionAcquisitionOwner("run-1", "node-1"), CancellationToken.None).AsTask();
         await blocking.Entered;
@@ -60,6 +61,7 @@ public sealed class SharingPolicyTests
                 new VisionAcquisitionSourceBinding("Camera.Bottom", "dp.fake.bottom", "bottom", "camera:serial:B")
             });
         await using var runtime = new VisionAcquisitionRuntime(composition);
+        await runtime.StartAsync(CancellationToken.None);
 
         var first = runtime.CaptureAsync(
             new VisionSourceReference("Camera.Top"), Request, new VisionAcquisitionOwner("run-1", "node-1"), CancellationToken.None).AsTask();
@@ -83,6 +85,7 @@ public sealed class SharingPolicyTests
     {
         var blocking = new BlockingCapture();
         await using var runtime = BuildRuntime("Camera.Top", "camera:serial:A", EVisionSourceSharingPolicy.Serialized, blocking.Capture);
+        await runtime.StartAsync(CancellationToken.None);
 
         var first = runtime.CaptureAsync(Source, Request, new VisionAcquisitionOwner("run-1", "node-1"), CancellationToken.None).AsTask();
         await blocking.Entered;
@@ -101,6 +104,7 @@ public sealed class SharingPolicyTests
     {
         var blocking = new BlockingCapture();
         await using var runtime = BuildRuntime("Camera.Top", "camera:serial:A", EVisionSourceSharingPolicy.Serialized, blocking.Capture);
+        await runtime.StartAsync(CancellationToken.None);
 
         var first = runtime.CaptureAsync(Source, Request, new VisionAcquisitionOwner("run-1", "node-1"), CancellationToken.None).AsTask();
         await blocking.Entered;
@@ -121,6 +125,7 @@ public sealed class SharingPolicyTests
     {
         var blocking = new BlockingCapture();
         await using var runtime = BuildRuntime("Camera.Top", "camera:serial:A", EVisionSourceSharingPolicy.Serialized, blocking.Capture);
+        await runtime.StartAsync(CancellationToken.None);
 
         var first = runtime.CaptureAsync(Source, Request, new VisionAcquisitionOwner("run-1", "node-1"), CancellationToken.None).AsTask();
         await blocking.Entered;
@@ -146,6 +151,7 @@ public sealed class SharingPolicyTests
         await using var runtime = new VisionAcquisitionRuntime(_composer.Compose(
             new[] { new FakeVisionProviderModule("m.one", factory.Registration("dp.fake.one", capture: CaptureCancelled)) },
             new[] { new VisionAcquisitionSourceBinding("Camera.Top", "dp.fake.one", "top", "camera:serial:A") }));
+        await runtime.StartAsync(CancellationToken.None);
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
         {
@@ -158,6 +164,7 @@ public sealed class SharingPolicyTests
         await using var second = new VisionAcquisitionRuntime(_composer.Compose(
             new[] { new FakeVisionProviderModule("m.one", recovered.Registration("dp.fake.one")) },
             new[] { new VisionAcquisitionSourceBinding("Camera.Top", "dp.fake.one", "top", "camera:serial:A") }));
+        await second.StartAsync(CancellationToken.None);
         using var capturedAgain = await second.CaptureAsync(
             Source, Request, new VisionAcquisitionOwner("run-2", "node-2"), CancellationToken.None);
         Assert.IsNotNull(capturedAgain);
@@ -171,6 +178,7 @@ public sealed class SharingPolicyTests
         await using var runtime = new VisionAcquisitionRuntime(_composer.Compose(
             new[] { new FakeVisionProviderModule("m.one", factory.Registration("dp.fake.one", capture: CaptureFailing)) },
             new[] { new VisionAcquisitionSourceBinding("Camera.Top", "dp.fake.one", "top", "camera:serial:A") }));
+        await runtime.StartAsync(CancellationToken.None);
 
         await Assert.ThrowsExactlyAsync<VisionDeviceOfflineException>(async () =>
         {
@@ -187,9 +195,9 @@ public sealed class SharingPolicyTests
         StringAssert.Contains(second.Message, "camera:serial:A");
     }
 
-    /// <summary>打开设备失败同样释放租约，不会把资源永久锁住。</summary>
+    /// <summary>打开设备失败发生在Runtime Start阶段：Runtime不Ready，后续采集明确失败且保留打开失败原因。</summary>
     [TestMethod]
-    public async Task OpenFailure_ReleasesLease()
+    public async Task OpenFailure_DuringStart_LeavesRuntimeNotReady()
     {
         var failing = new FakeVisionProvider("dp.fake.one", binding => throw new InvalidOperationException("打开设备失败。"));
         var composition = _composer.Compose(
@@ -202,18 +210,23 @@ public sealed class SharingPolicyTests
             new[] { new VisionAcquisitionSourceBinding("Camera.Top", "dp.fake.one", "top", "camera:serial:A") });
         await using var runtime = new VisionAcquisitionRuntime(composition);
 
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+        var state = await runtime.StartAsync(CancellationToken.None);
+        Assert.AreEqual(EVisionRuntimeState.NotReady, state);
+
+        var offline = await Assert.ThrowsExactlyAsync<VisionDeviceOfflineException>(async () =>
         {
             using var captured = await runtime.CaptureAsync(
                 Source, Request, new VisionAcquisitionOwner("run-1", "node-1"), CancellationToken.None);
         });
+        StringAssert.Contains(offline.Message, "打开设备失败");
 
-        var conflict = await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+        // 打开失败是会话终态：再次请求仍明确失败，不会"碰巧成功"。
+        var again = await Assert.ThrowsExactlyAsync<VisionDeviceOfflineException>(async () =>
         {
             using var captured = await runtime.CaptureAsync(
                 Source, Request, new VisionAcquisitionOwner("run-2", "node-2"), CancellationToken.None);
         });
-        StringAssert.Contains(conflict.Message, "打开设备失败");
+        StringAssert.Contains(again.Message, "打开设备失败");
     }
 
     /// <summary>尚未实现的共享策略明确拒绝，不用进程内锁冒充ExclusiveRun或Broadcast。</summary>
@@ -223,6 +236,7 @@ public sealed class SharingPolicyTests
         foreach (var policy in new[] { EVisionSourceSharingPolicy.ExclusiveRun, EVisionSourceSharingPolicy.Broadcast })
         {
             await using var runtime = BuildRuntime("Camera.Top", "camera:serial:A", policy, new BlockingCapture().Capture);
+            await runtime.StartAsync(CancellationToken.None);
             var exception = await Assert.ThrowsExactlyAsync<VisionSourceConfigurationException>(async () =>
             {
                 using var captured = await runtime.CaptureAsync(
@@ -245,6 +259,7 @@ public sealed class SharingPolicyTests
                 new VisionAcquisitionSourceBinding("Camera.Alias", "dp.fake.one", "top", "camera:serial:A")
             });
         await using var runtime = new VisionAcquisitionRuntime(composition);
+        await runtime.StartAsync(CancellationToken.None);
 
         var first = runtime.CaptureAsync(
             new VisionSourceReference("Camera.Top"), Request, new VisionAcquisitionOwner("run-1", "node-1"), CancellationToken.None).AsTask();

@@ -22,6 +22,7 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         new Dictionary<string, VisionResourceSession>(StringComparer.Ordinal);
     private readonly object _gate = new object();
     private bool _disposed;
+    private EVisionRuntimeState _runtimeState = EVisionRuntimeState.Created;
     private int _epoch;
     private RunLease? _activeLease;
 
@@ -36,12 +37,104 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
     /// <summary>本运行时持有的组合身份；与Workflow Runtime组合身份分别记录。</summary>
     public string CompositionId => _composition.CompositionId;
 
+    /// <summary>运行时整体生命周期状态：Ready表示可接受采集与根运行，Degraded/NotReady表示部分或全部设备未就绪。</summary>
+    public EVisionRuntimeState RuntimeState
+    {
+        get { lock (_gate) return _runtimeState; }
+    }
+
+    /// <summary>全部Required源已连接，Runtime可进入可运行状态。</summary>
+    public bool IsReady => RuntimeState == EVisionRuntimeState.Ready;
+
+    /// <summary>Required源已连接但存在Optional源失败，Runtime降级运行。</summary>
+    public bool IsDegraded => RuntimeState == EVisionRuntimeState.Degraded;
+
     /// <summary>已发布的逻辑源清单；供属性编辑器和运行准备列出候选。</summary>
     public IReadOnlyList<VisionAcquisitionSourceBinding> Sources => _composition.Sources;
 
     /// <summary>需要根运行所有权的逻辑源；只有外部回调缓冲源需要。</summary>
     public IReadOnlyList<VisionAcquisitionSourceBinding> BufferedSources =>
         _composition.Sources.Where(binding => binding.AcquisitionMode == EVisionAcquisitionMode.BufferedExternal).ToArray();
+
+    /// <summary>
+    /// 启动应用级连接生命周期：按ResourceKey为每个启用Source创建唯一ResourceSession并真正打开设备。
+    /// <para>
+    /// 同一ResourceKey只创建一个Device Adapter和一个SDK对象（§21.4）；任一失败都不得自动选择其他Provider。
+    /// Required源打开失败时Runtime进入NotReady，Optional源失败只降级为Degraded且对应Source保留完整诊断。
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">协作取消。</param>
+    /// <returns>启动后的运行时状态（Ready/Degraded/NotReady）。</returns>
+    /// <exception cref="InvalidOperationException">运行时已经启动过。</exception>
+    public async ValueTask<EVisionRuntimeState> StartAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(VisionAcquisitionRuntime));
+            if (_runtimeState != EVisionRuntimeState.Created)
+                throw new InvalidOperationException(
+                    $"采集运行时只能启动一次；当前状态 {_runtimeState}。请先停止并释放本实例，再创建新运行时。");
+            _runtimeState = EVisionRuntimeState.Starting;
+        }
+
+        var sources = _composition.Sources;
+        var handledKeys = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var binding in sources)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // 同一物理资源只打开一次；多个Source有意映射同一ResourceKey时必须共享同一设备。
+                if (!handledKeys.Add(binding.ResourceKey))
+                    continue;
+                await StartResourceAsync(binding, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            lock (_gate)
+            {
+                if (_runtimeState == EVisionRuntimeState.Starting)
+                    _runtimeState = EVisionRuntimeState.Created;
+            }
+
+            throw;
+        }
+
+        lock (_gate)
+        {
+            _runtimeState = ComputeStartState(sources);
+            return _runtimeState;
+        }
+    }
+
+    /// <summary>
+    /// 按关闭顺序停止运行时：关闭接受门、拒绝新采集与根运行、停流并清退未领取帧、
+    /// 等待在途操作退出、释放唯一SDK设备对象、释放Provider。重复调用无副作用。
+    /// </summary>
+    public async ValueTask StopAsync()
+    {
+        VisionResourceSession[] sessions;
+        IVisionAcquisitionProvider[] providers;
+        lock (_gate)
+        {
+            if (_runtimeState == EVisionRuntimeState.Stopped)
+                return;
+            _runtimeState = EVisionRuntimeState.Stopped;
+            _activeLease = null;
+            sessions = _resources.Values.ToArray();
+            providers = _providers.Values.ToArray();
+            _resources.Clear();
+            _providers.Clear();
+        }
+
+        // 每个会话先关接受门、再停流（等待已进入的回调退出）、再等在途操作退出，最后释放设备。
+        foreach (var session in sessions)
+            await session.DisposeAsync().ConfigureAwait(false);
+        foreach (var provider in providers)
+            await provider.DisposeAsync().ConfigureAwait(false);
+    }
 
     /// <inheritdoc/>
     public async ValueTask<VisionCapturedImage> CaptureAsync(
@@ -66,6 +159,10 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             throw new VisionSourceConfigurationException(
                 $"逻辑源 {source.SourceId} 绑定的Provider {binding.ProviderId} 不在当前组合中。");
 
+        if (RuntimeState == EVisionRuntimeState.Created)
+            throw new VisionDeviceOfflineException(
+                $"逻辑源 {source.SourceId} 所在采集运行时尚未启动；宿主必须在进入可运行状态前调用 StartAsync。");
+
         var session = GetSession(binding);
         if (!session.TryEnterOperation())
             throw new VisionDeviceOfflineException(
@@ -75,7 +172,7 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         {
             return binding.AcquisitionMode == EVisionAcquisitionMode.BufferedExternal
                 ? await ClaimBufferedAsync(session, binding, request, cancellationToken).ConfigureAwait(false)
-                : await CaptureOnDemandAsync(session, binding, registration, request, owner, cancellationToken)
+                : await CaptureOnDemandAsync(session, binding, request, owner, cancellationToken)
                     .ConfigureAwait(false);
         }
         finally
@@ -92,6 +189,9 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             throw new ArgumentException("根运行身份不能为空。", nameof(runId));
         if (_disposed)
             throw new ObjectDisposedException(nameof(VisionAcquisitionRuntime));
+        if (RuntimeState == EVisionRuntimeState.Created)
+            throw new VisionDeviceOfflineException(
+                "采集运行时尚未启动；宿主必须在进入可运行状态前调用 StartAsync。");
 
         RunLease lease;
         lock (_gate)
@@ -132,7 +232,8 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             ? session.Snapshot(binding.SourceId, binding.ProviderId)
             : new VisionSourceDiagnostics(
                 binding.SourceId, binding.ResourceKey, binding.ProviderId,
-                "Created", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null);
+                "Created", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null,
+                EVisionConnectionState.Created, null);
     }
 
     /// <summary>读取全部已发布源的运行诊断快照。</summary>
@@ -147,25 +248,14 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
-        VisionResourceSession[] sessions;
-        IVisionAcquisitionProvider[] providers;
         lock (_gate)
         {
             if (_disposed)
                 return;
             _disposed = true;
-            _activeLease = null;
-            sessions = _resources.Values.ToArray();
-            providers = _providers.Values.ToArray();
-            _resources.Clear();
-            _providers.Clear();
         }
 
-        // 每个会话先关接受门、再停流（等待已进入的回调退出）、再等在途操作退出，最后释放设备。
-        foreach (var session in sessions)
-            await session.DisposeAsync().ConfigureAwait(false);
-        foreach (var provider in providers)
-            await provider.DisposeAsync().ConfigureAwait(false);
+        await StopAsync().ConfigureAwait(false);
     }
 
     private async ValueTask<VisionCapturedImage> ClaimBufferedAsync(
@@ -206,7 +296,6 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
     private async ValueTask<VisionCapturedImage> CaptureOnDemandAsync(
         VisionResourceSession session,
         VisionAcquisitionSourceBinding binding,
-        VisionAcquisitionProviderRegistration registration,
         VisionCaptureRequest request,
         VisionAcquisitionOwner owner,
         CancellationToken cancellationToken)
@@ -218,7 +307,13 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
                 throw new VisionDeviceOfflineException(
                     $"资源键 {binding.ResourceKey} 的设备已标记为故障（{session.FaultMessage}）；请先排除故障再继续采集。");
 
-            var device = await GetOrOpenDeviceAsync(session, binding, registration, cancellationToken).ConfigureAwait(false);
+            // 节点不得隐式打开或重连设备：设备连接属于软件生命周期，只能由Runtime Start打开、由Runtime Stop关闭。
+            var device = session.Device;
+            if (device is null)
+                throw new VisionDeviceOfflineException(
+                    $"逻辑源 {binding.SourceId} 的设备未连接（资源键 {binding.ResourceKey}）；"
+                    + "节点不得隐式打开或重连设备，请确认采集运行时已启动且该Source打开成功。");
+
             var providerFrame = await CaptureFromDeviceAsync(session, binding, device, request, cancellationToken).ConfigureAwait(false);
 
             var captureId = Guid.NewGuid().ToString("N");
@@ -308,6 +403,10 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         session.OperationGate.Release();
     }
 
+    /// <summary>
+    /// 打开会话设备；若会话已持有设备则直接复用。设备连接属于软件生命周期，只由Runtime Start打开。
+    /// 采集节点与根运行布防都不得隐式打开设备。
+    /// </summary>
     private async ValueTask<IVisionAcquisitionDevice> GetOrOpenDeviceAsync(
         VisionResourceSession session,
         VisionAcquisitionSourceBinding binding,
@@ -318,7 +417,7 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         if (existing is not null)
             return existing;
 
-        // 设备Session按ResourceKey惰性打开并复用，Open/Close状态转换由Runtime串行化。
+        // 设备Session按ResourceKey唯一建立并复用，Open/Close状态转换由Runtime串行化。
         await session.OpenGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -355,6 +454,65 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         }
 
         return device;
+    }
+
+    /// <summary>按一个ResourceKey的代表Source打开设备并记录连接状态；打开失败标记故障但不自动切换Provider。</summary>
+    private async ValueTask StartResourceAsync(
+        VisionAcquisitionSourceBinding binding,
+        CancellationToken cancellationToken)
+    {
+        var session = GetSession(binding);
+        if (session.Device is not null)
+            return;
+        if (!_composition.TryGetProvider(binding.ProviderId, out var registration) || registration is null)
+            throw new VisionSourceConfigurationException(
+                $"逻辑源 {binding.SourceId} 绑定的Provider {binding.ProviderId} 不在当前组合中。");
+
+        session.MarkConnecting($"正在打开资源键 {binding.ResourceKey} 的设备…");
+        try
+        {
+            var device = await GetOrOpenDeviceAsync(session, binding, registration, cancellationToken).ConfigureAwait(false);
+            session.MarkConnected(BuildConnectionDiagnostic(binding, device));
+        }
+        catch (Exception exception) when (!(exception is OperationCanceledException))
+        {
+            var kind = exception is VisionSourceConfigurationException ? "SourceConfiguration" : "OpenFailure";
+            session.MarkFaulted(kind, $"逻辑源 {binding.SourceId}（资源键 {binding.ResourceKey}）打开设备失败：{exception.Message}");
+        }
+    }
+
+    /// <summary>按全部Source的打开结果推导启动状态：Required失败→NotReady；否则Optional失败→Degraded。</summary>
+    private EVisionRuntimeState ComputeStartState(IReadOnlyList<VisionAcquisitionSourceBinding> sources)
+    {
+        var requiredFailed = false;
+        var optionalFailed = false;
+        foreach (var binding in sources)
+        {
+            if (SourceIsConnected(binding))
+                continue;
+            if (binding.IsRequired)
+                requiredFailed = true;
+            else
+                optionalFailed = true;
+        }
+
+        if (requiredFailed)
+            return EVisionRuntimeState.NotReady;
+        return optionalFailed ? EVisionRuntimeState.Degraded : EVisionRuntimeState.Ready;
+    }
+
+    private bool SourceIsConnected(VisionAcquisitionSourceBinding binding) =>
+        TryGetSession(binding.ResourceKey, out var session)
+        && session.Device is not null
+        && !session.Faulted;
+
+    private static string BuildConnectionDiagnostic(
+        VisionAcquisitionSourceBinding binding,
+        IVisionAcquisitionDevice device)
+    {
+        var identity = device.Identity;
+        var canonical = identity.HasCanonicalKey ? identity.CanonicalKey : "(设备未报告规范资源键)";
+        return $"资源键 {binding.ResourceKey} 的设备已连接；设备报告规范身份 {canonical}。";
     }
 
     private IVisionAcquisitionProvider GetProvider(VisionAcquisitionProviderRegistration registration)

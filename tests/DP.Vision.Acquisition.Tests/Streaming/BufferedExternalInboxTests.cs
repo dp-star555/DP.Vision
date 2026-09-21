@@ -500,6 +500,9 @@ public sealed class BufferedExternalInboxTests
                         EVisionAcquisitionMode.BufferedExternal,
                         policy)
                 }));
+
+            // 设备连接属于软件生命周期：Runtime在构造后立即启动并打开设备；根运行与采集都只复用会话设备。
+            _runtime.StartAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
         }
 
         /// <summary>图像句柄的创建/保留/释放计数。</summary>
