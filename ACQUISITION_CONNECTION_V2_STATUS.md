@@ -867,7 +867,9 @@ V2-2 Provider 工厂无参缺陷、discovery→deviceSettings 投影、DP.WorkFl
    `VisionAcquisitionProviderRegistration` 只读清单；`VisionAcquisitionProviderRegistration` 新增可选 `DisplayName`
    （机器配置组合器用 `VisionAcquisitionTypeDescriptor.DisplayName` 填充，插件路径未声明时保持为空）。
    `AcquisitionManagementPresenter` 删除按最后一个 `@` 切分 `ProviderManifest` 的临时解析，改用该清单取 Provider 身份。
-2. **§21 第 27/28 条显式引用**：核对后确认实现早已满足，本阶段补齐状态文档的显式证据引用（此前两条从未被引用）。
+2. **§21 未显式引用条目补齐**：逐条核对 §21 全部 28 条，把此前从未被引用的 8 条（§21.1/2/11/12/13/14/16/25）补齐显式引用。
+   其中 §21.27/§21.28 为重点（帧所有权与设备关闭后可读性），其余 6 条与 §21.27/28 一样，**实现与测试均已存在**，本阶段只补文档证据；
+   §21.25 在 DP.Vision 侧不适用（属 WorkFlow 宿主与 Studio 的属性迁移路径）。
 3. **net48 构建卫生**：修复 `DP.Vision.Halcon.Tests` 在 net48 下的两处 CS1501。
 
 ### 验收证据（§21）
@@ -879,6 +881,22 @@ V2-2 Provider 工厂无参缺陷、discovery→deviceSettings 投影、DP.WorkFl
 | 组合只读注册清单是版本清单的结构化形式 | `ComposerTests.Providers_ExposesStructuredRegistrationList`（按 ProviderId 排序、与 `ProviderManifest` 表达同一批 Provider、未配置 Source 的 Provider 同样在列、显示名带出/为空） |
 | 机器配置把 Type 显示名带进注册清单 | `VisionAcquisitionMachineConfigurationTests.SingleCamera_ProjectsUniqueCompositionAndSourceCatalog`（`Providers.Single()` 的 `DisplayName == "测试面阵相机"`） |
 | 表现层不再切分清单行仍能发现未配置 Provider | `AcquisitionManagementPresenterTests.DiscoverAsync_MergesCandidatesInDeterministicOrderAndMarksConfiguration`（无 Source 绑定的 `dp.fake.gamma` 仍被枚举，且发现实例被释放） |
+
+### 补齐：§21 其余未显式引用条目（V2-11）
+
+§21 共 28 条，此前有 8 条从未被任何文档显式引用（§21.1、§21.2、§21.11、§21.12、§21.13、§21.14、§21.16、§21.25）。
+逐条核对后：前 7 条**实现与测试均已存在**，本阶段只补齐显式引用；§21.25 在 DP.Vision 侧不适用（见下）。
+
+| 验收（§21） | 证据 |
+|---|---|
+| DLL Module 自动发现且顺序确定（§21.1） | `VisionAcquisitionDriverModuleLoaderTests.DriverModuleDll_IsDiscoveredWithoutManifest`（不读 Manifest 也能发现）· `DiscoveryOrder_IsDeterministic`（同一目录两次扫描得到同一顺序）· `DependencyDll_WithoutDriverModule_IsIgnored` 与 `NativeDll_IsSkippedSilently`（依赖/原生 DLL 不误报为失败）· 厂商侧 `HalconAcquisitionDriverModuleTests.PluginDirectory_ContributesBothKindsWithoutManifest` |
+| 重复 AcquisitionTypeId 拒绝发布（§21.2） | `VisionAcquisitionTypeCatalogComposerTests.DuplicateAcquisitionTypeId_IsRejected`（组合期抛 `VisionSourceConfigurationException`，文案含"重复"）· `DuplicateModuleExtensionId_IsRejected`（Module 身份同样去重） |
+| 无 Epoch 回调被释放并计数（§21.11） | 队列级：`FrameInboxUnitTests.Enqueue_WithoutActiveEpoch_RejectsAndCounts`（`TryEnqueue` 返回 `NoActiveEpoch`、帧被释放、`RejectedWithoutEpochCount` 递增）· 运行期：`BufferedExternalInboxTests.RunEnd_KeepsStreamRunningAndRejectsFramesWithoutEpoch`、`OnConnectStream_ArmedAtRuntimeStart_BeforeFirstRun`（均为"流仍在跑但没有代次"的拒绝并计数） |
+| BeginEpoch 后回调可早于采集节点入队（§21.12） | `BufferedExternalInboxTests.CallbackBeforeCapture_IsClaimedImmediately`（回调先到，随后 Claim 立即拿到该帧）· `CaptureBeforeCallback_CompletesWhenFrameArrives`（反向时序：先 Claim 后回调也能完成，证明入队与领取不要求固定先后） |
+| FIFO 顺序领取（§21.13） | 队列级：`FrameInboxUnitTests.Claim_ReturnsFramesInArrivalOrder`（按到达顺序返回，序列号单调）· 运行期：`BufferedExternalInboxTests.ThreeFrames_AreClaimedInFifoOrder`（三帧按到达序领取） |
+| 同一 Source 并行 Claim 确定性冲突（§21.14） | 运行期：`BufferedExternalInboxTests.ParallelClaims_RejectExactlyOneDeterministically`（两路并行领取必有一路失败且为 `VisionResourceConflictException`，另一路仍在等待，不是两个都失败）· `SecondRootRun_ConflictsWithHolderIdentity`（冲突报告当前持有者身份与策略）· 并发策略：`SharingPolicyTests.ExclusiveOperation_SecondCaptureFailsWithOccupantDiagnostics`（并行第二路确定性失败并带占用方诊断）、`SameResourceKey_TwoSources_ShareOneMutex` |
+| 下一 Epoch 不能领取上一 Epoch 帧（§21.16） | 队列级：`FrameInboxUnitTests.BeginEpoch_DropsPreviousEpochFrames`（开新代次即清退旧代次帧并计数）、`BeginEpoch_RejectsNonIncreasing`（代次必须严格递增，回退/重复直接抛）· 运行期：`BufferedExternalInboxTests.PreviousRunFrames_DoNotEnterNextRun`（上一根运行的帧不会被下一根领走） |
+| Source 切换和旧节点迁移不丢配置（§21.25） | **DP.Vision 侧不适用**：Source 切换与旧节点迁移发生在 WorkFlow 宿主与 Studio 的属性迁移路径上，采集侧只负责"按 SourceId 保真投影"，由 DP.WorkFlow 仓库的验收覆盖，不属本仓库范围。 |
 
 ### 变更文件
 
@@ -908,7 +926,8 @@ net48 目标此前因 `DP.Vision.Halcon.Tests` 的 CS1501 根本无法编译，�
 
 ### 记录（相对计划的偏离与待办）
 
-- **§21.27/§21.28 无需改实现**：核对结论是两条早已由既有用例满足（见上表），本阶段只补齐文档显式引用，未新增实现改动。
+- **§21 全部 28 条无需改实现**：核对结论是未显式引用的 8 条（§21.1/2/11/12/13/14/16/27/28 中的 7 条）早已由既有用例满足（见上两表），
+  本阶段只补齐文档显式引用，未新增实现改动；§21.25 属 WorkFlow 宿主侧，明确不适用。因此本阶段的测试数只增加了 1 例（注册清单回归）。
 - **`DisplayName` 只用于界面与诊断**：不参与 Provider 身份判定，也不进入 `CompositionId`（组合身份仍只由 `providerId@version`、绑定与私有配置摘要决定）。
 - **插件路径（`Compose(modules, sources)`）不填 `DisplayName`**：`IVisionAcquisitionProviderModule` 只提交工厂与身份，
   显示名目前只由 AcquisitionType 声明；消费方应把空值回退为 `ProviderId`。
