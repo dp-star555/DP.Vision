@@ -97,7 +97,9 @@ public static class HalconDeviceSettingsParser
             return new VisionDeviceSettingsParseResult(
                 bindingId,
                 resourceKey,
-                BuildSummary(interfaceName, deviceName, serialNumber, triggerSource, grabTimeoutMilliseconds));
+                // net48 的引用程序集里没有 NotNullWhen，编译器学不到上面两个 IsNullOrWhiteSpace 守卫的非空结论，
+                // 这里显式断言以保持 net48 与 net8.0-windows 两个目标都零警告。
+                BuildSummary(interfaceName!, deviceName!, serialNumber, triggerSource, grabTimeoutMilliseconds));
         }
     }
 

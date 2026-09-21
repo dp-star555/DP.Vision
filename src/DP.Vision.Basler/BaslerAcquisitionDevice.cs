@@ -221,10 +221,12 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
             ToTimeoutMilliseconds(request.Timeout),
             cancellationToken);
 
+        var (image, observation) = BaslerNeutralFrames.CopyObserved(grabFrame);
         return new VisionProviderFrame(
-            BaslerNeutralFrames.Copy(grabFrame),
+            image,
             grabFrame.CapturedAtUtc,
-            grabFrame.ImageNumber);
+            grabFrame.ImageNumber,
+            observation);
     }
 
     private static int ToTimeoutMilliseconds(TimeSpan timeout) =>

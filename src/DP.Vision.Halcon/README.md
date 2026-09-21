@@ -41,6 +41,26 @@ var captured = await acquisition.CaptureAsync(
 - **整图由SDK完成组装，适配器只向上交付整张图**：线扫相机在HALCON采集接口（`GigEVision2`/`USB3Vision`/`GenICamTL`，或采集卡的对应接口）下，`grab_image` 返回的就是采集接口/采集卡组装好的一张完整图像，因此本Provider不引入Line/Chunk公共模型，也不做行拼接、不做分块交付。一次请求对应一张完整图像，尺寸即设备侧整图尺寸。
 - 两个Type共用同一个 `HalconDeviceSettingsParser`，线扫没有额外deviceSettings字段。**不要**为线扫另立一份会漂移的解析器：私有配置契约相同，另立一份只会让两边的校验逐渐分叉。
 
+## 设备发现
+
+`HalconAcquisitionProvider` 同时实现 `IVisionDeviceDiscovery`，供管理界面列出候选设备：
+
+- HALCON **没有"列出已安装采集接口"的查询**，接口名由本Provider给出默认集合（`GigEVision2`/`USB3Vision`/`GenICamTL`），
+  构造时可覆盖（`new HalconAcquisitionProvider(discoveryInterfaceNames: ...)`）——现场用采集卡通道时必须显式传入对应接口名。
+- 逐个接口执行 `info_framegrabber(<接口>, 'info_boards', ...)`，把返回的 `|` 分隔 `token:value` 条目解析为候选：
+  **只有 `device:` 是可回填进 `open_framegrabber` 的设备 ID**，`device_sn`/`user_name`/`model`/`vendor` 只用于展示与去重；
+  不含任何 token 的纯字符串（或带冒号的裸串）按原样当作设备 ID。
+- 输出的绑定身份与规范资源键与 `HalconDeviceSettingsParser` 一致：有序列号 → 绑定身份用序列号、资源键 `camera:serial:<serial>`；
+  否则绑定身份为 `<接口>|<设备名>`、资源键 `halcon:camera:<接口>|<设备名>`。因此发现结果可以直接组成 `deviceSettings`。
+- 去重与排序：同一台相机在多个接口下可见时按资源键去重；按资源键 ordinal 排序，两次枚举同序。
+- **单个接口失败不等于"没有设备"**：失败经 `HalconStreamFaults` 分类后保留诊断文本并跳过该接口；
+  **只有全部接口都失败时**才抛 `VisionProviderUnavailableException`。返回空列表的含义严格限于"接口都探测成功、且确实没有设备"。
+
+现场确认项：
+
+- 默认接口名集合（尤其采集卡接口的实际名称）与 `info_boards` 的条目形态。
+- 同一台相机跨接口去重的实际效果，以及逐接口枚举的耗时（`info_framegrabber` 是阻塞调用，没有超时参数）。
+
 ## 长连接与外部回调（BufferedExternal）
 
 机器配置把逻辑源声明为 `BufferedExternal` 时，本Provider用长连接会话接管设备：外部触发帧先进入 Runtime 的有界 FIFO，采集节点稍后领取最早未消费帧。
@@ -95,4 +115,4 @@ var captured = await acquisition.CaptureAsync(
 
 真正的像素落地与布局/预算判定在 `HalconNeutralFrames`，主动单次采集与外部回调长连接**共用同一份实现**——两条路径各写一份通道排布，只会在现场以"偶发图像错位"的形式暴露。
 
-测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；另有 134 例（含双 TFM）覆盖触发/曝光/增益参数决策、句柄复用、单次采集与取流的双向互斥、停止等待、回调边界纪律、错误码分类、两个AcquisitionType的Kind与整图交付，全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**：`Software` 触发按 MVTec 官方示例实现（`[Consumer]trigger` + 抓取前 `[Consumer]trigger_software`），是否被现场接口接受、曝光/触发精度、`do_abort_grab` 支持情况与吞吐都必须现场确认；线扫还需现场确认整图高度由哪一侧决定（相机帧触发 vs 采集接口/采集卡参数）以及行频与整图尺寸的对应关系。
+测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；另有 145 例（含双 TFM）覆盖触发/曝光/增益参数决策、句柄复用、单次采集与取流的双向互斥、停止等待、回调边界纪律、错误码分类、两个AcquisitionType的Kind与整图交付、**设备发现**（`info_boards` 权威条目解析、与配置解析一致的资源键、跨接口去重、全接口失败时明确抛不可用），全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**：`Software` 触发按 MVTec 官方示例实现（`[Consumer]trigger` + 抓取前 `[Consumer]trigger_software`），是否被现场接口接受、曝光/触发精度、`do_abort_grab` 支持情况与吞吐都必须现场确认；线扫还需现场确认整图高度由哪一侧决定（相机帧触发 vs 采集接口/采集卡参数）以及行频与整图尺寸的对应关系；设备发现还需确认默认接口名集合与 `info_boards` 条目形态。

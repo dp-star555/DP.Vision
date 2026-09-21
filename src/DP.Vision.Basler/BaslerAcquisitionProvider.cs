@@ -7,7 +7,7 @@ using DP.Vision.Acquisition;
 namespace DP.Vision.Basler;
 
 /// <summary>Basler pylon 采集Provider；把 pylon 设备包装为公共Provider契约。</summary>
-public sealed class BaslerAcquisitionProvider : IVisionAcquisitionProvider
+public sealed class BaslerAcquisitionProvider : IVisionAcquisitionProvider, IVisionDeviceDiscovery
 {
     /// <summary>Basler Provider稳定身份。</summary>
     public const string ProviderIdentity = "dp.vision.basler";
@@ -55,6 +55,26 @@ public sealed class BaslerAcquisitionProvider : IVisionAcquisitionProvider
         }
 
         return new ValueTask<IVisionAcquisitionDevice>(new BaslerAcquisitionDevice(binding));
+    }
+
+    /// <summary>
+    /// 枚举当前可见的 pylon 相机，供宿主生成候选绑定。
+    /// <para>
+    /// 发现不使用Provider私有配置：它的用途正是"还没有配置时先看见现场有哪些设备"，
+    /// 因此与绑定列表是否存在无关。
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">协作取消。</param>
+    /// <returns>顺序确定的候选描述；现场确实没有设备时为空列表。</returns>
+    /// <exception cref="VisionProviderUnavailableException">未装配 pylon 支持，或进程解析不到 pylon 原生运行时。</exception>
+    public ValueTask<IReadOnlyList<VisionDeviceDescriptor>> DiscoverAsync(CancellationToken cancellationToken)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(BaslerAcquisitionProvider));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return new ValueTask<IReadOnlyList<VisionDeviceDescriptor>>(
+            BaslerDeviceDiscovery.ToDescriptors(BaslerDeviceEnumeration.Enumerate()));
     }
 
     /// <inheritdoc/>

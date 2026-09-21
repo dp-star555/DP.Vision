@@ -1,5 +1,7 @@
-﻿using System;
+using System;
+using System.Diagnostics;
 using System.Threading;
+using DP.Vision.Acquisition;
 
 namespace DP.Vision.Halcon;
 
@@ -31,6 +33,27 @@ internal static class HalconNeutralFrames
     public static IImageSource Copy(
         IHalconGrabFrame frame,
         CancellationToken token = default,
+        int maximumBytes = DefaultMaximumBytes) =>
+        CopyObserved(frame, token, maximumBytes).Image;
+
+    /// <summary>
+    /// 把设备帧复制为独立的中立图像，并同时报告这次落地的耗时与字节数。
+    /// <para>
+    /// 计时从通道搬运开始：布局解析与预算校验是元数据成本，把它算进"像素搬运"会让监视数字失去意义；
+    /// 取消检查也不计时，因为它是策略而不是搬运。
+    /// </para>
+    /// </summary>
+    /// <param name="frame">借用的设备帧；调用方继续拥有，本方法不释放它。</param>
+    /// <param name="token">取消令牌；在通道之间与逐行交错之间检查。</param>
+    /// <param name="maximumBytes">输出像素字节上限。</param>
+    /// <returns>独立中立图像与本次像素落地观测。</returns>
+    /// <exception cref="ArgumentNullException">设备帧为空。</exception>
+    /// <exception cref="ArgumentOutOfRangeException">预算不为正。</exception>
+    /// <exception cref="NotSupportedException">通道数或像素类型不受支持。</exception>
+    /// <exception cref="InvalidOperationException">图像超出像素复制预算。</exception>
+    public static (IImageSource Image, VisionPixelTransferObservation Observation) CopyObserved(
+        IHalconGrabFrame frame,
+        CancellationToken token = default,
         int maximumBytes = DefaultMaximumBytes)
     {
         if (frame is null)
@@ -45,6 +68,7 @@ internal static class HalconNeutralFrames
             throw new InvalidOperationException("HALCON image exceeds the configured pixel copy budget.");
 
         var bytes = new byte[info.ByteLength];
+        var stopwatch = Stopwatch.StartNew();
         if (layout == EPixelLayout.Bgr24)
         {
             var count = checked(frame.Width * frame.Height);
@@ -77,7 +101,10 @@ internal static class HalconNeutralFrames
             token.ThrowIfCancellationRequested();
         }
 
-        return VisionImage.CopyFrom(info, bytes);
+        stopwatch.Stop();
+        return (
+            VisionImage.CopyFrom(info, bytes),
+            new VisionPixelTransferObservation(stopwatch.Elapsed, info.ByteLength));
     }
 
     /// <summary>由通道数与像素类型名解析中立布局；不支持时明确拒绝而不是按默认布局猜。</summary>

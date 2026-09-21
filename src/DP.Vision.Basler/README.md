@@ -76,6 +76,25 @@ var captured = await acquisition.CaptureAsync(
 `IGrabResult.ImageNumber` **从 1 开始且每次 `IStreamGrabber.Start` 复位**（不是跨运行单调的全局序号）；
 `IGrabResult.Timestamp` 是相机私有刻度且部分相机返回 0，本版不换算，`CapturedAtUtc` 取回调边界观测时刻。
 
+## 设备发现
+
+`BaslerAcquisitionProvider` 同时实现 `IVisionDeviceDiscovery`，供管理界面列出当前可见的候选相机：
+
+- 候选来自 `CameraFinder.Enumerate()`，取序列号、自定义名、型号、厂商与友好名。
+- **没有稳定身份的候选被跳过**：序列号与自定义名都不可用的相机无法写进机器配置（`BaslerDeviceSettingsParser` 要求两者之一），
+  列出来只会诱导操作员选中一个部署不了的条目。
+- 输出的绑定身份与规范资源键**与 `BaslerDeviceSettingsParser` 完全一致**
+  （有序列号 → `serialNumber` 与 `camera:serial:<serial>`；否则 → `userDefinedName` 与 `camera:name:<name>`），
+  因此发现结果可以直接组成 `deviceSettings`，不需要人工改写资源键。
+- 顺序确定：按规范资源键排序（ordinal），两次枚举同序。
+- **缺 pylon 原生运行时不返回空列表**，而是抛 `VisionProviderUnavailableException`（与采集路径一致）：
+  空列表会被读成"没有相机"，把"运行时没装"误判成"设备没接"。
+
+现场确认项：
+
+- `CameraFinder.Enumerate()` 是阻塞调用且没有超时参数，枚举耗时与打开设备期间的枚举行为需实测。
+- 同一台相机在枚举结果中的身份字段是否稳定：`userDefinedName` 可被现场改写，只有序列号是长期稳定键。
+
 ## 采集 Provider 插件
 
 本程序集同时是一个采集Provider插件包：随程序集输出 `plugin.json`，由宿主扫描插件目录发现，宿主不需要在编译期引用任何 Basler 类型。
@@ -124,7 +143,8 @@ var captured = await acquisition.CaptureAsync(
 
 像素复制统一走 pylon 的 `PixelDataConverter`（它同时处理行填充与格式转换），目标格式由映射表显式决定。转换结果尺寸与中立布局不一致时拒绝发布该帧，而不是发布一张尺寸可疑的图像。
 
-测试覆盖映射表的全部分支、绑定与私有配置校验、Manifest 与插件入口一致性、缺运行时诊断、"同一组合内 HALCON 与 Basler 并存并按 SourceId 路由"，
+测试覆盖映射表的全部分支、绑定与私有配置校验、Manifest 与插件入口一致性、缺运行时诊断、"同一组合内 HALCON 与 Basler 并存并按 SourceId 路由"、
+**设备发现**（无稳定身份的候选被跳过、与配置解析一致的绑定身份与资源键、确定性排序），
 以及**单一已连接相机上的生命周期**（相机只打开一次、单次采集与持续取流互斥、回调内不抛异常、停流等待在途回调、断线状态、释放顺序、尺寸校验）。
 
 **没有真实 Basler 相机硬件验收**：采集路径（打开设备、写参数、抓图、像素转换）与长连接时序（回调线程行为、

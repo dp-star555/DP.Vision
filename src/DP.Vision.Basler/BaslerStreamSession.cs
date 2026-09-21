@@ -163,9 +163,10 @@ internal sealed class BaslerStreamSession : IVisionAcquisitionStream
                 return;
 
             IImageSource image;
+            VisionPixelTransferObservation observation;
             try
             {
-                image = BaslerNeutralFrames.Copy(grab);
+                (image, observation) = BaslerNeutralFrames.CopyObserved(grab);
             }
             catch (Exception exception)
             {
@@ -177,7 +178,7 @@ internal sealed class BaslerStreamSession : IVisionAcquisitionStream
             }
 
             // 所有权在进入 Publish 时转移，因此这里不放在 using 里。
-            var frame = new VisionProviderFrame(image, grab.CapturedAtUtc, grab.ImageNumber);
+            var frame = new VisionProviderFrame(image, grab.CapturedAtUtc, grab.ImageNumber, observation);
             try
             {
                 sink.Publish(frame);

@@ -69,6 +69,12 @@ internal sealed class VisionResourceSession : IAsyncDisposable
     private long _expiredTotal;
     private long _staleEpochTotal;
     private long _overflowCount;
+    private int _connectionRevision;
+    private long _transferCount;
+    private long _transferBytesTotal;
+    private long _transferDurationTicksTotal;
+    private long _lastTransferBytes;
+    private long _lastTransferDurationTicks;
 
     /// <summary>创建会话。</summary>
     /// <param name="resourceKey">物理资源键。</param>
@@ -169,6 +175,34 @@ internal sealed class VisionResourceSession : IAsyncDisposable
         {
             _connectionState = EVisionConnectionState.Connected;
             _connectionMessage = message;
+
+            // 连接修订号是"这台设备在本会话里被成功打开了几次"：设备复用不得重复打开，
+            // 因此它长期应为 1；出现 2 以上就说明发生了重连，运行监视需要能看见。
+            _connectionRevision++;
+        }
+    }
+
+    /// <summary>
+    /// 记录一次中立像素落地的耗时与字节数。
+    /// <para>
+    /// 缓冲源由回调帧自带观测，主动单次采集由Runtime在拿到帧后调用本方法，
+    /// 两条路径共用同一份累计值，运行监视不必区分采集模式。
+    /// </para>
+    /// </summary>
+    /// <param name="observation">Provider 报告的像素落地观测。</param>
+    /// <exception cref="ArgumentNullException">观测为空。</exception>
+    public void RecordTransfer(VisionPixelTransferObservation observation)
+    {
+        if (observation is null)
+            throw new ArgumentNullException(nameof(observation));
+
+        lock (_sync)
+        {
+            _transferCount++;
+            _transferBytesTotal += observation.Bytes;
+            _transferDurationTicksTotal += observation.Duration.Ticks;
+            _lastTransferBytes = observation.Bytes;
+            _lastTransferDurationTicks = observation.Duration.Ticks;
         }
     }
 
@@ -415,7 +449,42 @@ internal sealed class VisionResourceSession : IAsyncDisposable
                 _connectionState,
                 _connectionMessage,
                 _inbox?.RejectedWithoutEpochCount ?? 0,
-                _inbox?.UnclaimedAtEpochEndCount ?? 0);
+                _inbox?.UnclaimedAtEpochEndCount ?? 0,
+                AcquisitionTypeId: null,
+                PluginId: null,
+                PluginVersion: null,
+                TransferState: DescribeTransferState(),
+                ConnectionRevision: _connectionRevision,
+                FramesRejectedOverflow: _overflowCount,
+                // 从未观测到像素落地时保持为空：这样"Provider 没上报观测"与"观测到 0 字节"
+                // 在诊断里能区分开，后者只可能是上报实现出错。
+                Transfer: _transferCount == 0
+                    ? null
+                    : new VisionPixelTransferSummary(
+                        _transferCount,
+                        _transferBytesTotal,
+                        TimeSpan.FromTicks(_transferDurationTicksTotal).TotalMilliseconds,
+                        _lastTransferBytes,
+                        TimeSpan.FromTicks(_lastTransferDurationTicks).TotalMilliseconds));
+        }
+    }
+
+    /// <summary>
+    /// 取流状态：与连接状态分开报告，因为"设备连着但没在推帧"和"设备已经断开"是两个不同的问题。
+    /// </summary>
+    private string DescribeTransferState()
+    {
+        switch (_state)
+        {
+            case EVisionResourceState.Faulted:
+                return "Faulted";
+            case EVisionResourceState.Stopping:
+            case EVisionResourceState.Disposed:
+                return "Stopped";
+            case EVisionResourceState.Opening:
+                return "Starting";
+            default:
+                return _stream is null ? "NotStarted" : "Streaming";
         }
     }
 
@@ -554,6 +623,11 @@ internal sealed class VisionResourceSession : IAsyncDisposable
     {
         if (frame is null)
             throw new ArgumentNullException(nameof(frame));
+
+        // 像素落地已经发生，无论这一帧最终被接收还是被拒绝都记入累计：
+        // 指标回答的是"中立像素表示花了多少时间、搬了多少字节"，而不是"留下了多少帧"。
+        if (frame.TransferObservation is not null)
+            RecordTransfer(frame.TransferObservation);
 
         long? previous;
         lock (_sync)

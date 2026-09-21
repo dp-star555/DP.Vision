@@ -24,14 +24,19 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
     private bool _disposed;
     private EVisionRuntimeState _runtimeState = EVisionRuntimeState.Created;
     private int _epoch;
+    private readonly int _machineConfigurationRevision;
     private RunLease? _activeLease;
 
     /// <summary>创建运行时。</summary>
     /// <param name="composition">已发布的不可变Provider组合。</param>
+    /// <param name="machineConfigurationRevision">生成该组合的机器配置修订号；运行制品用它回答"这根运行跑的是哪一版配置"。</param>
     /// <exception cref="ArgumentNullException">组合为空。</exception>
-    public VisionAcquisitionRuntime(VisionAcquisitionProviderComposition composition)
+    public VisionAcquisitionRuntime(
+        VisionAcquisitionProviderComposition composition,
+        int machineConfigurationRevision = 0)
     {
         _composition = composition ?? throw new ArgumentNullException(nameof(composition));
+        _machineConfigurationRevision = machineConfigurationRevision;
     }
 
     /// <summary>本运行时持有的组合身份；与Workflow Runtime组合身份分别记录。</summary>
@@ -183,7 +188,27 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
 
     /// <inheritdoc/>
     /// <exception cref="VisionResourceConflictException">已有根运行持有采集所有权。</exception>
-    public async ValueTask<IVisionAcquisitionRunLease> BeginRunAsync(string runId, CancellationToken cancellationToken)
+    public ValueTask<IVisionAcquisitionRunLease> BeginRunAsync(string runId, CancellationToken cancellationToken) =>
+        BeginRunAsync(runId, workflowCompositionId: null, cancellationToken);
+
+    /// <summary>
+    /// 启动一根根运行，并把工作流侧组合身份一并登记进运行制品。
+    /// <para>
+    /// 独立重载而不是改接口签名：<see cref="IVisionAcquisitionRunOwner"/> 是所有宿主都要实现的契约，
+    /// 制品信息只有需要归档的宿主才提供，缺省为空不影响采集行为。
+    /// </para>
+    /// </summary>
+    /// <param name="runId">根运行身份。</param>
+    /// <param name="workflowCompositionId">工作流侧组合身份；为空表示宿主不提供。</param>
+    /// <param name="cancellationToken">协作取消。</param>
+    /// <returns>根运行租约；同时实现 <see cref="IVisionAcquisitionRunArtifactSource"/>。</returns>
+    /// <exception cref="ArgumentException">根运行身份为空。</exception>
+    /// <exception cref="VisionDeviceOfflineException">运行时尚未启动。</exception>
+    /// <exception cref="VisionResourceConflictException">已有根运行持有采集所有权。</exception>
+    public async ValueTask<IVisionAcquisitionRunLease> BeginRunAsync(
+        string runId,
+        string? workflowCompositionId,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(runId))
             throw new ArgumentException("根运行身份不能为空。", nameof(runId));
@@ -199,7 +224,12 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             if (_activeLease is not null)
                 throw BuildOwnershipConflict(_activeLease, runId.Trim());
             _epoch++;
-            lease = new RunLease(this, runId.Trim(), _epoch);
+            lease = new RunLease(
+                this,
+                runId.Trim(),
+                _epoch,
+                workflowCompositionId,
+                _machineConfigurationRevision);
             _activeLease = lease;
         }
 
@@ -228,12 +258,29 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         if (!_composition.TryGetSource(sourceId, out var binding) || binding is null)
             return null;
 
-        return TryGetSession(binding.ResourceKey, out var session)
+        var diagnostics = TryGetSession(binding.ResourceKey, out var session)
             ? session.Snapshot(binding.SourceId, binding.ProviderId)
             : new VisionSourceDiagnostics(
                 binding.SourceId, binding.ResourceKey, binding.ProviderId,
                 "Created", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null,
                 EVisionConnectionState.Created, null);
+
+        // 来源身份只能由组合回答（会话只认识资源键），因此在返回前补齐；
+        // 现场只有拿到 "哪个Type哪个插件版本" 才能判断"是配置错了还是插件旧了"。
+        var acquisitionTypeId = _composition.TryGetSourceEntry(binding.SourceId, out var info) && info is not null
+            ? info.AcquisitionTypeId
+            : null;
+        string? pluginVersion = null;
+        if (_composition.TryGetProvider(binding.ProviderId, out var registration) && registration is not null)
+            pluginVersion = registration.Version;
+
+        return diagnostics with
+        {
+            AcquisitionTypeId = acquisitionTypeId,
+            PluginId = binding.ProviderId,
+            PluginVersion = pluginVersion,
+            TransferState = diagnostics.TransferState ?? "NotStarted",
+        };
     }
 
     /// <summary>读取全部已发布源的运行诊断快照。</summary>
@@ -273,6 +320,9 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         var entry = await session.ClaimAsync(request.Timeout, cancellationToken).ConfigureAwait(false);
         try
         {
+            // 领取即记账：制品要能回答"这根运行经手了哪些帧"，而不是只给一个总数。
+            RecordClaim(binding.SourceId, entry);
+
             var frame = new ImageFrame(entry.CaptureId, entry.Frame.Image);
             var metadata = new VisionCaptureMetadata(
                 entry.CaptureId,
@@ -315,6 +365,10 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
                     + "节点不得隐式打开或重连设备，请确认采集运行时已启动且该Source打开成功。");
 
             var providerFrame = await CaptureFromDeviceAsync(session, binding, device, request, cancellationToken).ConfigureAwait(false);
+
+            // 主动单次采集没有回调边界，像素落地观测由这里交给会话，与缓冲源共用同一份累计值。
+            if (providerFrame.TransferObservation is not null)
+                session.RecordTransfer(providerFrame.TransferObservation);
 
             var captureId = Guid.NewGuid().ToString("N");
             try
@@ -551,6 +605,63 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             return _resources.TryGetValue(resourceKey, out session!);
     }
 
+    /// <summary>把一次成功领取登记到当前根运行的制品；没有活动根运行时不记录。</summary>
+    /// <param name="sourceId">领取来源的逻辑源标识。</param>
+    /// <param name="entry">领取到的帧条目。</param>
+    private void RecordClaim(string sourceId, VisionFrameInboxEntry entry)
+    {
+        RunLease? lease;
+        lock (_gate)
+            lease = _activeLease;
+
+        lease?.RecordClaim(sourceId, entry);
+    }
+
+    /// <summary>
+    /// 配置摘要脱敏：序列号、用户自定义名、设备名是能追到具体硬件的标识，
+    /// 制品要归档到别处，因此遮蔽这些值；其余字段照原样保留，否则制品就无法用于比对配置差异。
+    /// <para>
+    /// 只作用于制品：CompositionId 与诊断文本仍使用原摘要，脱敏不得改变组合身份。
+    /// </para>
+    /// </summary>
+    private static string? MaskConfigurationSummary(string? summary)
+    {
+        if (summary is null || summary.Trim().Length == 0)
+            return summary;
+
+        var entries = summary.Split(';');
+        for (var index = 0; index < entries.Length; index++)
+        {
+            var entry = entries[index];
+            var separator = entry.IndexOf('=');
+            if (separator <= 0)
+                continue;
+
+            var key = entry.Substring(0, separator).Trim();
+            if (!IsDeviceIdentityKey(key))
+                continue;
+
+            entries[index] = key + "=" + MaskValue(entry.Substring(separator + 1));
+        }
+
+        return string.Join(";", entries);
+    }
+
+    /// <summary>该摘要键的值是否属于设备身份标识。</summary>
+    private static bool IsDeviceIdentityKey(string key) =>
+        string.Equals(key, "serialNumber", StringComparison.Ordinal)
+        || string.Equals(key, "userDefinedName", StringComparison.Ordinal)
+        || string.Equals(key, "deviceName", StringComparison.Ordinal);
+
+    /// <summary>遮蔽值：保留首尾各两个字符以便人工比对，中间一律以星号代替。</summary>
+    private static string MaskValue(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length <= 4)
+            return "***";
+        return trimmed.Substring(0, 2) + "***" + trimmed.Substring(trimmed.Length - 2);
+    }
+
     private VisionResourceConflictException BuildOwnershipConflict(RunLease holder, string requestedRunId)
     {
         var buffered = BufferedSources.FirstOrDefault();
@@ -583,23 +694,46 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             reason);
     }
 
-    /// <summary>一根根运行的采集所有权租约。</summary>
-    private sealed class RunLease : IVisionAcquisitionRunLease
+    /// <summary>
+    /// 一根根运行的采集所有权租约；同时是运行制品的来源。
+    /// <para>
+    /// 制品能力是额外实现的能力接口，不在 <see cref="IVisionAcquisitionRunLease"/> 上：
+    /// 工作流侧只依赖租约契约，不需要为归档能力买单。
+    /// </para>
+    /// </summary>
+    private sealed class RunLease : IVisionAcquisitionRunLease, IVisionAcquisitionRunArtifactSource
     {
         private readonly VisionAcquisitionRuntime _runtime;
         private readonly List<string> _armed = new List<string>();
+        private readonly List<ClaimRecord> _claims = new List<ClaimRecord>();
+        private readonly DateTimeOffset _startedAtUtc = DateTimeOffset.UtcNow;
+        private long _unclaimedAtEpochEnd;
+        private DateTimeOffset? _completedAtUtc;
         private int _disposed;
 
-        public RunLease(VisionAcquisitionRuntime runtime, string runId, int epoch)
+        public RunLease(
+            VisionAcquisitionRuntime runtime,
+            string runId,
+            int epoch,
+            string? workflowCompositionId,
+            int machineConfigurationRevision)
         {
             _runtime = runtime;
             RunId = runId;
             Epoch = epoch;
+            WorkflowCompositionId = workflowCompositionId;
+            MachineConfigurationRevision = machineConfigurationRevision;
         }
 
         public string RunId { get; }
 
         public int Epoch { get; }
+
+        /// <summary>工作流侧组合身份；宿主未提供时为空。</summary>
+        public string? WorkflowCompositionId { get; }
+
+        /// <summary>生成本组合的机器配置修订号；未接入修订存储时为 0。</summary>
+        public int MachineConfigurationRevision { get; }
 
         public IReadOnlyList<string> ArmedSourceIds
         {
@@ -628,6 +762,23 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             return default;
         }
 
+        /// <summary>登记一次成功领取；由Runtime在领取返回后调用。</summary>
+        /// <param name="sourceId">领取来源的逻辑源标识。</param>
+        /// <param name="entry">领取到的帧条目。</param>
+        public void RecordClaim(string sourceId, VisionFrameInboxEntry entry)
+        {
+            lock (_claims)
+            {
+                _claims.Add(new ClaimRecord(
+                    sourceId,
+                    new VisionAcquisitionRunFrameArtifact(
+                        entry.CaptureId,
+                        entry.ReceivedSequence,
+                        entry.DeviceSequence,
+                        entry.CapturedAtUtc)));
+            }
+        }
+
         /// <summary>退役本轮：收口采集代次并释放本代次未领取帧，然后归还所有权。接收流保持运行。</summary>
         public ValueTask DisposeAsync()
         {
@@ -638,7 +789,12 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             {
                 if (!_runtime.TryGetSession(binding.ResourceKey, out var session))
                     continue;
-                session.EndEpoch();
+
+                // 收口返回值就是"本轮丢了多少帧"的唯一权威来源：运行期间不再另行计数，
+                // 否则两处统计迟早会对不上，而制品必须与真实释放行为一致。
+                var unclaimed = session.EndEpoch();
+                lock (_claims)
+                    _unclaimedAtEpochEnd += unclaimed;
             }
 
             lock (_runtime._gate)
@@ -647,7 +803,73 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
                     _runtime._activeLease = null;
             }
 
+            _completedAtUtc = DateTimeOffset.UtcNow;
             return default;
         }
+
+        /// <inheritdoc/>
+        public bool TryGetArtifact(out VisionAcquisitionRunArtifact? artifact)
+        {
+            var sources = new List<VisionAcquisitionRunSourceArtifact>();
+            foreach (var binding in _runtime.BufferedSources)
+            {
+                var diagnostics = _runtime.GetDiagnostics(binding.SourceId);
+                if (diagnostics is null)
+                    continue;
+
+                List<VisionAcquisitionRunFrameArtifact> frames;
+                long claimed;
+                lock (_claims)
+                {
+                    frames = _claims
+                        .Where(item => string.Equals(item.SourceId, binding.SourceId, StringComparison.Ordinal))
+                        .Select(item => item.Frame)
+                        .ToList();
+                    claimed = frames.Count;
+                }
+
+                sources.Add(new VisionAcquisitionRunSourceArtifact(
+                    binding.SourceId,
+                    diagnostics.AcquisitionTypeId,
+                    binding.ProviderId,
+                    diagnostics.PluginVersion,
+                    binding.ResourceKey,
+                    MaskConfigurationSummary(_runtime._composition.GetConfigurationSummary(binding.SourceId)),
+                    claimed,
+                    diagnostics.FramesReceived,
+                    diagnostics.FramesExpired,
+                    diagnostics.FramesRejectedWithoutEpoch,
+                    diagnostics.FramesRejectedOverflow,
+                    diagnostics.UnclaimedAtEpochEnd,
+                    diagnostics.InboxHighWatermark,
+                    diagnostics.BytesHighWatermark,
+                    diagnostics.DeviceSequenceGaps,
+                    diagnostics.FaultKind,
+                    diagnostics.FaultMessage,
+                    diagnostics.ConnectionState,
+                    diagnostics.TransferState,
+                    frames));
+            }
+
+            long unclaimedAtEpochEnd;
+            lock (_claims)
+                unclaimedAtEpochEnd = _unclaimedAtEpochEnd;
+
+            artifact = new VisionAcquisitionRunArtifact(
+                RunId,
+                WorkflowCompositionId,
+                _runtime.CompositionId,
+                MachineConfigurationRevision,
+                Epoch,
+                _startedAtUtc,
+                _completedAtUtc ?? DateTimeOffset.UtcNow,
+                _runtime._composition.ProviderManifest,
+                sources,
+                unclaimedAtEpochEnd);
+            return true;
+        }
     }
+
+    /// <summary>一次领取的记账条目；把帧制品与其来源绑定在一起，制品按源分组时不必再反查。</summary>
+    private sealed record ClaimRecord(string SourceId, VisionAcquisitionRunFrameArtifact Frame);
 }

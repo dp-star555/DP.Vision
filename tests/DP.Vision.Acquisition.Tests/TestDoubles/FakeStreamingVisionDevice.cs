@@ -125,8 +125,9 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
     /// <summary>模拟一次外部触发回调。</summary>
     /// <param name="deviceSequence">设备报告的帧序号；不支持时为空。</param>
     /// <param name="seed">像素种子，用于区分不同帧。</param>
+    /// <param name="observation">Provider 观测到的像素落地耗时与字节；为空表示未观测。</param>
     /// <returns>帧是否被交付给接收方；未布防或已结束时返回 <see langword="false"/>。</returns>
-    public bool Emit(long? deviceSequence = null, byte seed = 1)
+    public bool Emit(long? deviceSequence = null, byte seed = 1, VisionPixelTransferObservation? observation = null)
     {
         IVisionProviderFrameSink? sink;
         lock (_callbackGate)
@@ -136,7 +137,7 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
             sink = _sink;
 
             // 回调与"释放接收流"互斥：释放必须等到已经进入的回调退出。
-            var frame = new VisionProviderFrame(_imageFactory(seed), DateTimeOffset.UtcNow, deviceSequence);
+            var frame = new VisionProviderFrame(_imageFactory(seed), DateTimeOffset.UtcNow, deviceSequence, observation);
             try
             {
                 sink.Publish(frame);

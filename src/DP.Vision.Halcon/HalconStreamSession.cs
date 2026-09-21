@@ -240,9 +240,10 @@ internal sealed class HalconStreamSession : IVisionAcquisitionStream
                 return;
 
             IImageSource image;
+            VisionPixelTransferObservation observation;
             try
             {
-                image = HalconNeutralFrames.Copy(frame);
+                (image, observation) = HalconNeutralFrames.CopyObserved(frame);
             }
             catch (Exception exception)
             {
@@ -253,7 +254,11 @@ internal sealed class HalconStreamSession : IVisionAcquisitionStream
 
             // HALCON 的通用采集层不提供设备帧序号，DeviceSequence 只能上报空值。
             // 所有权在进入 Publish 时转移，因此这里不放在 using 里。
-            var providerFrame = new VisionProviderFrame(image, frame.CapturedAtUtc, deviceSequence: null);
+            var providerFrame = new VisionProviderFrame(
+                image,
+                frame.CapturedAtUtc,
+                deviceSequence: null,
+                transferObservation: observation);
             try
             {
                 sink.Publish(providerFrame);

@@ -223,10 +223,12 @@ public sealed class HalconAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
             cancellationToken);
 
         // HALCON 的通用采集层不提供设备帧序号，DeviceSequence 只能上报空值。
+        var (image, observation) = HalconNeutralFrames.CopyObserved(grabFrame);
         return new VisionProviderFrame(
-            HalconNeutralFrames.Copy(grabFrame),
+            image,
             grabFrame.CapturedAtUtc,
-            deviceSequence: null);
+            deviceSequence: null,
+            transferObservation: observation);
     }
 
     private static int ToTimeoutMilliseconds(TimeSpan timeout) =>

@@ -44,7 +44,7 @@ net8.0-windows 分套件：
 | V2-6 Basler 迁移 | ✅ 已完成（见下文） |
 | V2-7 HALCON 迁移 | ✅ 已完成（见下文） |
 | V2-8 线扫与采集卡首个 Adapter | ✅ 已完成（见下文） |
-| V2-9 Acquisition UI、审计和运行优化 | ⏳ 待实施 |
+| V2-9 Acquisition UI、审计和运行优化 | ✅ 已完成服务端部分（V2-9a，见下文）；UI 与监控面板留待 V2-9b |
 
 每阶段完成时更新本文并记录提交、测试结果与验收证据。
 
@@ -594,5 +594,162 @@ HALCON 采集接口（`hAcqGigEVision2`/`hAcqUSB3Vision`/`hAcqGenICamTL` 及采�
   修复方向（跨 Abstractions/Runtime/Basler/HALCON 的契约变更，需单独立项）：
   把 Type 工厂改为绑定感知（`Func<IReadOnlyList<VisionDeviceSettingsParseResult>, IVisionAcquisitionProvider>`，
   并让解析结果携带不透明 `ProviderBinding` 载荷），或让工厂接收该 Type 的原始 deviceSettings 列表自行构建绑定。
+- **提交状态**：本次改动**尚未提交**，提交前按约定再次确认。
+
+## V2-9a：设备发现、配置修订与运行制品（服务端）
+
+状态：**已完成**（2026-09-21）· 仅 DP.Vision 仓库
+
+范围界定：本阶段只做服务端能力——§20 V2-9 第 3/4/5 条，加上第 1 条中"设备发现（`IVisionDeviceDiscovery` 实现）"与
+"机器配置修订号与候选验证"的服务端部分。第 1 条的试拍/发布/回滚**界面**与第 2 条"连接/取流/Inbox 监控面板"由宿主承载，
+留待 V2-9b，本阶段不产出界面代码。
+
+### 需求覆盖（§20 V2-9）
+
+1. **设备发现（第 1 条服务端部分）**：Basler 与 HALCON 的 Provider 同时声明 `IVisionDeviceDiscovery`
+   （契约 `IVisionDeviceDiscovery`/`VisionDeviceDescriptor` 在 V2-2 已冻结）。
+   - Basler：`BaslerDeviceDiscovery.Enumerate()` 走 `CameraFinder.Enumerate()`，取
+     `SerialNumber`/`UserDefinedName`/`ModelName`/`VendorName`/`FriendlyName`；
+     序列号与自定义名皆空的候选被跳过——没有稳定身份就无法写进机器配置。
+   - HALCON：`HalconDeviceEnumeration.Enumerate()` 逐接口执行 `info_framegrabber(..., 'info_boards', ...)`，
+     默认三个工业相机接口（`GigEVision2`/`USB3Vision`/`GenICamTL`）并可由构造参数覆盖；
+     `HalconBoardInfo` 按 `token:value` 解析权威条目，只把 `device:` 当作可回填的设备 ID（HALCON 只认它）。
+   - 两者都把候选转成与各自 `DeviceSettingsParser` **完全一致**的 bindingId 与规范 ResourceKey（用例断言），
+     因此"发现到的候选"可以直接落成机器配置，不需要人工改写资源键。
+   - 确定性：按资源键排序（ordinal），两次枚举同序。缺 SDK/原生运行时不伪造"没有设备"，而是抛
+     `VisionProviderUnavailableException`（HALCON 仅在**全部接口都失败**时抛，单个接口失败按故障分类保留文本并跳过）。
+2. **Composition 与配置修订进入运行制品（第 3 条）**：
+   - 新增 `VisionAcquisitionRunArtifact`（含 `VisionAcquisitionRunSourceArtifact`/`VisionAcquisitionRunFrameArtifact`），
+     `IVisionAcquisitionRunArtifactSource.TryGetArtifact` 由 `VisionAcquisitionRuntime` 的 RunLease 实现，宿主在 Run 结束后取走。
+   - 制品字段照 §18 齐备：`WorkflowCompositionId`/`AcquisitionCompositionId`/`MachineConfigurationRevision`/`PluginManifest`/
+     每源 `AcquisitionTypeId` 与绑定身份/`Epoch`/领取帧 `CaptureId`+`ReceivedSequence`+`DeviceSequence`/
+     `UnclaimedAtEpochEnd`/`InboxHighWatermark`/`BytesHighWatermark`/`DeviceSequenceGaps`/`LastFailureKind`/`ConnectionState`/`TransferState`。
+   - 相机配置摘要**脱敏**：`serialNumber`/`userDefinedName`/`deviceName` 这类设备身份键的值按"≤4 字符整段替换，
+     否则保留首 2 与末 2"转为 `***` 形态，便于把制品带出车间或贴进工单。
+   - `BeginRunAsync` 追加 `workflowCompositionId` 重载（原签名委托到它，调用方无需改）。
+3. **长时间运行、断线、重连和关闭测试（第 4 条）**：`LongRunLifecycleTests` 覆盖 20 轮 Epoch 的长期运行、
+   接收流故障、重连需开新 Runtime、停止等待在途采集退出四种场景。
+4. **像素转换耗时与字节数（第 5 条）**：新增 `VisionPixelTransferObservation`/`VisionPixelTransferSummary`；
+   `VisionProviderFrame` 追加可选 `deviceSequence` 与 `transferObservation`；
+   两家 `NeutralFrames.CopyObserved` 用 `Stopwatch` 实测"中立像素落地"的耗时与字节数；
+   `VisionResourceSession.RecordTransfer` 汇总进 `VisionSourceDiagnostics` 的
+   `Transfer`/`TransferState`/`FramesRejectedOverflow`。
+   缓冲路径由回调帧自带观测，OnDemand 路径由 Runtime 在拿到帧后记录，两条路径共用同一份累计值，运行监视不必区分采集模式。
+   **从未观测到落地时 `Transfer` 为空**，以便把"Provider 没上报观测"与"上报了 0 字节"区分开（后者只可能是上报实现出错）。
+5. **机器配置修订号与候选验证（第 1 条服务端部分）**：新增 `VisionAcquisitionMachineConfigurationRevisionStore`：
+   `SetCandidate`（只记录不校验）→ `ValidateCandidate`（返回 `IsValid`/`Errors`/`CompositionId`/`SourceIds`/`UnavailableSourceIds`）
+   → `Publish` → `History`/`Find` → `Rollback(revision)`。
+
+设计要点（已写进类型文档）：
+
+- **历史只追加、不移动指针**：回滚不删除中间修订，而是追加一条"内容等于目标修订"的新修订并记录 `RestoredFromRevision`；
+  "当前生效"恒等于修订号最大的那一条，审计不需要还原一串指针变更才能解释"当时机器上跑的是什么"。
+- **校验与发布共用同一次组合快照**，不存在"校验过的内容"与"发布出去的内容"不同。
+- 校验路径**不抛配置异常**：第三方 Plugin 解析时抛出的意外异常也转成诊断文本，
+  否则一次插件缺陷会让管理界面在"校验"按钮上直接崩溃；发布失败才抛 `VisionSourceConfigurationException` 并拼接全部错误。
+- 未安装 Type 的 Source 是**合法配置**（校验通过），但在结果里显式列出 `UnavailableSourceIds`——
+  现场最容易出错的正是"插件没部署"被当成"相机没接"。
+- 候选与校验分离还带来一个副作用：同一个候选可以反复校验而不必重设，非法候选的多条错误能一次报全。
+
+### 验收证据
+
+| 依据 | 证据 |
+|---|---|
+| §18 制品字段齐备与敏感字段脱敏 | `RunArtifactTests.Artifact_RecordsCompositionRevisionAndClaimedFrames`（修订号/组合身份/插件清单/`serialNumber=***`/领取帧身份）· `Artifact_WithoutHostIdentity_LeavesOptionalFieldsEmpty` |
+| §18 本轮 EndEpoch 未领取帧计数 | `Artifact_AfterRetirement_RecordsUnclaimedFrames`（退役后 `UnclaimedAtEpochEnd == 2`） |
+| §18 TransferState / ConnectionRevision 与像素观测 | `PixelTransferObservationTests.BufferedFrames_AccumulateTransferObservations`（`TransferState == "Streaming"`、`ConnectionRevision == 1`、领取后不清零）· `RejectedFrame_StillCountsTransferBytes` · `OnDemandCapture_RecordsTransferObservation`（`TransferState == "NotStarted"`）· `FramesWithoutObservation_LeaveTransferEmpty` |
+| §20 V2-9.1 发现能力已实现且与配置解析一致 | `BaslerDeviceDiscoveryTests.Provider_ImplementsDeviceDiscovery` · `DiscoveredCameraWithSerial_MatchesDeviceSettingsParser` · `DiscoveredCameraWithoutSerial_FallsBackToUserDefinedName` · `CameraWithoutStableIdentity_IsSkipped` · `Descriptors_AreOrderedByCanonicalKey` · `EmptyEnumeration_ReturnsEmptyDescriptors` |
+| §20 V2-9.1 HALCON 候选解析与去重 | `HalconDeviceDiscoveryTests.Provider_ImplementsDeviceDiscovery` · `DefaultInterfaceNames_CoverIndustrialCameras` · `Parse_ReadsAuthoritativeTokens` · `Parse_ToleratesPipesAndUnknownEntries` · `Parse_TreatsPlainStringAsDeviceId` · `DescriptorsWithSerial_MatchDeviceSettingsParser` · `DescriptorsWithoutSerial_MatchDeviceSettingsParser` · `SameCameraOnTwoInterfaces_IsDeduplicatedAndOrdered` |
+| 缺 SDK 时不伪造"没有设备" | `HalconDeviceDiscoveryTests.AllInterfacesUnavailable_FailsInsteadOfReportingNoDevices`（断言 `VisionProviderUnavailableException.ProviderId`，含把接口名设为不存在接口的对照用例） |
+| §20 V2-9.4 长期运行（§21.4 / §21.18 / §21.20） | `LongRunLifecycleTests.ManyEpochs_KeepSingleDeviceAndSingleStream`（20 轮 Epoch：`Devices.Count == 1`、`OpenedBindings.Count == 1`、`StreamStartCount == 1`、`ConnectionRevision == 1`、40 帧全领、收口 0；Dispose 后事件序 `stream-start,stream-stop,device-dispose`） |
+| §20 V2-9.4 断线可解释 | `LongRunLifecycleTests.StreamFailure_FaultsSourceWithStreamFailureKind` |
+| §20 V2-9.4 重连语义 | `LongRunLifecycleTests.Reconnect_UsesNewRuntimeAndOpensDeviceAgain`（只有换新 Runtime 才重新打开设备：`OpenedBindings.Count` 累计为 2、新会话 `ConnectionRevision == 1`） |
+| §21.19 关闭等待在途操作退出 | `LongRunLifecycleTests.StopAwaitsInFlightCaptureBeforeDisposingDevice`（在途未退出时 `StopAsync` 不完成、设备未释放；停止中再次采集明确失败且不新增 Open） |
+| §20 V2-9.1 修订发布/回滚/候选校验 | `MachineConfigurationRevisionStoreTests.Publish_AppendsFirstRevisionAndClearsCandidate` · `ConstructorWithInitialConfiguration_PublishesFirstRevision` · `ConstructorWithInvalidConfiguration_Throws` · `InvalidCandidate_ReportsErrorAndRefusesPublish` · `WithoutCandidate_ValidationAndPublishFail` · `EmptyCandidate_IsRejected` · `EachPublish_AppendsNextRevisionAndChangesCompositionOnSettingsChange` · `Rollback_AppendsNewRevisionWithTargetContent` · `Rollback_UnknownRevision_Throws` · `UninstalledType_IsValidButReportsUnavailableSource` |
+
+### 变更文件
+
+公共契约层（`DP.Vision.Acquisition.Abstractions`）：
+
+- `VisionPixelTransferObservation.cs`（新增）：`VisionPixelTransferObservation` + `VisionPixelTransferSummary`。
+- `VisionAcquisitionRunArtifact.cs`（新增）：`IVisionAcquisitionRunArtifactSource` + 运行/源/帧三类制品。
+- `VisionProviderFrame.cs`：追加可选 `deviceSequence`、`transferObservation` 与 `TransferObservation` 属性。
+- `VisionSourceDiagnostics.cs`：尾参追加 `AcquisitionTypeId`/`PluginId`/`PluginVersion`/`TransferState`/`ConnectionRevision`/
+  `FramesRejectedOverflow`/`Transfer`（全部带默认值，既有调用点不受影响）。
+
+实现层（`DP.Vision.Acquisition.Runtime`）：
+
+- `VisionAcquisitionMachineConfigurationRevisionStore.cs`（新增）：候选、校验、发布、历史、回滚与修订记录类型。
+- `VisionResourceSession.cs`：连接修订号与像素观测累计（`RecordTransfer`/`DescribeTransferState`），`Transfer` 在无观测时为空。
+- `VisionAcquisitionRuntime.cs`：`BeginRunAsync` 追加 `workflowCompositionId` 重载与 `machineConfigurationRevision` 参数；
+  RunLease 实现制品源（领取登记、未领取累计、来源身份补齐、配置摘要脱敏）。
+
+厂商（Basler / HALCON）：
+
+- `BaslerDeviceDiscovery.cs`（新增）/ `HalconDeviceDiscovery.cs`（新增）：`IVisionDeviceDiscovery` 实现、
+  候选→`VisionDeviceDescriptor` 转换、规范资源键与确定性排序。
+- `Compatibility/IsExternalInit.cs`（两处新增）：net48 目标下为 `record` 与 `init` 访问器提供编译器占位类型，
+  与 `Acquisition.Abstractions`/`Acquisition.Runtime` 既有的同名文件同一写法（见"记录"里的 net48 说明）。
+- `BaslerAcquisitionProvider.cs` / `HalconAcquisitionProvider.cs`：声明并实现发现能力；
+  HALCON 构造器新增可选 `discoveryInterfaceNames`（便于现场指定采集卡接口）。
+- `BaslerNeutralFrames.cs` / `HalconNeutralFrames.cs`：`CopyObserved` 返回图像 + 像素落地观测（`Stopwatch` 计时），
+  `Copy` 委托给它。
+- `BaslerAcquisitionDevice.cs` / `BaslerStreamSession.cs` / `HalconAcquisitionDevice.cs` / `HalconStreamSession.cs`：
+  调用点改用 `CopyObserved` 并把观测带进帧。
+
+测试：
+
+- 新增 `tests/DP.Vision.Acquisition.Tests/Configuration/MachineConfigurationRevisionStoreTests.cs`（10）·
+  `Lifecycle/LongRunLifecycleTests.cs`（4）· `Lifecycle/RunArtifactTests.cs`（3）·
+  `Streaming/PixelTransferObservationTests.cs`（4）·
+  `tests/DP.Vision.Basler.Tests/BaslerDeviceDiscoveryTests.cs`（6）·
+  `tests/DP.Vision.Halcon.Tests/HalconDeviceDiscoveryTests.cs`（11）。
+- `tests/DP.Vision.Acquisition.Tests/TestDoubles/FakeStreamingVisionDevice.cs`：`Emit` 支持携带设备序号与像素观测。
+
+### 测试结果
+
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**609 通过 / 0 失败**（V2-8 基线 571 + 新增 38）。
+
+分套件增量：
+
+- DP.Vision.Acquisition.Tests 153 → 174（+21：修订存储 10 · 长跑/断线/重连/关闭 4 · 运行制品 3 · 像素观测 4）
+- DP.Vision.Halcon.Tests 134 → 145（+11：设备发现）
+- DP.Vision.Basler.Tests 98 → 104（+6：设备发现）
+
+其余套件（DP.Vision.Tests 115 · DP.Vision.Algorithms.Tests 67 · DP.Vision.Acquisition.Integration.Tests 4）不变。
+
+双目标构建（`dotnet build <csproj> -c Debug`，即 net48 + net8.0-windows）：
+
+| 项目 | 警告 | 错误 |
+|---|---|---|
+| `DP.Vision.Basler` | 0 | 0 |
+| `DP.Vision.Basler.Tests` | 0 | 0 |
+| `DP.Vision.Halcon` | 0 | 0 |
+| `DP.Vision.Halcon.Tests`（net48） | 0 | 2（V2-8 既有：`HalconLineScanAcquisitionTests` 用了 net48 不存在的 `string.Contains(char, StringComparison)`） |
+| `DP.Vision.Halcon.Tests`（net8.0-windows） | 0 | 0 |
+
+### 记录（相对计划的偏离与待办）
+
+- **只做服务端，UI 留待 V2-9b**：§20 V2-9 第 1 条的试拍/发布/回滚界面与第 2 条的监控面板需要宿主工程承载，
+  本阶段交付的是这些界面必须依赖的服务端能力（发现、候选校验、发布/回滚、运行制品、像素观测），界面不在本仓产出。
+- **修订存储不负责"试拍"**：试拍要求打开真实设备并取流，那是 Runtime 的能力（V2-3 已交付）；
+  修订存储既不持有设备也不触发采集，避免"发布配置"与"动设备"耦合。
+- **回滚是追加而非回退**：现场若期望"回滚后修订号变小"，需要指针语义；本实现有意选择可解释优先（见上文设计要点）。
+- **V2-2 遗留缺陷仍未修**（机器配置路径 Provider 工厂无参、无法注入解析出的绑定，见上一节记录）：
+  该缺陷会阻断机器配置路径上的真实设备打开，按约定本阶段不动它。
+  影响面：本阶段新交付的"发现 → 写配置 → 发布"链路只能到**发布**为止，**试拍需待缺陷修复**；样例仍靠 `RuntimeState != Ready` 只显示诊断。
+- **发现能力未经真实硬件验收**：Basler 侧本机没有 pylon 原生运行时，HALCON 侧无线扫/采集卡通道设备，
+  枚举结果目前只有单元测试与格式解析断言；接口名取值、`info_boards` 条目形态、同一相机跨接口去重、以及多接口枚举的耗时都需现场确认
+  （见两家 README 的现场确认项）。
+- **net48 目标顺带修复（V2-7 遗留，非本阶段引入）**：新增的发现类型用了 `record`，而 net48 需要
+  `System.Runtime.CompilerServices.IsExternalInit` 占位类型，因此在两个厂商项目各加了 `Compatibility/IsExternalInit.cs`
+  （与 `Acquisition.Abstractions`/`Acquisition.Runtime` 既有写法一致——它们因为 `netstandard2.0` 早就各有一份）。
+  在此之前 **`DP.Vision.Halcon` 的 net48 目标根本编译不过**（V2-7 的 `HalconFramegrabberParameters` 用了 `readonly record struct`，
+  报 8 个 CS0518；V2-7 记录里的"0 警告 0 错误"只针对 net8.0-windows，所以这条一直没暴露）。加上占位类型后该目标可编译，
+  同时暴露并修掉了 `HalconDeviceSettingsParser` 在 net48 下的 2 条 CS8604（net48 引用程序集没有 `NotNullWhen`，
+  编译器学不到 `IsNullOrWhiteSpace` 守卫的结论；用 `!` 显式断言，对 net8.0-windows 无影响）。
+- **`DP.Vision.Halcon.Tests` 的 net48 目标仍编译不过**（2 个 CS1501，V2-8 的 `HalconLineScanAcquisitionTests`
+  用了 net48 不存在的 `string.Contains(char, StringComparison)`），属既有问题，本阶段未改；
+  测试与验收仍按 `-f net8.0-windows` 执行。
 - **提交状态**：本次改动**尚未提交**，提交前按约定再次确认。
 

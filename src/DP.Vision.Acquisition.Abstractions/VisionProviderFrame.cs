@@ -9,12 +9,18 @@ public sealed class VisionProviderFrame : IDisposable
     /// <param name="image">Provider拥有的中立图像；所有权随本对象转移给调用方。</param>
     /// <param name="capturedAtUtc">设备报告或Provider观测的采集时刻。</param>
     /// <param name="deviceSequence">设备可选提供的帧序号；不支持时为空。</param>
+    /// <param name="transferObservation">本次像素落地的耗时与字节观测；Provider未观测时为空。</param>
     /// <exception cref="ArgumentNullException">图像为空。</exception>
-    public VisionProviderFrame(IImageSource image, DateTimeOffset capturedAtUtc, long? deviceSequence = null)
+    public VisionProviderFrame(
+        IImageSource image,
+        DateTimeOffset capturedAtUtc,
+        long? deviceSequence = null,
+        VisionPixelTransferObservation? transferObservation = null)
     {
         Image = image ?? throw new ArgumentNullException(nameof(image));
         CapturedAtUtc = capturedAtUtc;
         DeviceSequence = deviceSequence;
+        TransferObservation = transferObservation;
     }
 
     /// <summary>中立图像租约；设备或SDK对象释放后仍必须可读。</summary>
@@ -25,6 +31,9 @@ public sealed class VisionProviderFrame : IDisposable
 
     /// <summary>设备帧序号；不支持时为空。</summary>
     public long? DeviceSequence { get; }
+
+    /// <summary>本次像素落地的耗时与字节观测；Provider未观测时为空。</summary>
+    public VisionPixelTransferObservation? TransferObservation { get; }
 
     /// <summary>释放本帧拥有的图像租约。</summary>
     public void Dispose() => Image.Dispose();

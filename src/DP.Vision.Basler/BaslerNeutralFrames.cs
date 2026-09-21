@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using DP.Vision.Acquisition;
 
 namespace DP.Vision.Basler;
@@ -17,7 +18,21 @@ internal static class BaslerNeutralFrames
     /// <returns>所有权交给调用方的中立图像。</returns>
     /// <exception cref="ArgumentNullException">设备帧为空。</exception>
     /// <exception cref="VisionDataException">像素格式不受支持，或转换结果尺寸与中立布局不一致。</exception>
-    public static IImageSource Copy(IBaslerGrabFrame grab)
+    public static IImageSource Copy(IBaslerGrabFrame grab) => CopyObserved(grab).Image;
+
+    /// <summary>
+    /// 把一帧设备数据复制为中立图像，并同时报告这次落地的耗时与字节数。
+    /// <para>
+    /// 观测只覆盖真正的像素转换与复制：格式解析和尺寸校验不计时，
+    /// 否则监控看到的是"设备帧元数据处理耗时"，而不是现场关心的像素搬运成本。
+    /// </para>
+    /// </summary>
+    /// <param name="grab">设备帧；本方法只读取，不负责释放。</param>
+    /// <returns>中立图像与本次像素落地观测。</returns>
+    /// <exception cref="ArgumentNullException">设备帧为空。</exception>
+    /// <exception cref="VisionDataException">像素格式不受支持，或转换结果尺寸与中立布局不一致。</exception>
+    public static (IImageSource Image, VisionPixelTransferObservation Observation) CopyObserved(
+        IBaslerGrabFrame grab)
     {
         if (grab is null)
             throw new ArgumentNullException(nameof(grab));
@@ -36,7 +51,11 @@ internal static class BaslerNeutralFrames
         }
 
         var pixels = new byte[info.ByteLength];
+        var stopwatch = Stopwatch.StartNew();
         grab.ConvertInto(pixels, conversion.TargetPixelFormat);
-        return VisionImage.CopyFrom(info, pixels);
+        stopwatch.Stop();
+        return (
+            VisionImage.CopyFrom(info, pixels),
+            new VisionPixelTransferObservation(stopwatch.Elapsed, info.ByteLength));
     }
 }

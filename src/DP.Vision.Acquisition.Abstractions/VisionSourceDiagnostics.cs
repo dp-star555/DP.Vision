@@ -30,6 +30,13 @@ namespace DP.Vision.Acquisition;
 /// <param name="ConnectionMessage">连接诊断说明：成功时报告设备规范身份，失败时报告原因。</param>
 /// <param name="FramesRejectedWithoutEpoch">无活动采集代次时被拒绝并释放的帧总数。</param>
 /// <param name="UnclaimedAtEpochEnd">代次收口时未领取而释放的帧总数。</param>
+/// <param name="AcquisitionTypeId">服务该源的AcquisitionType身份；V1组合或未安装Type时为空。</param>
+/// <param name="PluginId">服务该源的Provider插件身份；未发布时为空。</param>
+/// <param name="PluginVersion">Provider插件实现版本；未发布时为空。</param>
+/// <param name="TransferState">取流状态（NotStarted/Streaming/Stopped）；与连接状态分开报告。</param>
+/// <param name="ConnectionRevision">本会话成功建立连接的次数；新建会话时为0，检测重连靠它。</param>
+/// <param name="FramesRejectedOverflow">因队列溢出被拒绝的帧总数。</param>
+/// <param name="Transfer">像素落地观测累计值；从未落地时为空。</param>
 public sealed record VisionSourceDiagnostics(
     string SourceId,
     string ResourceKey,
@@ -51,7 +58,14 @@ public sealed record VisionSourceDiagnostics(
     EVisionConnectionState ConnectionState = EVisionConnectionState.Created,
     string? ConnectionMessage = null,
     long FramesRejectedWithoutEpoch = 0,
-    long UnclaimedAtEpochEnd = 0)
+    long UnclaimedAtEpochEnd = 0,
+    string? AcquisitionTypeId = null,
+    string? PluginId = null,
+    string? PluginVersion = null,
+    string? TransferState = null,
+    int ConnectionRevision = 0,
+    long FramesRejectedOverflow = 0,
+    VisionPixelTransferSummary? Transfer = null)
 {
     /// <summary>是否处于故障状态。</summary>
     public bool IsFaulted => FaultKind is not null;
