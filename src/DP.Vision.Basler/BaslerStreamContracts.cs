@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using DP.Vision.Acquisition;
 
 namespace DP.Vision.Basler;
@@ -48,7 +49,12 @@ internal interface IBaslerGrabFrame : IDisposable
 }
 
 /// <summary>
-/// 真实长连接会话所依赖的设备侧动作；由 pylon 实现或由测试替身实现。
+/// 一台 Basler 相机上全部设备侧动作的唯一入口；由 pylon 实现或由测试替身实现。
+/// <para>
+/// 本接口代表<b>同一个已连接相机</b>：主动单次采集与外部回调持续取流都走它，
+/// 因此一台物理设备上只会有一条取流通道（pylon 的 <c>StreamGrabber</c> 只有一个），
+/// 两种模式不能同时进行。相机在设备被释放之前保持打开，跨采集请求与跨布防复用。
+/// </para>
 /// <para>
 /// 线程契约：<see cref="StartContinuousGrab"/> 注册的帧回调由 SDK 回调线程直接调用，
 /// 回调实现不得把异常抛回该线程（厂商回调线程上抛异常通常直接崩进程）。
@@ -82,12 +88,32 @@ internal interface IBaslerStreamCamera : IDisposable
 
     /// <summary>停止持续取流并摘除回调；返回后不得再有新的回调进入。</summary>
     void StopContinuousGrab();
+
+    /// <summary>
+    /// 按请求单次抓取一帧，并把请求参数写到设备上。
+    /// <para>
+    /// 与 <see cref="StartContinuousGrab"/> 共用同一条取流通道：设备正在持续取流时本调用必须明确失败，
+    /// 而不是抢占通道；实现必须在返回前停掉本次抓图，不把残留的取流状态留给下一次布防。
+    /// </para>
+    /// </summary>
+    /// <param name="triggerMode">触发模式。</param>
+    /// <param name="exposureMicroseconds">曝光，单位微秒；空表示不改写设备设置。</param>
+    /// <param name="gainDecibels">增益，单位分贝；空表示不改写设备设置。</param>
+    /// <param name="timeoutMilliseconds">等待一帧的最长时间。</param>
+    /// <param name="cancellationToken">协作取消。</param>
+    /// <returns>抓到的设备帧；所有权随返回值转给调用方，调用方负责释放。</returns>
+    IBaslerGrabFrame CaptureSingleFrame(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int timeoutMilliseconds,
+        CancellationToken cancellationToken);
 }
 
-/// <summary>创建真实长连接设备；未装配 pylon 支持时明确失败，而不是静默降级。</summary>
+/// <summary>创建真实相机对象；未装配 pylon 支持时明确失败，而不是静默降级。</summary>
 internal static class BaslerStreamCameras
 {
-    /// <summary>创建绑定对应的长连接设备。</summary>
+    /// <summary>创建绑定对应的相机对象（尚未打开，两种采集模式共用它）。</summary>
     /// <param name="binding">Provider 私有绑定。</param>
     /// <returns>尚未打开的设备对象。</returns>
     /// <exception cref="VisionProviderUnavailableException">本程序集未装配 pylon 支持。</exception>

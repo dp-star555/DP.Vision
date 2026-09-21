@@ -40,7 +40,8 @@ var captured = await acquisition.CaptureAsync(
 ```
 
 - 设备选择要求**唯一匹配**：绑定必须且只能给出 `serialNumber` 或 `userDefinedName` 之一。匹配到 0 台或 >1 台都明确失败，不回退到"第一台"。
-- 主动采集（`OnDemand`）每次请求独立打开/关闭相机，不是长连接采集管理器。
+- **一台设备只有一个已连接相机**：主动采集（`OnDemand`）与外部回调持续取流共用同一个设备对象与同一条取流通道（pylon 的 `StreamGrabber` 只有一个）。
+  相机在第一次使用时打开一次，跨采集请求与跨布防复用，只有设备被释放时才关闭——真实 SDK 上重复 `Open` 通常直接失败。
 - 曝光/增益**只有调用方给出数值时才写设备**（空表示保持设备当前设置），写之前先关闭对应的自动算法，避免"设置了但不生效"。
 - 触发模式：`KeepCurrent` 不写任何触发参数；`FreeRun` 显式关闭触发；`Software` 显式切到软触发并发一次触发命令；`External` 要求私有配置声明 `triggerSource`，否则明确拒绝——不猜物理接线。
 - pylon 的打开/抓图是阻塞调用，隔离到线程池；取消在调用边界检查；`RetrieveResult` 的超时由请求的 `Timeout` 驱动。
@@ -52,6 +53,10 @@ var captured = await acquisition.CaptureAsync(
 
 - **相机跨布防复用**：退役只停流，相机保持打开；只有设备被释放时才关闭。这样第二根根运行不会重新打开同一台相机
   （真实 SDK 上重复 Open 通常直接失败）。
+- **单次采集与持续取流互斥**：两者共用同一条取流通道，因此"布防期间按请求单次采集"与"单次采集在途时布防"都被明确拒绝，
+  不会出现两个 `StreamGrabber` 状态并存；单次采集结束后一定会停掉本次抓图，不留残留状态给下一次布防。
+- **断线**：`GrabSucceeded == false` 通过 `onFailure` 上报一次，接收会话随即结束并把源标记为故障；此后按请求单次采集会报告断线原因，
+  而不是伪装成"正在布防"。断线不关闭相机——设备对象由设备生命周期拥有，不在回调路径上关闭。
 - **回调边界**：`StreamGrabber.ImageGrabbed` 回调内立刻把像素复制为中立图像，之后交给接收方。
   `PylonGrabFrame.ForCallback` 的 `Dispose` 是空操作——pylon 在事件返回后自行释放抓图结果；
   主动采集路径用 `ForRetrieved`，由本侧释放。两者不能混用。
@@ -61,10 +66,9 @@ var captured = await acquisition.CaptureAsync(
   不会漏给接收方。
 - **布防参数来自机器配置**，不接受节点级曝光/增益覆盖（节点级覆盖会让正在出图的设备参数中途改变，
   已在运行准备阶段拒绝）。
-- **断线**：`GrabSucceeded == false` 通过 `onFailure` 上报一次，接收会话随即结束并把源标记为故障，
-  后续领取拿到带原因的诊断而不是等到超时。
 
 `BaslerStreamContracts.cs` 里的 `IBaslerGrabFrame` / `IBaslerStreamCamera` 是**SDK 无关**的窄接口：
+`IBaslerStreamCamera` 代表**同一个已连接相机**上的全部设备侧动作（打开/关闭、单次抓图、持续取流），
 回调边界、像素落地与停止语义因此可以在没有相机、甚至没有 pylon 运行时的机器上用可控假相机完整验证
 （逐帧推动，不用计时器）。真实实现 `PylonStreamCamera` / `PylonGrabFrame` 只在 `BASLER_SDK` 下编译。
 
@@ -120,7 +124,8 @@ var captured = await acquisition.CaptureAsync(
 
 像素复制统一走 pylon 的 `PixelDataConverter`（它同时处理行填充与格式转换），目标格式由映射表显式决定。转换结果尺寸与中立布局不一致时拒绝发布该帧，而不是发布一张尺寸可疑的图像。
 
-测试覆盖映射表的全部分支、绑定与私有配置校验、Manifest 与插件入口一致性、缺运行时诊断、"同一组合内 HALCON 与 Basler 并存并按 SourceId 路由"，以及**长连接回调边界**（布防顺序、相机复用、回调内不抛异常、停流等待在途回调、断线上报、尺寸校验）。
+测试覆盖映射表的全部分支、绑定与私有配置校验、Manifest 与插件入口一致性、缺运行时诊断、"同一组合内 HALCON 与 Basler 并存并按 SourceId 路由"，
+以及**单一已连接相机上的生命周期**（相机只打开一次、单次采集与持续取流互斥、回调内不抛异常、停流等待在途回调、断线状态、释放顺序、尺寸校验）。
 
 **没有真实 Basler 相机硬件验收**：采集路径（打开设备、写参数、抓图、像素转换）与长连接时序（回调线程行为、
 停流时在途回调的实际数量、断线/重连/丢帧的 `ErrorCode`、外部触发脉宽与最大触发频率、长时间吞吐）

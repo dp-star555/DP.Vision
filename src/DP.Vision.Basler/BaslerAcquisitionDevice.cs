@@ -2,21 +2,17 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision.Acquisition;
-#if BASLER_SDK
-using Basler.Pylon;
-#endif
 
 namespace DP.Vision.Basler;
 
 /// <summary>
 /// Basler pylon 采集设备适配器。
 ///
-/// 两种模式共用同一份像素落地与参数写入逻辑，但设备生命周期不同：
-/// <list type="bullet">
-/// <item>OnDemand：每次采集独立打开/关闭设备，不承诺长连接。</item>
-/// <item>BufferedExternal：由长连接会话持有相机，跨布防复用，只在设备释放时关闭；
-/// 回调帧在回调边界内复制为中立图像，绝不把 pylon 的缓冲或指针交给调用方。</item>
-/// </list>
+/// 主动单次采集与外部回调持续取流共用<b>同一个已连接相机</b>：
+/// 相机在第一次使用时打开一次，之后跨采集请求与跨布防复用，只有设备被释放时才关闭；
+/// 因此一台物理设备上只存在一条取流通道，两种模式不能同时进行。
+/// 两条路径也共用同一份像素落地逻辑：帧一律在设备边界内复制为中立图像，
+/// 绝不把 pylon 的缓冲或指针交给调用方。
 /// 设备选择要求唯一匹配，不做"取第一台"的回退。
 /// </summary>
 public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionStreamingAcquisitionDevice
@@ -25,7 +21,7 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
     private readonly Func<BaslerAcquisitionBinding, IBaslerStreamCamera> _cameraFactory;
     private readonly object _sync = new object();
 
-    private IBaslerStreamCamera? _streamCamera;
+    private IBaslerStreamCamera? _camera;
     private BaslerStreamSession? _session;
     private bool _arming;
     private bool _disposed;
@@ -38,9 +34,9 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
     {
     }
 
-    /// <summary>创建设备Adapter，并注入长连接设备工厂（供测试替身使用）。</summary>
+    /// <summary>创建设备Adapter，并注入相机工厂（供测试替身使用）。</summary>
     /// <param name="binding">Provider私有绑定。</param>
-    /// <param name="cameraFactory">长连接设备工厂。</param>
+    /// <param name="cameraFactory">相机工厂；一台设备只会调用一次，两种采集模式共用返回的对象。</param>
     /// <exception cref="ArgumentNullException">参数为空。</exception>
     internal BaslerAcquisitionDevice(
         BaslerAcquisitionBinding binding,
@@ -73,40 +69,53 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 复用同一个已连接相机：这里不新建、不打开、也不关闭设备，相机只在第一次使用时打开一次。
+    /// 单次采集与外部回调共用一条取流通道，因此布防期间（或断线之后）明确拒绝，而不是抢占通道。
+    /// </remarks>
     public ValueTask<VisionProviderFrame> CaptureAsync(
         VisionCaptureRequest request,
         CancellationToken cancellationToken)
     {
         if (request is null)
             throw new ArgumentNullException(nameof(request));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        IBaslerStreamCamera camera;
         lock (_sync)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(BaslerAcquisitionDevice));
+
             if (_session is not null)
             {
+                // 断线比"正在布防"更值得优先报告：设备已经不可用，重试也不会成功。
+                if (_session.Failure is { } failure)
+                {
+                    throw new VisionDeviceOfflineException(
+                        $"Basler 设备 {_binding.BindingId} 的持续取流已因故障结束（{failure}）；"
+                        + "请先排除故障并重启采集运行时，再按请求单次采集。");
+                }
+
                 throw new VisionSourceConfigurationException(
                     $"Basler 设备 {_binding.BindingId} 正在作为外部回调缓冲源布防，不能同时按请求单次采集；"
-                    + "同一物理设备只能有一种采集模式。");
+                    + "同一物理设备只有一条取流通道，一次只能有一种采集模式。");
             }
+
+            // 未装配 pylon 支持时相机工厂自行明确失败，不做静默降级。
+            camera = _camera ??= _cameraFactory(_binding);
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-#if BASLER_SDK
         // pylon 的打开/抓图是阻塞调用，隔离到线程池；取消在调用边界检查。
         return new ValueTask<VisionProviderFrame>(
-            Task.Run(() => Capture(request, cancellationToken), cancellationToken));
-#else
-        throw new VisionProviderUnavailableException(
-            BaslerAcquisitionProvider.ProviderIdentity,
-            "本程序集未装配 Basler pylon 支持（BASLER_SDK 未定义）；请以默认配置重新构建 DP.Vision.Basler。");
-#endif
+            Task.Run(() => Capture(camera, request, cancellationToken), cancellationToken));
     }
 
     /// <summary>
-    /// 布防长连接并把后续回调帧交给接收方。
+    /// 布防并把后续回调帧交给接收方。
     /// <para>
-    /// 相机在两次布防之间保持打开，因此第二根根运行不会重新打开设备；只有设备被释放时才关闭相机。
+    /// 相机在整个设备生命周期内保持打开（单次采集与布防共用同一个设备对象），
+    /// 因此第二根根运行不会重新打开设备；只有设备被释放时才关闭相机。
     /// </para>
     /// <para>
     /// 上一次布防已经停止时允许再次布防（宿主每根根运行都会重新布防），此时先收尾旧会话再建立新会话；
@@ -141,8 +150,8 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
             previous = _session;
             _session = null;
 
-            _streamCamera ??= _cameraFactory(_binding);
-            session = new BaslerStreamSession(_streamCamera, sink);
+            _camera ??= _cameraFactory(_binding);
+            session = new BaslerStreamSession(_camera, sink);
         }
 
         try
@@ -185,8 +194,8 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
             _disposed = true;
             session = _session;
             _session = null;
-            camera = _streamCamera;
-            _streamCamera = null;
+            camera = _camera;
+            _camera = null;
         }
 
         if (session is not null)
@@ -194,91 +203,30 @@ public sealed class BaslerAcquisitionDevice : IVisionAcquisitionDevice, IVisionS
         camera?.Dispose();
     }
 
-#if BASLER_SDK
-    private VisionProviderFrame Capture(VisionCaptureRequest request, CancellationToken cancellationToken)
-    {
-        var cameraInfo = BaslerCameraSelection.Resolve(_binding);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var timeoutMilliseconds = ToTimeoutMilliseconds(request.Timeout);
-        using var camera = new Camera(cameraInfo, CameraSelectionStrategy.Unambiguous);
-        try
-        {
-            camera.Open();
-        }
-        catch (Exception exception) when (exception is not VisionAcquisitionException)
-        {
-            throw new VisionDeviceOfflineException(
-                $"Basler 设备 {_binding.BindingId}（{_binding.SelectorKey}={_binding.SelectorValue}）打开失败："
-                + exception.Message,
-                exception);
-        }
-
-        try
-        {
-            BaslerCameraParameters.Apply(
-                camera, _binding, request.TriggerMode, request.ExposureMicroseconds, request.GainDecibels);
-            using var grabFrame = PylonGrabFrame.ForRetrieved(
-                Grab(camera, request.TriggerMode, timeoutMilliseconds, cancellationToken));
-            return new VisionProviderFrame(
-                BaslerNeutralFrames.Copy(grabFrame),
-                grabFrame.CapturedAtUtc,
-                grabFrame.ImageNumber);
-        }
-        finally
-        {
-            if (camera.IsOpen)
-                camera.Close();
-        }
-    }
-
-    private static IGrabResult Grab(
-        Camera camera,
-        EVisionTriggerMode mode,
-        int timeoutMilliseconds,
+    /// <summary>按请求抓取一帧；设备对象的打开与参数写入全部由共享相机负责。</summary>
+    /// <param name="camera">两种采集模式共用的相机。</param>
+    /// <param name="request">采集请求。</param>
+    /// <param name="cancellationToken">协作取消。</param>
+    /// <returns>像素已落地为中立图像的帧。</returns>
+    private VisionProviderFrame Capture(
+        IBaslerStreamCamera camera,
+        VisionCaptureRequest request,
         CancellationToken cancellationToken)
     {
-        camera.StreamGrabber.Start(GrabStrategy.OneByOne, GrabLoop.ProvidedByStreamGrabber);
-        try
-        {
-            if (mode == EVisionTriggerMode.Software)
-            {
-                // 软件触发：先发一次触发，再等待这一帧。
-                camera.Parameters[PLCamera.TriggerSoftware].Execute();
-            }
+        camera.Open();
+        using var grabFrame = camera.CaptureSingleFrame(
+            request.TriggerMode,
+            request.ExposureMicroseconds,
+            request.GainDecibels,
+            ToTimeoutMilliseconds(request.Timeout),
+            cancellationToken);
 
-            cancellationToken.ThrowIfCancellationRequested();
-            IGrabResult result;
-            try
-            {
-                result = camera.StreamGrabber.RetrieveResult(timeoutMilliseconds, TimeoutHandling.ThrowException);
-            }
-            catch (TimeoutException exception)
-            {
-                // VisionCaptureTimeoutException 只接受诊断文本；把底层消息并入，避免丢失原因。
-                throw new VisionCaptureTimeoutException(
-                    $"Basler 采集超时（{timeoutMilliseconds} ms）；外部触发未到达或设备未出图。"
-                    + $"请检查触发接线、触发源配置和曝光时间。底层原因：{exception.Message}");
-            }
-
-            if (!result.GrabSucceeded)
-            {
-                var description = result.ErrorDescription;
-                var code = result.ErrorCode;
-                result.Dispose();
-                throw new VisionDataException($"Basler 采集失败（错误码 {code}）：{description}");
-            }
-
-            return result;
-        }
-        finally
-        {
-            if (camera.StreamGrabber.IsGrabbing)
-                camera.StreamGrabber.Stop();
-        }
+        return new VisionProviderFrame(
+            BaslerNeutralFrames.Copy(grabFrame),
+            grabFrame.CapturedAtUtc,
+            grabFrame.ImageNumber);
     }
 
     private static int ToTimeoutMilliseconds(TimeSpan timeout) =>
         (int)Math.Min(int.MaxValue, Math.Max(1, Math.Ceiling(timeout.TotalMilliseconds)));
-#endif
 }

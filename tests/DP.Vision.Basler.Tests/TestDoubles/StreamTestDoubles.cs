@@ -6,9 +6,10 @@ using DP.Vision.Acquisition;
 namespace DP.Vision.Basler.Tests;
 
 /// <summary>
-/// 可控的假长连接设备：记录设备侧动作，并由测试逐帧推动回调，不使用计时器。
+/// 可控的假相机：记录设备侧动作，并由测试逐帧推动回调，不使用计时器。
 /// <para>
-/// 它模拟厂商 SDK 的两个关键行为：回调由 SDK 线程直接调用、以及"停流后可能仍有一个在途回调"。
+/// 它模拟厂商 SDK 的三个关键行为：回调由 SDK 线程直接调用、"停流后可能仍有一个在途回调"，
+/// 以及"持续取流与单次采集共用同一条取流通道"（同一时刻只允许一种）。
 /// </para>
 /// </summary>
 internal sealed class FakeStreamCamera : IBaslerStreamCamera
@@ -19,6 +20,8 @@ internal sealed class FakeStreamCamera : IBaslerStreamCamera
     private Action<IBaslerGrabFrame>? _onFrame;
     private Action<Exception>? _onFailure;
     private bool _open;
+    private bool _grabArmed;
+    private bool _capturing;
 
     /// <summary>打开次数。</summary>
     public int OpenCount { get; private set; }
@@ -35,6 +38,9 @@ internal sealed class FakeStreamCamera : IBaslerStreamCamera
     /// <summary>停止持续取流次数。</summary>
     public int StopGrabCount { get; private set; }
 
+    /// <summary>按请求单次采集次数。</summary>
+    public int SingleCaptureCount { get; private set; }
+
     /// <summary>最近一次写入设备的触发模式。</summary>
     public EVisionTriggerMode? AppliedTriggerMode { get; private set; }
 
@@ -50,6 +56,15 @@ internal sealed class FakeStreamCamera : IBaslerStreamCamera
     /// <summary>注入 <c>ApplyArmParameters</c> 的失败。</summary>
     public Exception? ApplyFailure { get; set; }
 
+    /// <summary>单次采集返回的设备帧工厂；为空时返回一帧 2x1 的 Mono8。</summary>
+    public Func<IBaslerGrabFrame>? CaptureFrameFactory { get; set; }
+
+    /// <summary>在单次采集内部进入时置位，用于确定性地观察"采集已在途"。</summary>
+    public ManualResetEventSlim? CaptureEntered { get; set; }
+
+    /// <summary>在单次采集内部等待它，用于把采集卡在设备侧。</summary>
+    public ManualResetEventSlim? CaptureRelease { get; set; }
+
     /// <summary>
     /// 为真时，停流后仍允许回调进入——模拟"SDK 在 Stop 过程中交付了一个在途帧"的真实情形。
     /// 会话必须自己挡住它，而不是指望设备守约。
@@ -63,9 +78,12 @@ internal sealed class FakeStreamCamera : IBaslerStreamCamera
     }
 
     /// <summary>是否处于持续取流状态。</summary>
-    public bool Grabbing { get; private set; }
+    public bool Grabbing
+    {
+        get { lock (_sync) return _grabArmed; }
+    }
 
-    /// <summary>按发生顺序记录的生命周期事件（<c>open</c>/<c>start-grab</c>/<c>stop-grab</c>/<c>close</c>）。</summary>
+    /// <summary>按发生顺序记录的生命周期事件（<c>open</c>/<c>capture-single</c>/<c>start-grab</c>/<c>stop-grab</c>/<c>close</c>）。</summary>
     public IReadOnlyList<string> Events
     {
         get { lock (_sync) return _events.ToArray(); }
@@ -92,7 +110,7 @@ internal sealed class FakeStreamCamera : IBaslerStreamCamera
             _events.Add("close");
             CloseCount++;
             _open = false;
-            Grabbing = false;
+            _grabArmed = false;
             _onFrame = null;
             _onFailure = null;
         }
@@ -121,27 +139,76 @@ internal sealed class FakeStreamCamera : IBaslerStreamCamera
 
         lock (_sync)
         {
+            if (_grabArmed || _capturing)
+                throw new InvalidOperationException("假相机上已经有取流在运行，不能开始第二条。");
+
             _onFrame = onFrame;
             _onFailure = onFailure;
-            Grabbing = true;
+            _grabArmed = true;
             StartGrabCount++;
             _events.Add("start-grab");
         }
     }
 
     /// <inheritdoc/>
+    /// <remarks>只有真正开始过持续取流才停流：正在进行的单次采集不属于本方法的收尾范围。</remarks>
     public void StopContinuousGrab()
     {
         lock (_sync)
         {
+            if (!_grabArmed)
+                return;
+
             StopGrabCount++;
-            Grabbing = false;
+            _grabArmed = false;
             _events.Add("stop-grab");
             if (!DeliverAfterStop)
             {
                 _onFrame = null;
                 _onFailure = null;
             }
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>与真实相机一样，单次采集期间不接受第二条取流：一台设备只有一条取流通道。</remarks>
+    public IBaslerGrabFrame CaptureSingleFrame(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int timeoutMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            if (!_open)
+                throw new InvalidOperationException("假相机尚未打开。");
+            if (_grabArmed)
+                throw new InvalidOperationException("假相机正在持续取流，不能同时单次采集。");
+
+            _capturing = true;
+            SingleCaptureCount++;
+            AppliedTriggerMode = triggerMode;
+            AppliedExposure = exposureMicroseconds;
+            AppliedGain = gainDecibels;
+            _events.Add("capture-single");
+        }
+
+        try
+        {
+            if (CaptureEntered is not null)
+                CaptureEntered.Set();
+            if (CaptureRelease is not null)
+                CaptureRelease.Wait(TimeSpan.FromSeconds(10));
+
+            return CaptureFrameFactory is null
+                ? new FakeGrabFrame("Mono8", 2, 1, new byte[] { 5, 6 })
+                : CaptureFrameFactory();
+        }
+        finally
+        {
+            lock (_sync)
+                _capturing = false;
         }
     }
 

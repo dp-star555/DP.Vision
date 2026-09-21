@@ -1,5 +1,6 @@
 #if BASLER_SDK
 using System;
+using System.Threading;
 using Basler.Pylon;
 using DP.Vision.Acquisition;
 
@@ -91,10 +92,10 @@ internal sealed class PylonGrabFrame : IBaslerGrabFrame
 }
 
 /// <summary>
-/// 真实 pylon 长连接设备：持有相机对象并驱动连续取流。
+/// 真实 pylon 相机：持有唯一的 <see cref="Camera"/> 对象，同时驱动主动单次采集与持续取流。
 /// <para>
-/// 相机对象在两次布防之间保持打开（退役只停流），只有 <see cref="Dispose"/> 才关闭并释放它——
-/// 这样第二根根运行不必重新打开相机，真实设备也不会因为重复 Open 而失败。
+/// 相机对象在设备被释放之前保持打开（单次采集之间、两次布防之间都不关闭），
+/// 因此真实设备不会因为重复 Open 而失败，两种采集模式也共用同一条 <c>StreamGrabber</c>。
 /// </para>
 /// </summary>
 internal sealed class PylonStreamCamera : IBaslerStreamCamera
@@ -188,7 +189,11 @@ internal sealed class PylonStreamCamera : IBaslerStreamCamera
         {
             camera = _camera ?? throw new InvalidOperationException("Basler 设备尚未打开，无法开始持续取流。");
             if (camera.StreamGrabber.IsGrabbing)
-                throw new InvalidOperationException("Basler 设备已经在持续取流状态。");
+            {
+                throw new InvalidOperationException(
+                    "Basler 设备上已经有取流在运行（持续取流或一次尚未结束的单次采集）；"
+                    + "同一物理设备只有一条取流通道，不能同时开始第二条。");
+            }
 
             _onFrame = onFrame;
             _onFailure = onFailure;
@@ -214,24 +219,101 @@ internal sealed class PylonStreamCamera : IBaslerStreamCamera
     }
 
     /// <inheritdoc/>
-    /// <remarks>先摘钩子再 Stop：摘钩之后不会再有新的回调进入，Stop 负责让 SDK 停止产帧。</remarks>
+    /// <remarks>
+    /// 先摘钩子再 Stop：摘钩之后不会再有新的回调进入，Stop 负责让 SDK 停止产帧。
+    /// 只有本对象真正开始过持续取流才停流——设备可能正忙于一次单次采集，
+    /// 此时停流会把那条取流通道从别人手里抢走。
+    /// </remarks>
     public void StopContinuousGrab()
     {
         Camera? camera;
+        bool grabbing;
         lock (_sync)
+        {
             camera = _camera;
+            grabbing = _onFrame is not null;
+            _onFrame = null;
+            _onFailure = null;
+        }
 
-        if (camera is null)
+        if (camera is null || !grabbing)
             return;
 
         camera.StreamGrabber.ImageGrabbed -= OnImageGrabbed;
         if (camera.StreamGrabber.IsGrabbing)
             camera.StreamGrabber.Stop();
+    }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 单次采集与持续取流共用同一个 <c>StreamGrabber</c>：开始前先确认设备没有在持续取流，
+    /// 结束后一定停掉本次抓图，避免把残留的取流状态留给下一次布防。
+    /// </remarks>
+    public IBaslerGrabFrame CaptureSingleFrame(
+        EVisionTriggerMode triggerMode,
+        double? exposureMicroseconds,
+        double? gainDecibels,
+        int timeoutMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        Camera camera;
         lock (_sync)
         {
-            _onFrame = null;
-            _onFailure = null;
+            camera = _camera ?? throw new InvalidOperationException("Basler 设备尚未打开，无法按请求单次采集。");
+            if (camera.StreamGrabber.IsGrabbing)
+            {
+                throw new InvalidOperationException(
+                    "Basler 设备正在持续取流；同一条取流通道不能同时用于单次采集。");
+            }
+        }
+
+        BaslerCameraParameters.Apply(camera, _binding, triggerMode, exposureMicroseconds, gainDecibels);
+
+        camera.StreamGrabber.Start(GrabStrategy.OneByOne, GrabLoop.ProvidedByStreamGrabber);
+        try
+        {
+            if (triggerMode == EVisionTriggerMode.Software)
+            {
+                // 软件触发：先发一次触发，再等待这一帧。
+                camera.Parameters[PLCamera.TriggerSoftware].Execute();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            IGrabResult result;
+            try
+            {
+                result = camera.StreamGrabber.RetrieveResult(timeoutMilliseconds, TimeoutHandling.ThrowException);
+            }
+            catch (TimeoutException exception)
+            {
+                // VisionCaptureTimeoutException 只接受诊断文本；把底层消息并入，避免丢失原因。
+                throw new VisionCaptureTimeoutException(
+                    $"Basler 采集超时（{timeoutMilliseconds} ms）；外部触发未到达或设备未出图。"
+                    + $"请检查触发接线、触发源配置和曝光时间。底层原因：{exception.Message}");
+            }
+
+            if (!result.GrabSucceeded)
+            {
+                var code = result.ErrorCode;
+                var description = result.ErrorDescription;
+                result.Dispose();
+                throw new VisionDataException($"Basler 采集失败（错误码 {code}）：{description}");
+            }
+
+            // 抓图结果由调用方拥有：像素复制必须在它被释放之前完成。
+            return PylonGrabFrame.ForRetrieved(result);
+        }
+        finally
+        {
+            try
+            {
+                if (camera.StreamGrabber.IsGrabbing)
+                    camera.StreamGrabber.Stop();
+            }
+            catch (Exception)
+            {
+                // 停流失败不改变本次采集的结果：设备对象仍在，下一次采集会重新 Start。
+            }
         }
     }
 
