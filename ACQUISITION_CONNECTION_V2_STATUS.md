@@ -594,7 +594,7 @@ HALCON 采集接口（`hAcqGigEVision2`/`hAcqUSB3Vision`/`hAcqGenICamTL` 及采�
   修复方向（跨 Abstractions/Runtime/Basler/HALCON 的契约变更，需单独立项）：
   把 Type 工厂改为绑定感知（`Func<IReadOnlyList<VisionDeviceSettingsParseResult>, IVisionAcquisitionProvider>`，
   并让解析结果携带不透明 `ProviderBinding` 载荷），或让工厂接收该 Type 的原始 deviceSettings 列表自行构建绑定。
-- **提交状态**：本次改动**尚未提交**，提交前按约定再次确认。
+- **提交状态**：已提交为 `fa2cbe1`（feat(acquisition): V2-8 线扫首个Adapter——HALCON线扫Type与SDK整图交付）。
 
 ## V2-9a：设备发现、配置修订与运行制品（服务端）
 
@@ -751,5 +751,5 @@ HALCON 采集接口（`hAcqGigEVision2`/`hAcqUSB3Vision`/`hAcqGenICamTL` 及采�
 - **`DP.Vision.Halcon.Tests` 的 net48 目标仍编译不过**（2 个 CS1501，V2-8 的 `HalconLineScanAcquisitionTests`
   用了 net48 不存在的 `string.Contains(char, StringComparison)`），属既有问题，本阶段未改；
   测试与验收仍按 `-f net8.0-windows` 执行。
-- **提交状态**：本次改动**尚未提交**，提交前按约定再次确认。
+- **提交状态**：已提交为 `0c0fe40`（feat(acquisition): V2-9 设备发现与配置修订——发现能力、运行制品与像素落地观测，30 文件 +2524/-32）。
 
