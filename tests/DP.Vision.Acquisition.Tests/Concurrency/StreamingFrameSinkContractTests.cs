@@ -174,8 +174,13 @@ public sealed class StreamingFrameSinkContractTests
 
         Assert.IsFalse(device.IsStreaming);
         Assert.IsFalse(device.Emit(1));
-        Assert.AreEqual(1, device.StreamDisposeCount);
+        // 设备关闭也会结束接收，但这不是"显式停流"——两条路径必须能区分，
+        // 否则运行时漏掉停流会被设备关闭兜底掩盖。
+        Assert.AreEqual(0, device.StreamDisposeCount, "设备关闭不计入显式停流次数。");
         Assert.AreEqual(1, device.DisposeCount);
+        CollectionAssert.AreEqual(
+            new[] { "stream-start", "device-dispose" },
+            device.Events.ToArray());
     }
 
     /// <summary>未布防时推进回调是无操作，不产生帧也不抛异常。</summary>

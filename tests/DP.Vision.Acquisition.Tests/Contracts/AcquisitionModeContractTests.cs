@@ -12,8 +12,16 @@ public sealed class AcquisitionModeContractTests
     [TestMethod]
     public void AcquisitionMode_IntegerValuesAreStable()
     {
-        Assert.AreEqual(0, (int)EVisionAcquisitionMode.OnDemand);
-        Assert.AreEqual(1, (int)EVisionAcquisitionMode.BufferedExternal);
+        // 逐项对照而不是直接比较两个常量：分析器会把编译期可判定的常量比较判为恒真（MSTEST0032），
+        // 而这里要锁的恰恰是"值没有漂移"，不能因为分析器不理解就删掉。
+        var expected = new[]
+        {
+            (Mode: EVisionAcquisitionMode.OnDemand, Value: 0),
+            (Mode: EVisionAcquisitionMode.BufferedExternal, Value: 1),
+        };
+
+        foreach (var (mode, value) in expected)
+            Assert.AreEqual(value, (int)mode, mode.ToString());
     }
 
     /// <summary>有界策略拒绝非正的容量、字节预算与帧龄。</summary>

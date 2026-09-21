@@ -6,16 +6,24 @@ using System.Threading.Tasks;
 
 namespace DP.Vision.Acquisition;
 
-/// <summary>站点级采集运行时；拥有Provider实例、设备Session、互斥与路由，Provider拥有硬件，运行拥有图像。</summary>
-public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IAsyncDisposable
+/// <summary>
+/// 站点级采集运行时；拥有Provider实例、设备Session、互斥与路由，Provider拥有硬件，运行拥有图像。
+/// <para>
+/// 它同时实现 <see cref="IVisionAcquisitionRunOwner"/>：外部回调缓冲源需要"哪一根运行的帧"这一界定，
+/// 而该界定只能由根运行给出。
+/// </para>
+/// </summary>
+public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquisitionRunOwner, IAsyncDisposable
 {
     private readonly VisionAcquisitionProviderComposition _composition;
     private readonly Dictionary<string, IVisionAcquisitionProvider> _providers =
         new Dictionary<string, IVisionAcquisitionProvider>(StringComparer.Ordinal);
-    private readonly Dictionary<string, ResourceEntry> _resources =
-        new Dictionary<string, ResourceEntry>(StringComparer.Ordinal);
+    private readonly Dictionary<string, VisionResourceSession> _resources =
+        new Dictionary<string, VisionResourceSession>(StringComparer.Ordinal);
     private readonly object _gate = new object();
     private bool _disposed;
+    private int _epoch;
+    private RunLease? _activeLease;
 
     /// <summary>创建运行时。</summary>
     /// <param name="composition">已发布的不可变Provider组合。</param>
@@ -30,6 +38,10 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IAsyncDisposa
 
     /// <summary>已发布的逻辑源清单；供属性编辑器和运行准备列出候选。</summary>
     public IReadOnlyList<VisionAcquisitionSourceBinding> Sources => _composition.Sources;
+
+    /// <summary>需要根运行所有权的逻辑源；只有外部回调缓冲源需要。</summary>
+    public IReadOnlyList<VisionAcquisitionSourceBinding> BufferedSources =>
+        _composition.Sources.Where(binding => binding.AcquisitionMode == EVisionAcquisitionMode.BufferedExternal).ToArray();
 
     /// <inheritdoc/>
     public async ValueTask<VisionCapturedImage> CaptureAsync(
@@ -54,14 +66,161 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IAsyncDisposa
             throw new VisionSourceConfigurationException(
                 $"逻辑源 {source.SourceId} 绑定的Provider {binding.ProviderId} 不在当前组合中。");
 
-        var resource = GetResource(binding.ResourceKey);
-        await AcquireAsync(resource, binding, owner, request.Timeout, cancellationToken).ConfigureAwait(false);
+        var session = GetSession(binding);
+        if (!session.TryEnterOperation())
+            throw new VisionDeviceOfflineException(
+                $"逻辑源 {source.SourceId} 所在的采集运行时正在停止，不再接受新的采集请求。");
+
         try
         {
-            var device = await GetOrOpenDeviceAsync(resource, binding, registration, cancellationToken).ConfigureAwait(false);
-            var providerFrame = await CaptureFromDeviceAsync(resource, binding, device, request, cancellationToken).ConfigureAwait(false);
+            return binding.AcquisitionMode == EVisionAcquisitionMode.BufferedExternal
+                ? await ClaimBufferedAsync(session, binding, request, cancellationToken).ConfigureAwait(false)
+                : await CaptureOnDemandAsync(session, binding, registration, request, owner, cancellationToken)
+                    .ConfigureAwait(false);
+        }
+        finally
+        {
+            session.ExitOperation();
+        }
+    }
 
+    /// <inheritdoc/>
+    /// <exception cref="VisionResourceConflictException">已有根运行持有采集所有权。</exception>
+    public async ValueTask<IVisionAcquisitionRunLease> BeginRunAsync(string runId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new ArgumentException("根运行身份不能为空。", nameof(runId));
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(VisionAcquisitionRuntime));
+
+        RunLease lease;
+        lock (_gate)
+        {
+            if (_activeLease is not null)
+                throw BuildOwnershipConflict(_activeLease, runId.Trim());
+            _epoch++;
+            lease = new RunLease(this, runId.Trim(), _epoch);
+            _activeLease = lease;
+        }
+
+        try
+        {
+            await lease.ArmAsync(cancellationToken).ConfigureAwait(false);
+            return lease;
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_activeLease, lease))
+                    _activeLease = null;
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>读取一个逻辑源的运行诊断快照。</summary>
+    /// <param name="sourceId">逻辑源标识。</param>
+    /// <returns>诊断快照；源未发布时为空。</returns>
+    public VisionSourceDiagnostics? GetDiagnostics(string sourceId)
+    {
+        if (!_composition.TryGetSource(sourceId, out var binding) || binding is null)
+            return null;
+
+        return TryGetSession(binding.ResourceKey, out var session)
+            ? session.Snapshot(binding.SourceId, binding.ProviderId)
+            : new VisionSourceDiagnostics(
+                binding.SourceId, binding.ResourceKey, binding.ProviderId,
+                "Created", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null);
+    }
+
+    /// <summary>读取全部已发布源的运行诊断快照。</summary>
+    /// <returns>按SourceId排序的快照；从未被使用过的源也会出现。</returns>
+    public IReadOnlyList<VisionSourceDiagnostics> GetDiagnostics() =>
+        _composition.Sources
+            .Select(binding => GetDiagnostics(binding.SourceId))
+            .Where(item => item is not null)
+            .Select(item => item!)
+            .ToArray();
+
+    /// <inheritdoc/>
+    public async ValueTask DisposeAsync()
+    {
+        VisionResourceSession[] sessions;
+        IVisionAcquisitionProvider[] providers;
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _activeLease = null;
+            sessions = _resources.Values.ToArray();
+            providers = _providers.Values.ToArray();
+            _resources.Clear();
+            _providers.Clear();
+        }
+
+        // 每个会话先关接受门、再停流（等待已进入的回调退出）、再等在途操作退出，最后释放设备。
+        foreach (var session in sessions)
+            await session.DisposeAsync().ConfigureAwait(false);
+        foreach (var provider in providers)
+            await provider.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private async ValueTask<VisionCapturedImage> ClaimBufferedAsync(
+        VisionResourceSession session,
+        VisionAcquisitionSourceBinding binding,
+        VisionCaptureRequest request,
+        CancellationToken cancellationToken)
+    {
+        // 节点级曝光/增益会改动正在出图的设备参数，使已在途的帧参数不一致，因此明确拒绝而不是静默应用。
+        if (request.ExposureMicroseconds is not null || request.GainDecibels is not null)
+            throw new VisionParameterNotSupportedException(
+                $"外部回调缓冲源 {binding.SourceId} 不支持节点级曝光/增益覆盖；"
+                + "这些参数由机器 Source/Profile 固定，请在机器配置里修改并重新发布。");
+
+        var entry = await session.ClaimAsync(request.Timeout, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var frame = new ImageFrame(entry.CaptureId, entry.Frame.Image);
+            var metadata = new VisionCaptureMetadata(
+                entry.CaptureId,
+                binding.SourceId,
+                binding.ProviderId,
+                binding.ResourceKey,
+                entry.CapturedAtUtc,
+                entry.DeviceSequence,
+                EVisionAcquisitionMode.BufferedExternal,
+                entry.ReceivedSequence,
+                entry.ReceivedAtUtc);
+            return new VisionCapturedImage(frame, metadata);
+        }
+        finally
+        {
             // 像素所有权先转给ImageFrame，再释放Provider句柄：设备/SDK对象释放后图像仍必须可读。
+            entry.Frame.Dispose();
+        }
+    }
+
+    private async ValueTask<VisionCapturedImage> CaptureOnDemandAsync(
+        VisionResourceSession session,
+        VisionAcquisitionSourceBinding binding,
+        VisionAcquisitionProviderRegistration registration,
+        VisionCaptureRequest request,
+        VisionAcquisitionOwner owner,
+        CancellationToken cancellationToken)
+    {
+        await AcquireOperationAsync(session, binding, owner, request.Timeout, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (session.Faulted)
+                throw new VisionDeviceOfflineException(
+                    $"资源键 {binding.ResourceKey} 的设备已标记为故障（{session.FaultMessage}）；请先排除故障再继续采集。");
+
+            var device = await GetOrOpenDeviceAsync(session, binding, registration, cancellationToken).ConfigureAwait(false);
+            var providerFrame = await CaptureFromDeviceAsync(session, binding, device, request, cancellationToken).ConfigureAwait(false);
+
             var captureId = Guid.NewGuid().ToString("N");
             try
             {
@@ -82,43 +241,17 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IAsyncDisposa
         }
         finally
         {
-            Release(resource);
+            ReleaseOperation(session);
         }
-    }
-
-    /// <inheritdoc/>
-    public async ValueTask DisposeAsync()
-    {
-        IVisionAcquisitionDevice[] devices;
-        IVisionAcquisitionProvider[] providers;
-        lock (_gate)
-        {
-            if (_disposed)
-                return;
-            _disposed = true;
-            devices = _resources.Values.Select(entry => entry.Device).OfType<IVisionAcquisitionDevice>().ToArray();
-            providers = _providers.Values.ToArray();
-            _resources.Clear();
-            _providers.Clear();
-        }
-
-        foreach (var device in devices)
-            await device.DisposeAsync().ConfigureAwait(false);
-        foreach (var provider in providers)
-            await provider.DisposeAsync().ConfigureAwait(false);
     }
 
     private static async ValueTask<VisionProviderFrame> CaptureFromDeviceAsync(
-        ResourceEntry resource,
+        VisionResourceSession session,
         VisionAcquisitionSourceBinding binding,
         IVisionAcquisitionDevice device,
         VisionCaptureRequest request,
         CancellationToken cancellationToken)
     {
-        if (resource.Faulted)
-            throw new VisionDeviceOfflineException(
-                $"资源键 {binding.ResourceKey} 的设备已标记为故障（{resource.FaultMessage}）；请先排除故障再继续采集。");
-
         try
         {
             return await device.CaptureAsync(request, cancellationToken).ConfigureAwait(false);
@@ -134,82 +267,94 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IAsyncDisposa
         catch (Exception exception)
         {
             // 原生SDK故障后设备状态不可信：标记Faulted并阻断后续使用，不伪装成普通业务失败。
-            resource.MarkFaulted(exception.Message);
+            session.MarkFaulted("DeviceFailure", exception.Message);
             throw new VisionDeviceOfflineException(
                 $"逻辑源 {binding.SourceId} 采集失败（资源键 {binding.ResourceKey}）：{exception.Message}", exception);
         }
     }
 
-    private async ValueTask AcquireAsync(
-        ResourceEntry resource,
+    private static async ValueTask AcquireOperationAsync(
+        VisionResourceSession session,
         VisionAcquisitionSourceBinding binding,
         VisionAcquisitionOwner owner,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        if (binding.SharingPolicy == EVisionSourceSharingPolicy.ExclusiveRun
-            || binding.SharingPolicy == EVisionSourceSharingPolicy.Broadcast)
+        if (binding.SharingPolicy == EVisionSourceSharingPolicy.ExclusiveRun)
             throw new VisionSourceConfigurationException(
-                $"共享策略 {binding.SharingPolicy} 尚未实现；ExclusiveRun 依赖运行作用域所有权，Broadcast 需要真实连续流需求。");
+                $"共享策略 ExclusiveRun 只用于外部回调缓冲源；主动单次采集源 {binding.SourceId} 不能声明它。");
+        if (binding.SharingPolicy == EVisionSourceSharingPolicy.Broadcast)
+            throw new VisionSourceConfigurationException(
+                "共享策略 Broadcast 需要真实连续流需求，尚未实现。");
 
         if (binding.SharingPolicy == EVisionSourceSharingPolicy.ExclusiveOperation)
         {
-            if (!resource.Gate.Wait(0))
+            if (!session.OperationGate.Wait(0))
                 throw new VisionResourceConflictException(
-                    BuildConflict(resource, binding, owner, "同一资源键已有持有者；ExclusiveOperation 不排队。"));
-            resource.SetHolder(owner);
+                    BuildConflict(session, binding, owner, "同一资源键已有持有者；ExclusiveOperation 不排队。"));
+            session.SetHolder(owner);
             return;
         }
 
-        if (!await resource.Gate.WaitAsync(timeout, cancellationToken).ConfigureAwait(false))
+        if (!await session.OperationGate.WaitAsync(timeout, cancellationToken).ConfigureAwait(false))
             throw new VisionResourceConflictException(
-                BuildConflict(resource, binding, owner, $"Serialized 等待超过 {timeout}，不做无限排队。"));
-        resource.SetHolder(owner);
+                BuildConflict(session, binding, owner, $"Serialized 等待超过 {timeout}，不做无限排队。"));
+        session.SetHolder(owner);
     }
 
-    private static void Release(ResourceEntry resource)
+    private static void ReleaseOperation(VisionResourceSession session)
     {
-        resource.SetHolder(null);
-        resource.Gate.Release();
+        session.SetHolder(null);
+        session.OperationGate.Release();
     }
 
     private async ValueTask<IVisionAcquisitionDevice> GetOrOpenDeviceAsync(
-        ResourceEntry resource,
+        VisionResourceSession session,
         VisionAcquisitionSourceBinding binding,
         VisionAcquisitionProviderRegistration registration,
         CancellationToken cancellationToken)
     {
-        var existing = resource.Device;
+        var existing = session.Device;
         if (existing is not null)
             return existing;
 
         // 设备Session按ResourceKey惰性打开并复用，Open/Close状态转换由Runtime串行化。
-        await resource.OpenGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await session.OpenGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            existing = resource.Device;
+            existing = session.Device;
             if (existing is not null)
                 return existing;
 
-            var provider = GetProvider(registration);
-            var device = await provider.OpenAsync(binding.ProviderBindingId, cancellationToken).ConfigureAwait(false);
-            var identity = device.Identity;
-            if (identity.HasCanonicalKey
-                && !string.Equals(identity.CanonicalKey, binding.ResourceKey, StringComparison.Ordinal))
-            {
-                await device.DisposeAsync().ConfigureAwait(false);
-                throw new VisionSourceConfigurationException(
-                    $"设备报告的规范身份 {identity.CanonicalKey} 与配置资源键 {binding.ResourceKey} 不一致；"
-                    + "拒绝继续，避免同一物理设备形成两个互不相知的锁域。");
-            }
-
-            resource.Device = device;
+            var device = await OpenDeviceAsync(session, binding, registration, cancellationToken).ConfigureAwait(false);
+            session.SetDevice(device);
             return device;
         }
         finally
         {
-            resource.OpenGate.Release();
+            session.OpenGate.Release();
         }
+    }
+
+    private async ValueTask<IVisionAcquisitionDevice> OpenDeviceAsync(
+        VisionResourceSession session,
+        VisionAcquisitionSourceBinding binding,
+        VisionAcquisitionProviderRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        var provider = GetProvider(registration);
+        var device = await provider.OpenAsync(binding.ProviderBindingId, cancellationToken).ConfigureAwait(false);
+        var identity = device.Identity;
+        if (identity.HasCanonicalKey
+            && !string.Equals(identity.CanonicalKey, binding.ResourceKey, StringComparison.Ordinal))
+        {
+            await device.DisposeAsync().ConfigureAwait(false);
+            throw new VisionSourceConfigurationException(
+                $"设备报告的规范身份 {identity.CanonicalKey} 与配置资源键 {binding.ResourceKey} 不一致；"
+                + "拒绝继续，避免同一物理设备形成两个互不相知的锁域。");
+        }
+
+        return device;
     }
 
     private IVisionAcquisitionProvider GetProvider(VisionAcquisitionProviderRegistration registration)
@@ -226,25 +371,45 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IAsyncDisposa
         }
     }
 
-    private ResourceEntry GetResource(string resourceKey)
+    private VisionResourceSession GetSession(VisionAcquisitionSourceBinding binding)
     {
         lock (_gate)
         {
-            if (_resources.TryGetValue(resourceKey, out var existing))
+            if (_resources.TryGetValue(binding.ResourceKey, out var existing))
                 return existing;
-            var entry = new ResourceEntry();
-            _resources.Add(resourceKey, entry);
-            return entry;
+            var created = new VisionResourceSession(binding.ResourceKey, binding.InboxPolicy);
+            _resources.Add(binding.ResourceKey, created);
+            return created;
         }
     }
 
+    private bool TryGetSession(string resourceKey, out VisionResourceSession session)
+    {
+        lock (_gate)
+            return _resources.TryGetValue(resourceKey, out session!);
+    }
+
+    private VisionResourceConflictException BuildOwnershipConflict(RunLease holder, string requestedRunId)
+    {
+        var buffered = BufferedSources.FirstOrDefault();
+        return new VisionResourceConflictException(new VisionResourceConflictDiagnostics(
+            buffered?.SourceId ?? "(无外部回调源)",
+            buffered?.ResourceKey ?? "(无外部回调源)",
+            requestedRunId,
+            requestedRunId,
+            holder.RunId,
+            holder.RunId,
+            EVisionSourceSharingPolicy.ExclusiveRun,
+            "外部回调缓冲源按根运行独占；同一采集运行时同时只能有一根根运行持有所有权。"));
+    }
+
     private static VisionResourceConflictDiagnostics BuildConflict(
-        ResourceEntry resource,
+        VisionResourceSession session,
         VisionAcquisitionSourceBinding binding,
         VisionAcquisitionOwner owner,
         string reason)
     {
-        var holder = resource.Holder;
+        var holder = session.Holder;
         return new VisionResourceConflictDiagnostics(
             binding.SourceId,
             binding.ResourceKey,
@@ -256,52 +421,78 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IAsyncDisposa
             reason);
     }
 
-    private sealed class ResourceEntry
+    /// <summary>一根根运行的采集所有权租约。</summary>
+    private sealed class RunLease : IVisionAcquisitionRunLease
     {
-        private readonly object _sync = new object();
-        private VisionAcquisitionOwner? _holder;
-        private IVisionAcquisitionDevice? _device;
-        private bool _faulted;
-        private string? _faultMessage;
+        private readonly VisionAcquisitionRuntime _runtime;
+        private readonly List<string> _armed = new List<string>();
+        private int _disposed;
 
-        public SemaphoreSlim Gate { get; } = new SemaphoreSlim(1, 1);
-
-        public SemaphoreSlim OpenGate { get; } = new SemaphoreSlim(1, 1);
-
-        public VisionAcquisitionOwner? Holder
+        public RunLease(VisionAcquisitionRuntime runtime, string runId, int epoch)
         {
-            get { lock (_sync) return _holder; }
+            _runtime = runtime;
+            RunId = runId;
+            Epoch = epoch;
         }
 
-        public IVisionAcquisitionDevice? Device
-        {
-            get { lock (_sync) return _device; }
-            set { lock (_sync) _device = value; }
-        }
+        public string RunId { get; }
 
-        public bool Faulted
-        {
-            get { lock (_sync) return _faulted; }
-        }
+        public int Epoch { get; }
 
-        public string? FaultMessage
+        public IReadOnlyList<string> ArmedSourceIds
         {
-            get { lock (_sync) return _faultMessage; }
-        }
-
-        public void SetHolder(VisionAcquisitionOwner? owner)
-        {
-            lock (_sync)
-                _holder = owner;
-        }
-
-        public void MarkFaulted(string message)
-        {
-            lock (_sync)
+            get
             {
-                _faulted = true;
-                _faultMessage = message;
+                lock (_armed)
+                    return _armed.ToArray();
             }
+        }
+
+        /// <summary>建立新代次并布防全部外部回调缓冲源。</summary>
+        public async ValueTask ArmAsync(CancellationToken cancellationToken)
+        {
+            foreach (var binding in _runtime.BufferedSources)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var session = _runtime.GetSession(binding);
+
+                // 先推进代次再布防：布防过程中到达的帧必须落在新代次里，否则会被当成上一轮的帧丢弃。
+                session.BeginEpoch(Epoch);
+                await session.ArmAsync(
+                    token => _runtime.OpenDeviceAsync(session, binding, ResolveRegistration(binding), token),
+                    cancellationToken).ConfigureAwait(false);
+
+                lock (_armed)
+                    _armed.Add(binding.SourceId);
+            }
+        }
+
+        /// <summary>退役本轮：停流并释放未领取帧，然后归还所有权。</summary>
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            foreach (var binding in _runtime.BufferedSources)
+            {
+                if (!_runtime.TryGetSession(binding.ResourceKey, out var session))
+                    continue;
+                await session.DisarmAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            lock (_runtime._gate)
+            {
+                if (ReferenceEquals(_runtime._activeLease, this))
+                    _runtime._activeLease = null;
+            }
+        }
+
+        private VisionAcquisitionProviderRegistration ResolveRegistration(VisionAcquisitionSourceBinding binding)
+        {
+            if (_runtime._composition.TryGetProvider(binding.ProviderId, out var registration) && registration is not null)
+                return registration;
+            throw new VisionSourceConfigurationException(
+                $"逻辑源 {binding.SourceId} 绑定的Provider {binding.ProviderId} 不在当前组合中。");
         }
     }
 }

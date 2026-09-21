@@ -1,6 +1,6 @@
 # 图像采集深化 V1：主动请求与外部回调 FIFO
 
-状态：**V1-A 已实施；V1-B 起待实现**
+状态：**V1-A、V1-B 已实施；V1-C 起待实现**
 范围：`DP.Vision.Acquisition.*`、HALCON/Basler 采集 Adapter 及 Workflow 采集节点接线。  
 目的：解决“外部触发图像已经回调，但 Workflow 尚未运行到采集节点”的问题，同时保留现有主动采集路径。
 
@@ -555,7 +555,7 @@ Concurrency/StreamingFrameSinkContractTests.cs    9 例  交付顺序、停止�
 根运行 Epoch，也没有任何真实厂商回调。`BufferedExternal` 目前只能在组合期发布，
 运行期尚无消费路径——它由 V1-B/V1-C 补齐。
 
-### V1-B：Runtime FrameInbox
+### V1-B：Runtime FrameInbox【已完成】
 
 1. 按ResourceKey增加ResourceSession。
 2. 实现有界FIFO、字节预算、超龄和单Claim。
@@ -565,6 +565,77 @@ Concurrency/StreamingFrameSinkContractTests.cs    9 例  交付顺序、停止�
 6. 修复Runtime停止门并等待活动Capture和Publish退出。
 
 验收：没有重复领取、租约泄漏、静默覆盖或Dispose竞态。
+
+**实施记录（2026-09-21）**
+
+新增文件：
+
+```text
+src/DP.Vision.Acquisition.Runtime/VisionFrameInbox.cs        有界FIFO：容量/字节预算/超龄/代次过滤/高水位
+src/DP.Vision.Acquisition.Runtime/VisionResourceSession.cs   资源会话：状态机 + 接收口 + 停止门 + 领取门
+src/DP.Vision.Acquisition.Abstractions/VisionSourceDiagnostics.cs   公共诊断快照（状态/代次/持有者/计数）
+src/DP.Vision.Acquisition.Abstractions/IVisionAcquisitionRunOwner.cs 采集侧运行所有权（BeginRun/EndRun）
+```
+
+演进文件：
+
+```text
+src/DP.Vision.Acquisition.Runtime/VisionAcquisitionRuntime.cs  按模式路由；BufferedExternal 经 ResourceSession
+src/DP.Vision.Acquisition.Runtime/DP.Vision.Acquisition.Runtime.csproj  加 InternalsVisibleTo（队列白盒单测）
+```
+
+设计要点：
+
+- `VisionFrameInbox` **只负责队列语义**，不感知设备与运行；`Enqueue` 的返回值告诉调用方
+  "已接管"还是"已由队列释放"，使所有权在**进入点**就确定，避免调用方与队列互相猜测。
+- 接收序号（`ReceivedSequence`）在 `Enqueue` 时分配，**即使该帧因满/超龄被拒也照样递增**——
+  序号表达"第几次回调到达"，不是"第几帧入队"，否则诊断会因丢帧而失去时间轴。
+- `VisionResourceSession` 的**单 Claim 门**用 `SemaphoreSlim(1,1).Wait(0)`：不做排队，
+  同一 Source 同时只允许一个等待中的领取，第二个并行请求**确定性冲突**而不是排队。
+- 领取时先按代次过滤、再按超龄清退、最后才取队首——三条都在同一个锁内完成，
+  所以"上一轮运行的帧"不可能被新一轮领走。
+- **停止门**：`DisposeAsync` 先停接收流（契约保证等待已进入的回调退出），再清空队列，
+  再唤醒全部等待者令其失败。顺序颠倒会出现"回调仍在进入而队列已释放"。
+
+测试（26 例，双 TFM 各一套）：
+
+```text
+Streaming/BufferedExternalInboxTests.cs  15 例  黑盒：两种时序、FIFO、并行领取、取消竞争、
+                                                溢出、超龄、跨代次、所有权冲突、停止语义
+Streaming/FrameInboxUnitTests.cs         11 例  白盒：容量/字节预算/超龄/代次过滤/高水位/
+                                                Drain 所有权转移（这些无法只从公共 API 到达）
+```
+
+**实测**：`DP.Vision.sln` 750 例 0 失败（702 → 750）；`DP.WorkFlow.sln` 0 警告 0 错误。
+
+**变异验证**（撤销后全部复绿）：
+
+| 停用/改坏的行为 | 精确变红 |
+|---|---|
+| 容量与字节预算检查 | 4 例 |
+| 超龄判定 | 2 例 |
+| 单 Claim 门（并行领取不再冲突） | 1 例 |
+| 退役时清空未领取帧 | 1 例 |
+| 流结束不再唤醒等待者 | 1 例 |
+| 代次过滤（旧代次帧可被领取） | 2 例 |
+| 释放会话时不停接收流 | 1 例 |
+| 运行结束（租约释放）时不停流 | 2 例 |
+
+**变异验证抓出的覆盖盲区与测试缺陷**：
+
+- `RuntimeDisposal_StopsStreamEvenWithoutLeaseRetirement` **第一版没红**：`StreamDisposeCount`
+  被 `Stream.DisposeAsync` 与**设备自身 `DisposeAsync`** 两条路径同时自增，且断言用 `>= 1`，
+  于是"释放会话不停流"被"随后释放设备"顶了上去。已把两条路径**分开计数并记录事件顺序**。
+- 同一变异还暴露出：`ReturnedFrame_RemainsReadableAfterDeviceDisposed` 断言了同一件事却也没红——
+  它被 `DisarmAsync`（运行结束）的停流兜住了。这说明**当时缺少"运行结束即停流、而运行时仍存活"**
+  的用例，而这才是生产常态（运行时比单根运行活得久）。已补
+  `RunEnd_StopsStreamWhileRuntimeStaysAlive`。
+- `VisionFrameInbox.Drain()` 的注释写"释放全部待领取条目"，实现是**把所有权转移给调用方、不释放**。
+  测试锁的是后者，注释与实现不符，已更正。
+
+**V1-B 的边界**：`BufferedExternal` 现在运行期**可被领取**，但**根运行 Epoch 尚未接线**——
+`BeginRun` 由调用方显式驱动，宿主还没有在首节点前调用它。跨代次过滤已在队列层实现并有测试，
+但"上一根运行的帧不会进入下一运行"的端到端保证要等 V1-C。**没有任何真实厂商回调。**
 
 ### V1-C：根运行Epoch接线
 
@@ -624,16 +695,32 @@ Concurrency/StreamingFrameSinkContractTests.cs    9 例  交付顺序、停止�
 17. 每个被拒绝、超龄和未领取帧最终只Dispose一次。
 18. Provider设备关闭后，已返回Frame仍可读。
 
-当前覆盖（V1-A 完成时）：
+当前覆盖（V1-B 完成时）：
 
 | 项 | 状态 | 覆盖用例 |
 |---|---|---|
 | 1 OnDemand 完全回归 | 已覆盖 | 既有 56 例 + 5参数绑定/6参数元数据向后兼容用例 |
+| 2 回调先到，Capture 立即领取 | 已覆盖 | `CallbackBeforeCapture_IsClaimedImmediately` |
+| 3 Capture 先等待，回调后完成 | 已覆盖 | `CaptureBeforeCallback_CompletesWhenFrameArrives` |
+| 4 三帧按 FIFO 顺序领取 | 已覆盖 | `ThreeFrames_AreClaimedInFifoOrder`、`Claim_ReturnsFramesInArrivalOrder` |
+| 5 两个并行 Claim 确定性拒绝其一 | 已覆盖 | `ParallelClaims_RejectExactlyOneDeterministically` |
+| 6 取消等待不吞掉下一帧 | 已覆盖 | `CancelledClaim_DoesNotSwallowNextFrame` |
+| 7 取消与回调同时发生时帧只有一个所有者 | 已覆盖 | `CancelRacingCallback_LeavesFrameWithSingleOwner` |
+| 8 容量满后 Source 进入 Faulted 且新帧被释放 | 已覆盖 | `InboxOverflow_FaultsSourceAndReleasesFrames`、`Enqueue_RejectsWhenCapacityReached`、`Enqueue_RejectsWhenByteBudgetExceeded` |
+| 9 超龄帧被释放且不能成功返回 | 已覆盖 | `ExpiredFrame_IsReleasedAndNeverReturned`、`Claim_DropsExpiredFramesInsteadOfReturningThem` |
+| 10 新 Epoch 不能领取旧 Epoch 帧 | 已覆盖 | `PreviousRunFrames_DoNotEnterNextRun`、`Claim_DoesNotReturnFramesFromAnotherEpoch`、`Claim_RejectsStaleEpochEvenWhenInboxWasNotDrained`、`DropStaleEpochs_KeepsOnlyCurrentEpoch` |
+| 11 Nested 准备不清空父 Epoch | 待 V1-C | 需要宿主侧运行所有权接线 |
+| 12 根运行所有权冲突明确失败 | 已覆盖 | `SecondRootRun_ConflictsWithHolderIdentity` |
 | 13 DeviceSequence 原样进入 Metadata | 已覆盖 | `Stream_DeliversFramesInArrivalOrder`、`CaptureMetadata_BufferedExternalPreservesReceivedFacts` |
+| 14 Stream 异常完成后所有等待者失败 | 已覆盖 | `StreamCompletion_FailsWaitersImmediately` |
 | 15 Dispose 等待在途 Publish 退出 | 已覆盖 | `Stream_DisposeWaitsForInFlightCallback` |
-| 16 Dispose 后不接受新 Capture 或回调 | 部分 | `Stream_NoDeliveryAfterStreamDisposed`、`Device_DisposeEndsStream`；"不接受新 Capture"待 V1-B 的停止门 |
-| 17 被拒绝帧只 Dispose 一次 | 部分 | `Stream_RejectedFrameIsDisposedAndFailureDoesNotEscape`（观察真实 `IImageSource`）；超龄与未领取属 V1-B |
-| 2–12、14、18 | 待 V1-B/V1-C | 需要 ResourceSession、有界FIFO 与根运行 Epoch |
+| 16 Dispose 后不接受新 Capture 或回调 | 已覆盖 | `Stream_NoDeliveryAfterStreamDisposed`、`Device_DisposeEndsStream`、`RuntimeDisposal_StopsStreamEvenWithoutLeaseRetirement`、`RunEnd_StopsStreamWhileRuntimeStaysAlive` |
+| 17 每个被拒绝、超龄和未领取帧只 Dispose 一次 | 已覆盖 | `EveryFrame_IsDisposedExactlyOnce`（观察真实 `IImageSource`）、`Drain_ReturnsAllEntriesWithoutReleasingThem` |
+| 18 Provider 设备关闭后已返回 Frame 仍可读 | 已覆盖 | `ReturnedFrame_RemainsReadableAfterDeviceDisposed` |
+| 19 队列高水位可观测 | 补充 | `HighWatermarks_TrackPeakOccupancy`、`Enqueue_AssignsMonotonicSequenceEvenWhenRejected` |
+
+**仍未覆盖（属于 V1-C/V1-D/E）**：宿主在首节点前取得 Source 所有权的端到端路径、
+Nested 继承语义、真实厂商回调下的断线与停止。
 
 ## 15. 现场验收清单
 

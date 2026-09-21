@@ -21,6 +21,7 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
 {
     private readonly object _callbackGate = new object();
     private readonly List<string> _sinkFailures = new List<string>();
+    private readonly List<string> _events = new List<string>();
     private readonly Func<byte, IImageSource> _imageFactory;
     private IVisionProviderFrameSink? _sink;
     private bool _streamCompleted;
@@ -49,11 +50,27 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
     /// <summary>布防次数。</summary>
     public int StreamStartCount => Volatile.Read(ref _streamStartCount);
 
-    /// <summary>接收流被释放的次数。</summary>
+    /// <summary>
+    /// 接收流被**显式**释放的次数。
+    /// <para>
+    /// 只统计 <c>IVisionAcquisitionStream.DisposeAsync()</c>。设备自身被释放时也会结束接收，
+    /// 但那是另一条路径，计入 <see cref="DisposeCount"/> 与 <see cref="Events"/>，不进这个计数——
+    /// 否则"运行时是否主动停流"就无法与"设备被关掉顺带停流"区分开。
+    /// </para>
+    /// </summary>
     public int StreamDisposeCount => Volatile.Read(ref _streamDisposeCount);
 
     /// <summary>设备自身被释放的次数。</summary>
     public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+    /// <summary>
+    /// 按发生顺序记录的生命周期事件（<c>stream-start</c> / <c>stream-stop</c> / <c>device-dispose</c>）。
+    /// <para>顺序本身是契约的一部分：必须先停流（等在途回调退出）再释放设备。</para>
+    /// </summary>
+    public IReadOnlyList<string> Events
+    {
+        get { lock (_callbackGate) return _events.ToArray(); }
+    }
 
     /// <summary>是否处于布防状态。</summary>
     public bool IsStreaming
@@ -96,7 +113,9 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
             // 一台设备同时只能有一条接收流；重复布防明确拒绝，不静默替换接收方。
             if (_sink is not null)
                 throw new InvalidOperationException("该设备已经在布防状态；一台设备同时只允许一条接收流。");
-            _sink = sink;            _streamCompleted = false;
+            _sink = sink;
+            _streamCompleted = false;
+            _events.Add("stream-start");
             Interlocked.Increment(ref _streamStartCount);
         }
 
@@ -152,13 +171,11 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
     {
         lock (_callbackGate)
         {
-            // 释放设备前先结束接收流，避免"设备已释放但回调仍在进入"。
-            if (_sink is not null)
-            {
-                _sink = null;
-                _streamCompleted = true;
-                Interlocked.Increment(ref _streamDisposeCount);
-            }
+            // 真实SDK关闭设备同样会结束接收，所以这里也清空接收方；但**不计入 StreamDisposeCount**，
+            // 否则"运行时是否主动停流"就会被这条兜底掩盖（曾经因此漏掉一处停流缺失）。
+            _sink = null;
+            _streamCompleted = true;
+            _events.Add("device-dispose");
         }
 
         Interlocked.Increment(ref _disposeCount);
@@ -182,6 +199,7 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
             {
                 _device._sink = null;
                 _device._streamCompleted = true;
+                _device._events.Add("stream-stop");
                 Interlocked.Increment(ref _device._streamDisposeCount);
             }
 

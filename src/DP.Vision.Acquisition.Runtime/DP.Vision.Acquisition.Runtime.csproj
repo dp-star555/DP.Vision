@@ -9,4 +9,11 @@
         <!-- 插件Manifest读取需要JSON；只在本加载层引入，公共契约层不引入。 -->
         <PackageReference Include="System.Text.Json" Version="8.0.5" />
     </ItemGroup>
+    <ItemGroup>
+        <!--
+          有界队列与资源会话是纯内部实现：Epoch 过滤、超龄释放与停止门只从公共 API 无法到达，
+          因此对采集测试程序集开放内部可见性做白盒单测。不开放给宿主与Provider。
+        -->
+        <InternalsVisibleTo Include="DP.Vision.Acquisition.Tests" />
+    </ItemGroup>
 </Project>
