@@ -184,6 +184,42 @@ public sealed class HalconAcquisitionProviderPluginTests
         StringAssert.Contains(failure.Message, expectedFragment);
     }
 
+    /// <summary>
+    /// 插件程序集所在目录必须自包含它的厂商依赖。
+    /// 加载器用 <c>Assembly.GetExportedTypes()</c> 发现入口，依赖解析不到就会整包加载失败；
+    /// 部署脚本按"整个输出目录"投放插件包，所以这里守住"输出目录里有厂商程序集"这一条。
+    /// 宿主提供的契约程序集（<c>DP.Vision</c>、<c>DP.Vision.Acquisition.Abstractions</c>）不在检查范围：
+    /// 它们必须来自宿主，放进插件包反而会让插件拿到第二份契约类型，与宿主的中立接口不是同一个类型。
+    /// </summary>
+    [TestMethod]
+    public void PluginDirectory_ContainsVendorDependencies()
+    {
+        var missing = typeof(HalconAcquisitionProviderPlugin).Assembly
+            .GetReferencedAssemblies()
+            .Select(reference => reference.Name ?? string.Empty)
+            .Where(name => name.Length > 0)
+            .Where(name => !HostProvidedAssemblies.Contains(name))
+            .Where(name => !IsFrameworkAssembly(name))
+            .Where(name => !File.Exists(Path.Combine(PluginDirectory, name + ".dll")))
+            .ToArray();
+
+        CollectionAssert.AreEqual(
+            Array.Empty<string>(),
+            missing,
+            "插件目录缺少依赖程序集：" + string.Join("、", missing) + "（目录 " + PluginDirectory + "）");
+    }
+
+    private static readonly string[] HostProvidedAssemblies =
+    {
+        "DP.Vision",
+        "DP.Vision.Acquisition.Abstractions"
+    };
+
+    private static bool IsFrameworkAssembly(string name) =>
+        name.StartsWith("System", StringComparison.Ordinal)
+        || name.StartsWith("Microsoft.", StringComparison.Ordinal)
+        || name is "netstandard" or "mscorlib";
+
     private static string Describe(VisionAcquisitionProviderPluginLoadResult result) =>
         string.Join("；", result.Failures.Select(failure => failure.ManifestPath + " -> " + failure.Reason));
 }

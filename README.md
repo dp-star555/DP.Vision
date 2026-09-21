@@ -176,7 +176,7 @@ dotnet samples/DP.Vision.Demo/bin/Release/net8.0-windows/DP.Vision.Demo.dll --wp
 见[VALIDATION.md](VALIDATION.md)、[PERFORMANCE.md](PERFORMANCE.md)。
 
 - 共享模块每框架75项测试，算法每框架27项测试，两框架通过。
-- 采集Provider：`DP.Vision.Acquisition.Tests`、`DP.Vision.Halcon.Tests`、`DP.Vision.Basler.Tests`、`DP.Vision.Acquisition.Integration.Tests` 两框架合计282项通过，覆盖契约边界、组合/路由/并发、插件目录加载、两个真实Provider并存、Basler像素格式映射与绑定选择器、缺运行时诊断。**不含真实相机出图验收。**
+- 采集Provider：`DP.Vision.Acquisition.Tests`、`DP.Vision.Halcon.Tests`、`DP.Vision.Basler.Tests`、`DP.Vision.Acquisition.Integration.Tests` 两框架合计286项通过，覆盖契约边界、组合/路由/并发、插件目录加载、插件包自包含厂商依赖、两个真实Provider并存、Basler像素格式映射与绑定选择器、缺运行时诊断。**不含真实相机出图验收。**
 - 原生WinForms/WPF×net48/net8：图层/孔洞/分离岛/XLD、缩放平移、旧帧拒绝、6种像素格式、8K/16K分块缓存探针通过。
 - WPF分块细缝经过失败复现与修复，均匀像素边界检查通过。
 - ROI编辑：WinForms实际Windows消息检查；WPF统一指针接口＋原生渲染/Dispatcher检查。WPF物理输入在本机命中其他窗口，因此未标记为物理鼠标路由已验证。两框架Demo工具栏烟测通过。
