@@ -71,26 +71,15 @@ public sealed class VisionAcquisitionDriverModuleLoader
 
     private static IReadOnlyList<IVisionAcquisitionDriverModule> CreateModules(string assemblyPath)
     {
-        // 原生SDK依赖DLL（halcon/pylon等）不是托管Driver Module；先按程序集元数据预检跳过，
-        // 避免把每个原生库都当作失败报告。只有托管程序集才继续。
-        try
-        {
-            _ = AssemblyName.GetAssemblyName(assemblyPath);
-        }
-        catch (BadImageFormatException)
-        {
-            return Array.Empty<IVisionAcquisitionDriverModule>();
-        }
-
         Assembly assembly;
         try
         {
-            assembly = Assembly.LoadFrom(assemblyPath);
+            assembly = VisionAcquisitionPluginAssemblyLoader.Load(assemblyPath);
         }
-        catch (Exception failure) when (failure is not OutOfMemoryException)
+        catch (BadImageFormatException)
         {
-            throw new VisionSourceConfigurationException(
-                $"插件程序集 {assemblyPath} 无法加载；请检查原生依赖与CPU架构是否匹配。{failure.Message}", failure);
+            // 原生SDK依赖DLL（halcon/pylon等）不是托管Driver Module，静默跳过而不是报告失败。
+            return Array.Empty<IVisionAcquisitionDriverModule>();
         }
 
         Type[] types;

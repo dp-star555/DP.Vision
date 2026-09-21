@@ -870,7 +870,9 @@ V2-2 Provider 工厂无参缺陷、discovery→deviceSettings 投影、DP.WorkFl
 2. **§21 未显式引用条目补齐**：逐条核对 §21 全部 28 条，把此前从未被引用的 8 条（§21.1/2/11/12/13/14/16/25）补齐显式引用。
    其中 §21.27/§21.28 为重点（帧所有权与设备关闭后可读性），其余 6 条与 §21.27/28 一样，**实现与测试均已存在**，本阶段只补文档证据；
    §21.25 在 DP.Vision 侧不适用（属 WorkFlow 宿主与 Studio 的属性迁移路径）。
-3. **net48 构建卫生**：修复 `DP.Vision.Halcon.Tests` 在 net48 下的两处 CS1501。
+3. **net48 构建卫生与插件加载正确性**：修复 `DP.Vision.Halcon.Tests` 在 net48 下的两处 CS1501；
+   并修复 net48 首次可执行后暴露的插件加载缺陷——两个加载器对插件目录里的 DLL 一律 `Assembly.LoadFrom`，
+   在 .NET Framework 上会把副本装进 LoadFrom 上下文，插件入口类型实现另一份契约接口而被静默漏掉（详见"记录"）。
 
 ### 验收证据（§21）
 
@@ -908,30 +910,38 @@ V2-2 Provider 工厂无参缺陷、discovery→deviceSettings 投影、DP.WorkFl
 - `tests/DP.Vision.Acquisition.Tests/Configuration/VisionAcquisitionMachineConfigurationTests.cs`：补显示名断言。
 - `tests/DP.Vision.Acquisition.Tests/TestDoubles/TestDeviceSettingsParser.cs`：net48 下补非空断言，消除既有 CS8604。
 - `tests/DP.Vision.Halcon.Tests/HalconLineScanAcquisitionTests.cs`：两处 `string.Contains(string, StringComparison)` 改为 `IndexOf(...) >= 0`。
+- `src/DP.Vision.Acquisition.Runtime/VisionAcquisitionPluginAssemblyLoader.cs`（新增）：插件程序集统一加载入口，同身份程序集已由宿主加载时复用该实例。
+- `src/DP.Vision.Acquisition.Runtime/VisionAcquisitionDriverModuleLoader.cs`：改用统一加载入口，删除重复的元数据预检与 `Assembly.LoadFrom`。
+- `src/DP.Vision.Acquisition.Runtime/VisionAcquisitionProviderPluginLoader.cs`：同上，并对非托管程序集给出明确诊断。
+- `tests/DP.Vision.Acquisition.Tests/Plugins/VisionAcquisitionDriverModuleLoaderTests.cs`：新增 1 例"契约副本 + 子目录副本不得遮蔽入口类型"回归。
 
 ### 测试结果
 
 `dotnet build DP.Vision.sln -c Debug`：**0 警告 0 错误**（net8.0-windows 与 net48 全目标）。
-`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**625 通过 / 0 失败**（V2-9b 基线 624 + 新增 1）。
-分套件：DP.Vision.Acquisition.Tests 190 · DP.Vision.Tests 115 · DP.Vision.Algorithms.Tests 67 · DP.Vision.Basler.Tests 104 ·
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**626 通过 / 0 失败**（V2-9b 基线 624 + 新增 2）。
+分套件：DP.Vision.Acquisition.Tests 191 · DP.Vision.Tests 115 · DP.Vision.Algorithms.Tests 67 · DP.Vision.Basler.Tests 104 ·
 DP.Vision.Halcon.Tests 145 · DP.Vision.Acquisition.Integration.Tests 4。
 
-net48 目标此前因 `DP.Vision.Halcon.Tests` 的 CS1501 根本无法编译，故从未执行；本阶段修好编译后首次运行：
-`DP.Vision.Acquisition.Tests` 190 · `DP.Vision.Tests` 115 · `DP.Vision.Algorithms.Tests` 67 · `DP.Vision.Acquisition.Integration.Tests` 4 全通过；
-`DP.Vision.Basler.Tests` 102/104 与 `DP.Vision.Halcon.Tests` 143/145 各有 2 例失败，全部集中在"把程序集副本放进子目录后按 `plugin.json` 发现"这一场景
-（`PluginPackageInSubdirectory_IsDiscoveredFromRoot`、`PluginDirectory_ContributesAcquisitionTypeWithoutManifest` / `PluginDirectory_ContributesBothKindsWithoutManifest`）。
-**该失败与本阶段无关且为既有**：`git stash` 掉本阶段改动后，`DP.Vision.Basler.Tests` 在基线上以完全相同的两条失败复现；
-根因是 .NET Framework 的 `Assembly.LoadFrom` 在同一身份程序集已从另一路径加载时不返回可统一接口类型的新副本，
-属 .NET Framework 插件加载限制，不在本阶段范围（本阶段只要求 net48 目标可编译）。
+net48 目标此前因 `DP.Vision.Halcon.Tests` 的 CS1501 根本无法编译，故从未执行；本阶段修好编译后首次运行即暴露插件加载缺陷
+（`DP.Vision.Basler.Tests` 2 例、`DP.Vision.Halcon.Tests` 2 例），修复后 **net48 与 net8.0-windows 同为 626 通过 / 0 失败**，
+分套件数量与上完全一致。
 
 ### 记录（相对计划的偏离与待办）
 
 - **§21 全部 28 条无需改实现**：核对结论是未显式引用的 8 条（§21.1/2/11/12/13/14/16/27/28 中的 7 条）早已由既有用例满足（见上两表），
-  本阶段只补齐文档显式引用，未新增实现改动；§21.25 属 WorkFlow 宿主侧，明确不适用。因此本阶段的测试数只增加了 1 例（注册清单回归）。
+  本阶段只补齐文档显式引用，未新增实现改动；§21.25 属 WorkFlow 宿主侧，明确不适用。
 - **`DisplayName` 只用于界面与诊断**：不参与 Provider 身份判定，也不进入 `CompositionId`（组合身份仍只由 `providerId@version`、绑定与私有配置摘要决定）。
 - **插件路径（`Compose(modules, sources)`）不填 `DisplayName`**：`IVisionAcquisitionProviderModule` 只提交工厂与身份，
   显示名目前只由 AcquisitionType 声明；消费方应把空值回退为 `ProviderId`。
-- **net48 插件加载失败已记录、未修**：见"测试结果"末段；若要支持 .NET Framework 宿主按子目录投放插件包，
-  需要在加载器里改用 `Assembly.LoadFile`/独立加载上下文或按路径去重，属独立立项。
-- **提交状态**：主提交 `2c048a7`（9 文件 +139/-27）；§21 引用补齐为 `8cdad6a`（1 文件 +21/-2）。
+- **修复了 net48 首次可执行后暴露的插件加载缺陷（超出原定范围，经确认后实施）**：
+  两个加载器原先对插件目录里的每个 DLL 一律 `Assembly.LoadFrom`。.NET Framework 会把副本装进 LoadFrom 上下文，
+  于是同一份契约程序集在进程里出现两个类型身份——插件入口类型实现的是 LoadFrom 上下文那一份，
+  而宿主用 `typeof(...).IsAssignableFrom` 比对的是默认上下文那一份，结果静默为 `false`，
+  插件被误判成"程序集里没有入口类型"。部署约定把整个输出目录当插件包，目录里必然带有宿主提供的契约程序集，
+  也可能存在被复制到子目录的副本，因此这条路径在真实部署中同样会踩到。
+  修复方式：新增 `VisionAcquisitionPluginAssemblyLoader`，按程序集身份（名称 + 版本 + 区域 + 公钥标记）先查
+  `AppDomain.CurrentDomain.GetAssemblies()`，命中即复用宿主实例，只有宿主确实没有时才 `LoadFrom`。
+  .NET 上的行为不变（其 `LoadFrom` 本就按身份去重），net48 由此与 net8.0 一致。
+  因果已用 `git stash` 双向验证：去掉该修复时 4 例失败复现，恢复后全绿。
+- **提交状态**：主提交 `2c048a7`（9 文件 +139/-27）；§21 引用补齐为 `8cdad6a`（1 文件 +21/-2）；插件加载修复为 `<待回填>`。
 

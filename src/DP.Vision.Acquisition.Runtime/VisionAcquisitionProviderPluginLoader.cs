@@ -284,12 +284,12 @@ public sealed class VisionAcquisitionProviderPluginLoader
         Assembly assembly;
         try
         {
-            assembly = Assembly.LoadFrom(assemblyPath);
+            assembly = VisionAcquisitionPluginAssemblyLoader.Load(assemblyPath);
         }
-        catch (Exception failure) when (failure is not OutOfMemoryException)
+        catch (BadImageFormatException failure)
         {
             throw new VisionSourceConfigurationException(
-                $"插件程序集 {assemblyPath} 无法加载；请检查原生依赖与CPU架构是否匹配。{failure.Message}", failure);
+                $"插件程序集 {assemblyPath} 不是托管程序集；请检查插件包内容与CPU架构是否匹配。{failure.Message}", failure);
         }
 
         Type[] types;

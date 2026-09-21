@@ -114,6 +114,30 @@ public sealed class VisionAcquisitionDriverModuleLoaderTests
             first.Modules.Select(module => module.ExtensionId).ToArray());
     }
 
+    /// <summary>
+    /// 部署约定把整个输出目录当作插件包，因此插件根目录里既有宿主提供的契约程序集，
+    /// 也可能存在被复制到子目录的同身份插件副本；这两者都不得让加载器再装第二份。
+    /// .NET Framework 的 <c>LoadFrom</c> 会把副本装进另一个加载上下文，入口类型实现的是另一份契约接口，
+    /// <c>IsAssignableFrom</c> 静默为 false，模块被漏掉（§21.1 的"自动发现"在 net48 下失效）。
+    /// </summary>
+    [TestMethod]
+    public void ContractCopyAndSubdirectoryCopy_DoNotHideDriverModules()
+    {
+        var root = CreateRoot();
+        StageTestAssembly(Path.Combine(root, "dp.vision.plugin"));
+        File.Copy(
+            typeof(VisionSourceReference).Assembly.Location,
+            Path.Combine(root, "DP.Vision.Acquisition.Abstractions.dll"),
+            overwrite: true);
+
+        var result = _loader.Load(root);
+
+        Assert.AreEqual(0, result.Failures.Count, Describe(result));
+        CollectionAssert.Contains(
+            result.Modules.Select(module => module.ExtensionId).ToArray(),
+            ConfigurableAcquisitionDriverModule.ModuleIdentity);
+    }
+
     /// <summary>V2-1完成条件：不读取机器相机配置，也能列出已安装AcquisitionType并冻结Catalog。</summary>
     [TestMethod]
     public void CatalogTypes_AreListableWithoutMachineConfiguration()
