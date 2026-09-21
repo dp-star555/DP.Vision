@@ -39,7 +39,7 @@ net8.0-windows 分套件：
 | V2-1 AcquisitionTypeCatalog 与自动 Module 发现 | ✅ 已完成（见下文） |
 | V2-2 机器相机定义与不可变 Composition | ✅ 已完成（见下文） |
 | V2-3 应用级连接生命周期 | ✅ 已完成（见下文） |
-| V2-4 TransferPolicy 与 Epoch 解耦 | ⏳ 待实施 |
+| V2-4 TransferPolicy 与 Epoch 解耦 | ✅ 已完成（见下文） |
 | V2-5 面阵/线扫双节点模型 | ⏳ 待实施 |
 | V2-6 Basler 迁移 | ⏳ 待实施 |
 | V2-7 HALCON 迁移 | ⏳ 待实施 |
@@ -228,3 +228,63 @@ Runtime（实现层）：
 
 WorkFlow 侧（独立仓库）：`DP.WorkFlow.Nodes.Vision.Acquisition.Tests` 8 通过（`FakeStreamingRuntime` 构造即启动；
 `运行准备校验失败时设备没有被布防` 改 V2-3 语义：OpenCount==1 且 StreamStartCount==0）；两个样例工程构建 0 警告 0 错误。
+
+## V2-4：TransferPolicy 与 Epoch 解耦
+
+状态：**已完成**（2026-09-21）
+
+### 需求覆盖（§20 V2-4）
+
+1. **PerRequest/OnConnect 策略**：`EVisionAcquisitionTransferStart`（V2-2 已定义）与 `EVisionAcquisitionMode` 在 Composer 中 1:1 映射
+   （OnConnect ≡ BufferedExternal ≡ ExclusiveRun）。本阶段落实为行为解耦：TransferPolicy 决定"接收流何时布防"，
+   Epoch 决定"哪些帧可领取"，两者不再耦合；"增加策略"不需要新增枚举。
+2. **OnConnect 流在 Runtime Start 阶段启动**：`StartResourceAsync` 打开设备后对 `BufferedExternal` 源调用 `session.StartStreamAsync`，
+   接收流布防一次、跨根运行保持（§21.10）；失败文案改为"打开设备或启动接收流失败"。
+3. **BeginEpoch 只开放本代次接收/领取，不启动设备**：`BeginEpoch` 改为状态门（仅 Streaming/Armed 通过）+ 代次严格递增 +
+   队列 `BeginEpoch` 清退旧代次并释放，不再打开设备、不再启动接收流。
+4. **EndEpoch 清理本代次未领取帧，但不停流、不关设备**：新增 `EndEpoch`，移出并释放本代次未领取帧、回到
+   Streaming（流运行、无活动代次）；退役 `RunLease.DisposeAsync` 只调 `EndEpoch`，删除 `DisarmAsync`。
+5. **无 ActiveEpoch 完整帧释放并计数**：`VisionFrameInbox` 持有活动代次；无代次时 `TryEnqueue` 以 `NoActiveEpoch` 拒绝、
+   释放、单独计数（`RejectedWithoutEpochCount`），属正常间隔隔离，不触发 `FaultSource`；仅 `Overflow` 仍 `MarkFaulted`。
+6. **Runtime Dispose 固定顺序停流和关设备**：`DisposeAsync` 保持 停流（等待回调退出）→ 排空 → 等在途操作 → 关设备。
+
+### 验收证据（§21）
+
+| 验收（§21） | 证据 |
+|---|---|
+| 完成条件：第二根运行不重新 Open、不重新创建 SDK 对象 | `SecondRun_ReusesOpenDeviceInsteadOfOpeningCameraAgain`（StreamStartCount==1、OpenedBindings==1、DisposeCount==0）；WorkFlow `上一根运行未领取的帧不会进入下一根运行`（StreamStartCount==1、OpenCount==1） |
+| OnConnect 流由 Runtime Start 布防、先于第一根运行（§21.10） | `OnConnectStream_ArmedAtRuntimeStart_BeforeFirstRun`（State==Streaming、StreamStartCount==1、无代次帧拒绝计数） |
+| Epoch 隔离仍成立：旧代次帧不进新代次 | `BeginEpoch_DropsPreviousEpochFrames` · `PreviousRunFrames_DoNotEnterNextRun` · WorkFlow `上一根运行未领取的帧不会进入下一根运行` |
+| 退役不停流、不关设备（§21.15/17） | `RunEnd_KeepsStreamRunningAndRejectsFramesWithoutEpoch`（StreamStopCount==0、DisposeCount==0、IsStreaming）· `EndEpoch_DrainsUnclaimedFramesAndRecordsCount`（UnclaimedAtEpochEnd==1）· WorkFlow `根运行退役后接收流保持运行且无代次帧被释放` |
+| 无活动代次帧被释放并计数、不触发故障 | `Enqueue_WithoutActiveEpoch_RejectsAndCounts` · 退役用例（FramesRejectedWithoutEpoch==1 且 IsFaulted==false） |
+
+### 新增/变更契约与实现
+
+- `EVisionResourceState` 新增 `Streaming = 6`（保留原枚举值）：流运行、无活动代次，可接收（无代次帧拒绝计数）但不可领取。
+- `VisionResourceSession`：`ArmAsync(openDevice, ct)` → `StartStreamAsync(ct)`（幂等、要求设备已打开、校验流式能力）；
+  `BeginEpoch` 状态门 + 严格递增；新增 `EndEpoch`；删除 `DisarmAsync`；`PublishCore` 按 `reject` 区分 `Overflow`（FaultSource）
+  与 `NoActiveEpoch`（正常间隔）；`EnsureClaimable` 无活动代次抛 `VisionDeviceOfflineException`；`Snapshot` 追加两个计数。
+- `VisionFrameInbox`：Epoch 归队列所有（计划 §10.3，不是相机连接状态）；`TryEnqueue(frame, receivedAtUtc, out seq, out reason, out reject)`
+  （去掉 epoch 参数）；`TryClaim(now)`（用内部 `_activeEpoch`）；`DropStaleEpochs` → `BeginEpoch(epoch)`（严格递增、清退旧代次、内部释放）+
+  `EndEpoch()`（移出全部、计数未领取、清空活动代次）；新增 `VisionFrameInboxReject`（None/Overflow/NoActiveEpoch）。
+- `VisionAcquisitionRuntime`：`StartResourceAsync` 对 BufferedExternal 布防接收流；`RunLease.ArmAsync` 改为非 async
+  （只 `BeginEpoch` + 登记，避免 CS1998），`DisposeAsync` 改 `EndEpoch`；删除 `ResolveRegistration`。
+- `VisionSourceDiagnostics` 追加尾部可选参数 `FramesRejectedWithoutEpoch`/`UnclaimedAtEpochEnd`（默认值保持兼容）。
+
+### 测试结果
+
+`dotnet test DP.Vision.sln -c Debug -f net8.0-windows`：**541 通过 / 0 失败**（基线 538 + 净增 3）。
+
+- DP.Vision.Acquisition.Tests 150 → 153：
+  - `FrameInboxUnitTests` 按新 Inbox 契约重写（`BeginEpoch`/`EndEpoch`/无 epoch 参数），新增 `Enqueue_WithoutActiveEpoch_RejectsAndCounts`、
+    `EndEpoch_DrainsAllEntriesAndCountsUnclaimed`、`BeginEpoch_RejectsNonIncreasing`；`Claim_RejectsStaleEpochEvenWhenInboxWasNotDrained` 删除（新 API 不可达），
+    `Claim_DoesNotReturnFramesFromAnotherEpoch` 与 `DropStaleEpochs_KeepsOnlyCurrentEpoch` 合并为 `BeginEpoch_DropsPreviousEpochFrames`。
+  - `BufferedExternalInboxTests` 新增 `OnConnectStream_ArmedAtRuntimeStart_BeforeFirstRun`、`EndEpoch_DrainsUnclaimedFramesAndRecordsCount`；
+    `SecondRun_ReusesOpenDevice...`（StreamStartCount 2→1）与 `RunEnd_StopsStreamWhileRuntimeStaysAlive`（→ `RunEnd_KeepsStreamRunningAndRejectsFramesWithoutEpoch`）按 V2-4 语义重写。
+- 其余套件不变：DP.Vision.Tests 115 · Integration 4 · Algorithms 67 · Basler 91 · Halcon 111。
+
+WorkFlow 侧（独立仓库）：`DP.WorkFlow.Nodes.Vision.Acquisition.Tests` 8 通过；
+`根运行退役后相机停流且不再交付回调` → `根运行退役后接收流保持运行且无代次帧被释放`（IsStreaming==true、StreamStopCount==0、after-run 帧被释放计数），
+`上一根运行未领取的帧不会进入下一根运行` StreamStartCount 2→1，
+`运行准备校验失败时设备没有被布防` → `运行准备校验失败时本轮没有活动代次`（StreamStartCount==1）；
+`DP.WorkFlow.Nodes.Vision.Tests` 39 通过、`DP.WorkFlow.Runtime.Tests` 32 通过，无回归。

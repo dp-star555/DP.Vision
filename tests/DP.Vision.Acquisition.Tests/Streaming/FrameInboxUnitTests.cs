@@ -8,8 +8,9 @@ namespace DP.Vision.Acquisition.Tests;
 /// <summary>
 /// 有界待领取队列的白盒单测。
 /// <para>
-/// Epoch 过滤与超龄释放无法只从公共 API 到达：会话退役时会清空队列，
-/// 因此"旧代次帧被丢弃"这条路径只能直接测队列本身。
+/// V2-4 起 Epoch 属于队列内部状态（实施基线 §10.3）：<see cref="VisionFrameInbox.BeginEpoch"/> 开放
+/// 本代次的接收与领取，<see cref="VisionFrameInbox.EndEpoch"/> 收口本代次（移出全部未领取帧）；
+/// 队列本身不驱动任何设备动作。因此本文件可以直接测代次开合与无代次拒绝这两条路径。
 /// </para>
 /// <para>
 /// 队列是内部实现，本文件依赖 <c>InternalsVisibleTo</c>；它只对采集测试程序集开放。
@@ -26,18 +27,20 @@ public sealed class FrameInboxUnitTests
     {
         var counter = new DisposalCounter();
         var inbox = new VisionFrameInbox(Policy());
+        inbox.BeginEpoch(1);
 
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 11), 1, Now, out var first, out var accepted));
-        Assert.IsNull(accepted, "被接受的帧不应带溢出原因。");
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 12), 1, Now, out var second, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 13), 1, Now, out var third, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 11), Now, out var first, out var reason, out var reject));
+        Assert.IsNull(reason, "被接受的帧不应带拒绝原因。");
+        Assert.AreEqual(VisionFrameInboxReject.None, reject);
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 12), Now, out var second, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 13), Now, out var third, out _, out _));
         Assert.AreEqual(1, first);
         Assert.AreEqual(2, second);
         Assert.AreEqual(3, third);
 
         for (var index = 0; index < 3; index++)
         {
-            var claim = inbox.TryClaim(Now, 1);
+            var claim = inbox.TryClaim(Now);
             Assert.IsNotNull(claim.Entry);
             Assert.AreEqual(11L + index, claim.Entry!.DeviceSequence);
 
@@ -56,8 +59,9 @@ public sealed class FrameInboxUnitTests
     public void Claim_OnEmptyInboxReturnsNoEntry()
     {
         var inbox = new VisionFrameInbox(Policy());
+        inbox.BeginEpoch(1);
 
-        var claim = inbox.TryClaim(Now, 1);
+        var claim = inbox.TryClaim(Now);
 
         Assert.IsNull(claim.Entry);
         Assert.AreEqual(0, claim.ExpiredCount);
@@ -72,12 +76,14 @@ public sealed class FrameInboxUnitTests
     {
         var counter = new DisposalCounter();
         var inbox = new VisionFrameInbox(new VisionFrameInboxPolicy(capacity: 2, byteBudget: 4096, maximumFrameAge: TimeSpan.FromMinutes(1)));
+        inbox.BeginEpoch(1);
 
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
-        Assert.IsFalse(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out var reason));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
+        Assert.IsFalse(inbox.TryEnqueue(Frame(counter), Now, out _, out var reason, out var reject));
 
         Assert.IsNotNull(reason);
+        Assert.AreEqual(VisionFrameInboxReject.Overflow, reject);
         StringAssert.Contains(reason!, "帧数 2/2", "溢出诊断必须给出当前占用与上限，否则现场无法判断该调容量还是调消费端。");
         Assert.AreEqual(2, inbox.Count);
         Assert.AreEqual(1, inbox.RejectedCount);
@@ -96,12 +102,14 @@ public sealed class FrameInboxUnitTests
         var counter = new DisposalCounter();
         // 每帧 Gray8 2x2 = 4 字节；预算 8 字节只够两帧，容量故意给足以隔离字节维度。
         var inbox = new VisionFrameInbox(new VisionFrameInboxPolicy(capacity: 16, byteBudget: 8, maximumFrameAge: TimeSpan.FromMinutes(1)));
+        inbox.BeginEpoch(1);
 
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
-        Assert.IsFalse(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out var reason));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
+        Assert.IsFalse(inbox.TryEnqueue(Frame(counter), Now, out _, out var reason, out var reject));
 
         Assert.IsNotNull(reason);
+        Assert.AreEqual(VisionFrameInboxReject.Overflow, reject);
         StringAssert.Contains(reason!, "字节");
         Assert.AreEqual(8, inbox.Bytes);
         Assert.AreEqual(2, inbox.Count);
@@ -120,9 +128,10 @@ public sealed class FrameInboxUnitTests
     {
         var counter = new DisposalCounter();
         var inbox = new VisionFrameInbox(new VisionFrameInboxPolicy(capacity: 4, byteBudget: 4096, maximumFrameAge: TimeSpan.FromMilliseconds(50)));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
+        inbox.BeginEpoch(1);
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
 
-        var claim = inbox.TryClaim(Now.AddMilliseconds(80), 1);
+        var claim = inbox.TryClaim(Now.AddMilliseconds(80));
 
         Assert.IsNull(claim.Entry, "超龄帧不得被返回。");
         Assert.AreEqual(1, claim.ExpiredCount);
@@ -133,77 +142,33 @@ public sealed class FrameInboxUnitTests
         Assert.IsTrue(counter.IsBalanced, counter.ToString());
     }
 
-    /// <summary>其他代次的帧一律不领取，并在扫描中释放。</summary>
-    [TestMethod]
-    public void Claim_DoesNotReturnFramesFromAnotherEpoch()
-    {
-        var counter = new DisposalCounter();
-        var inbox = new VisionFrameInbox(Policy());
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 1), 1, Now, out _, out _));
-
-        var claim = inbox.TryClaim(Now, 2);
-
-        Assert.IsNull(claim.Entry, "上一轮运行的帧不得被新一轮领取。");
-        Assert.AreEqual(1, claim.StaleEpochCount);
-        Assert.AreEqual(1, inbox.StaleEpochCount);
-        Assert.AreEqual(0, inbox.Count);
-        Assert.AreEqual(1, counter.Disposes);
-        Assert.IsTrue(counter.IsBalanced, counter.ToString());
-    }
-
     /// <summary>
-    /// 兜底路径：即使退役没来得及清空队列，旧代次的帧也不得被新一轮领取。
-    /// <para>
-    /// 端到端用例走的是"退役即清空"这条主路径，因此本用例不调用清退，
-    /// 直接构造"队列里同时留着旧代次与新代次帧"来锁住代次过滤这道独立防线。
-    /// </para>
+    /// 代次切换即清退旧代次：BeginEpoch 必须把上一代次的帧全部释放并计数，
+    /// 不得留给新一轮领取，也不得让"上一轮未清空"影响新代次。
     /// </summary>
     [TestMethod]
-    public void Claim_RejectsStaleEpochEvenWhenInboxWasNotDrained()
-    {
-        var counter = new DisposalCounter();
-        var inbox = new VisionFrameInbox(Policy());
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 1), 1, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 2), 2, Now, out _, out _));
-
-        var claim = inbox.TryClaim(Now, 2);
-
-        Assert.IsNotNull(claim.Entry, "当前代次的帧必须可领取。");
-        Assert.AreEqual(2L, claim.Entry!.DeviceSequence, "旧代次帧必须被跳过，而不是按到达顺序先返回。");
-        Assert.AreEqual(1, claim.StaleEpochCount, "被跳过的旧代次帧必须被释放并计数。");
-        Assert.AreEqual(0, inbox.Count, "旧代次帧不得留在队列里等着下一轮再被跳过。");
-        Assert.AreEqual(1, counter.Disposes);
-
-        claim.Entry.Frame.Dispose();
-        Assert.IsTrue(counter.IsBalanced, counter.ToString());
-    }
-
-    /// <summary>清退非当前代次时保留当前代次，且不改变相对顺序。</summary>
-    [TestMethod]
-    public void DropStaleEpochs_KeepsOnlyCurrentEpoch()
+    public void BeginEpoch_DropsPreviousEpochFrames()
     {
         var counter = new DisposalCounter();
         var inbox = new VisionFrameInbox(new VisionFrameInboxPolicy(capacity: 8, byteBudget: 4096, maximumFrameAge: TimeSpan.FromMinutes(1)));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 1), 1, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 2), 1, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 3), 2, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 4), 2, Now, out _, out _));
+        inbox.BeginEpoch(1);
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 1), Now, out _, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 2), Now, out _, out _, out _));
 
-        var dropped = inbox.DropStaleEpochs(2);
+        var dropped = inbox.BeginEpoch(2);
 
         Assert.AreEqual(2, dropped);
-        Assert.AreEqual(2, inbox.Count);
         Assert.AreEqual(2, inbox.StaleEpochCount);
+        Assert.AreEqual(0, inbox.Count, "旧代次帧不得留在队列里等新一轮领取。");
         Assert.AreEqual(2, counter.Disposes);
 
-        var first = inbox.TryClaim(Now, 2);
-        var second = inbox.TryClaim(Now, 2);
-        Assert.AreEqual(3L, first.Entry!.DeviceSequence, "清退后必须保持当前代次的相对顺序。");
-        Assert.AreEqual(4L, second.Entry!.DeviceSequence);
-        first.Entry.Frame.Dispose();
-        second.Entry.Frame.Dispose();
+        // 新代次照常接收与领取，且只有新代次的帧可领取。
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 3), Now, out _, out _, out _));
+        var claim = inbox.TryClaim(Now);
+        Assert.IsNotNull(claim.Entry);
+        Assert.AreEqual(3L, claim.Entry!.DeviceSequence);
+        claim.Entry.Frame.Dispose();
 
-        // 队列与调用方都不再持有句柄后，等式才成立。
         Assert.IsTrue(counter.IsBalanced, counter.ToString());
     }
 
@@ -213,8 +178,9 @@ public sealed class FrameInboxUnitTests
     {
         var counter = new DisposalCounter();
         var inbox = new VisionFrameInbox(Policy());
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 1), 1, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 2), 1, Now, out _, out _));
+        inbox.BeginEpoch(1);
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 1), Now, out _, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 2), Now, out _, out _, out _));
 
         var drained = inbox.Drain();
 
@@ -236,9 +202,10 @@ public sealed class FrameInboxUnitTests
     {
         var counter = new DisposalCounter();
         var inbox = new VisionFrameInbox(new VisionFrameInboxPolicy(capacity: 1, byteBudget: 4096, maximumFrameAge: TimeSpan.FromMinutes(1)));
+        inbox.BeginEpoch(1);
 
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out var first, out _));
-        Assert.IsFalse(inbox.TryEnqueue(Frame(counter), 1, Now, out var second, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out var first, out _, out _));
+        Assert.IsFalse(inbox.TryEnqueue(Frame(counter), Now, out var second, out _, out _));
 
         Assert.AreEqual(1, first);
         Assert.AreEqual(2, second);
@@ -252,17 +219,81 @@ public sealed class FrameInboxUnitTests
     {
         var counter = new DisposalCounter();
         var inbox = new VisionFrameInbox(Policy());
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
+        inbox.BeginEpoch(1);
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
 
-        var claim = inbox.TryClaim(Now, 1);
+        var claim = inbox.TryClaim(Now);
         claim.Entry!.Frame.Dispose();
-        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), 1, Now, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter), Now, out _, out _, out _));
 
         Assert.AreEqual(2, inbox.Count);
         Assert.AreEqual(2, inbox.HighWatermark, "峰值不因领取而回落。");
         Assert.AreEqual(8, inbox.Bytes);
         Assert.AreEqual(8, inbox.BytesHighWatermark);
+    }
+
+    /// <summary>
+    /// 没有活动采集代次时，完整帧必须被拒绝并释放、单独计数，而不是滞留队列或泄漏。
+    /// <para>这是 V2-4 的正常间隔隔离，不代表故障，因此不占溢出计数。</para>
+    /// </summary>
+    [TestMethod]
+    public void Enqueue_WithoutActiveEpoch_RejectsAndCounts()
+    {
+        var counter = new DisposalCounter();
+        var inbox = new VisionFrameInbox(Policy());
+
+        Assert.IsFalse(inbox.TryEnqueue(Frame(counter), Now, out var sequence, out var reason, out var reject));
+
+        Assert.AreEqual(VisionFrameInboxReject.NoActiveEpoch, reject);
+        Assert.IsNotNull(reason);
+        StringAssert.Contains(reason!, "活动采集代次");
+        Assert.AreEqual(1, sequence, "被拒绝的帧同样分配接收序号，便于定位。");
+        Assert.AreEqual(1, inbox.ReceivedCount);
+        Assert.AreEqual(1, inbox.RejectedWithoutEpochCount);
+        Assert.AreEqual(0, inbox.RejectedCount, "无代次拒绝不占用溢出计数。");
+        Assert.AreEqual(0, inbox.Count);
+        Assert.AreEqual(1, counter.Disposes, "无代次帧必须由队列释放，不能留给调用方。");
+        Assert.IsTrue(counter.IsBalanced, counter.ToString());
+    }
+
+    /// <summary>
+    /// EndEpoch 移出全部未领取条目并清空活动代次；所有权转给调用方，队列不替调用方释放。
+    /// <para>队列本身不停流、不关设备；那由会话在 Dispose 路径负责。</para>
+    /// </summary>
+    [TestMethod]
+    public void EndEpoch_DrainsAllEntriesAndCountsUnclaimed()
+    {
+        var counter = new DisposalCounter();
+        var inbox = new VisionFrameInbox(Policy());
+        inbox.BeginEpoch(1);
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 1), Now, out _, out _, out _));
+        Assert.IsTrue(inbox.TryEnqueue(Frame(counter, 2), Now, out _, out _, out _));
+
+        var drained = inbox.EndEpoch();
+
+        Assert.AreEqual(2, drained.Count);
+        Assert.IsNull(inbox.ActiveEpoch, "EndEpoch 必须清空活动代次。");
+        Assert.AreEqual(2, inbox.UnclaimedAtEpochEndCount);
+        Assert.AreEqual(0, inbox.Count);
+        Assert.AreEqual(0, inbox.Bytes);
+        Assert.AreEqual(0, counter.Disposes, "EndEpoch 只转移所有权；释放由调用方完成。");
+
+        foreach (var entry in drained)
+            entry.Frame.Dispose();
+        Assert.AreEqual(2, counter.Disposes);
+        Assert.IsTrue(counter.IsBalanced, counter.ToString());
+    }
+
+    /// <summary>代次必须严格递增；回退或重复代次确定性拒绝，防止旧帧混入新代次。</summary>
+    [TestMethod]
+    public void BeginEpoch_RejectsNonIncreasing()
+    {
+        var inbox = new VisionFrameInbox(Policy());
+        inbox.BeginEpoch(1);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => inbox.BeginEpoch(1));
+        Assert.ThrowsExactly<InvalidOperationException>(() => inbox.BeginEpoch(0));
     }
 
     private static VisionFrameInboxPolicy Policy() =>

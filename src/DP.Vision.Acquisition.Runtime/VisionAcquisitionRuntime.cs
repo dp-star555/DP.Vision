@@ -473,11 +473,15 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         {
             var device = await GetOrOpenDeviceAsync(session, binding, registration, cancellationToken).ConfigureAwait(false);
             session.MarkConnected(BuildConnectionDiagnostic(binding, device));
+            // V2-4：OnConnect 接收流由 Runtime Start 布防一次并跨根运行保持；
+            // 之后 BeginEpoch/EndEpoch 只开放与收口采集代次，不再驱动设备打开或停流。
+            if (binding.AcquisitionMode == EVisionAcquisitionMode.BufferedExternal)
+                await session.StartStreamAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (!(exception is OperationCanceledException))
         {
             var kind = exception is VisionSourceConfigurationException ? "SourceConfiguration" : "OpenFailure";
-            session.MarkFaulted(kind, $"逻辑源 {binding.SourceId}（资源键 {binding.ResourceKey}）打开设备失败：{exception.Message}");
+            session.MarkFaulted(kind, $"逻辑源 {binding.SourceId}（资源键 {binding.ResourceKey}）打开设备或启动接收流失败：{exception.Message}");
         }
     }
 
@@ -606,38 +610,35 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
             }
         }
 
-        /// <summary>建立新代次并布防全部外部回调缓冲源。</summary>
-        public async ValueTask ArmAsync(CancellationToken cancellationToken)
+        /// <summary>开放本轮采集代次并登记布防的外部回调缓冲源；接收流已由 Runtime Start 布防，这里不再驱动设备。</summary>
+        public ValueTask ArmAsync(CancellationToken cancellationToken)
         {
             foreach (var binding in _runtime.BufferedSources)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var session = _runtime.GetSession(binding);
 
-                // 先推进代次再布防：布防过程中到达的帧必须落在新代次里，否则会被当成上一轮的帧丢弃。
+                // 只开放本代次的接收与领取；设备与接收流由 Runtime Start 持有并跨根运行保持。
                 session.BeginEpoch(Epoch);
-                await session.ArmAsync(
-                    // 设备在两次布防之间保持打开（退役只停流），因此必须复用会话里已有的设备：
-                    // 每次布防都重新打开会让真实相机第二次直接失败，并把上一根运行持有的设备对象漏掉。
-                    token => _runtime.GetOrOpenDeviceAsync(session, binding, ResolveRegistration(binding), token),
-                    cancellationToken).ConfigureAwait(false);
 
                 lock (_armed)
                     _armed.Add(binding.SourceId);
             }
+
+            return default;
         }
 
-        /// <summary>退役本轮：停流并释放未领取帧，然后归还所有权。</summary>
-        public async ValueTask DisposeAsync()
+        /// <summary>退役本轮：收口采集代次并释放本代次未领取帧，然后归还所有权。接收流保持运行。</summary>
+        public ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
-                return;
+                return default;
 
             foreach (var binding in _runtime.BufferedSources)
             {
                 if (!_runtime.TryGetSession(binding.ResourceKey, out var session))
                     continue;
-                await session.DisarmAsync(CancellationToken.None).ConfigureAwait(false);
+                session.EndEpoch();
             }
 
             lock (_runtime._gate)
@@ -645,14 +646,8 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
                 if (ReferenceEquals(_runtime._activeLease, this))
                     _runtime._activeLease = null;
             }
-        }
 
-        private VisionAcquisitionProviderRegistration ResolveRegistration(VisionAcquisitionSourceBinding binding)
-        {
-            if (_runtime._composition.TryGetProvider(binding.ProviderId, out var registration) && registration is not null)
-                return registration;
-            throw new VisionSourceConfigurationException(
-                $"逻辑源 {binding.SourceId} 绑定的Provider {binding.ProviderId} 不在当前组合中。");
+            return default;
         }
     }
 }

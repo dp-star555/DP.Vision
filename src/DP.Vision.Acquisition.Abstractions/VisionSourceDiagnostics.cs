@@ -12,12 +12,12 @@ namespace DP.Vision.Acquisition;
 /// <param name="SourceId">逻辑源标识。</param>
 /// <param name="ResourceKey">物理资源键。</param>
 /// <param name="ProviderId">服务该源的Provider身份。</param>
-/// <param name="State">会话状态：Created/Opening/Armed/Faulted/Stopping/Disposed。</param>
+/// <param name="State">会话状态：Created/Opening/Armed/Faulted/Stopping/Disposed/Streaming。</param>
 /// <param name="Epoch">当前采集代次。</param>
 /// <param name="FramesReceived">已接收的帧总数，含被拒绝的帧。</param>
 /// <param name="FramesClaimed">已成功领取的帧总数。</param>
 /// <param name="FramesExpired">因超龄被释放的帧总数。</param>
-/// <param name="FramesRejected">因队列溢出或未布防被拒绝的帧总数。</param>
+/// <param name="FramesRejected">因队列溢出、未布防或无活动代次被拒绝的帧总数。</param>
 /// <param name="InboxCount">当前待领取帧数。</param>
 /// <param name="InboxBytes">当前待领取帧的逻辑像素字节总和。</param>
 /// <param name="InboxHighWatermark">待领取帧数的历史峰值。</param>
@@ -28,6 +28,8 @@ namespace DP.Vision.Acquisition;
 /// <param name="FaultMessage">故障说明；未故障时为空。</param>
 /// <param name="ConnectionState">连接状态（Created/Connecting/Connected/Faulted/Disconnecting/Disposed）。</param>
 /// <param name="ConnectionMessage">连接诊断说明：成功时报告设备规范身份，失败时报告原因。</param>
+/// <param name="FramesRejectedWithoutEpoch">无活动采集代次时被拒绝并释放的帧总数。</param>
+/// <param name="UnclaimedAtEpochEnd">代次收口时未领取而释放的帧总数。</param>
 public sealed record VisionSourceDiagnostics(
     string SourceId,
     string ResourceKey,
@@ -47,7 +49,9 @@ public sealed record VisionSourceDiagnostics(
     string? FaultKind,
     string? FaultMessage,
     EVisionConnectionState ConnectionState = EVisionConnectionState.Created,
-    string? ConnectionMessage = null)
+    string? ConnectionMessage = null,
+    long FramesRejectedWithoutEpoch = 0,
+    long UnclaimedAtEpochEnd = 0)
 {
     /// <summary>是否处于故障状态。</summary>
     public bool IsFaulted => FaultKind is not null;

@@ -19,6 +19,11 @@ namespace DP.Vision.Acquisition.Tests;
 /// <para>
 /// 第 11 项（Nested 准备不清空父 Epoch）属于 V1-C 的工作流接线，不在本文件。
 /// </para>
+/// <para>
+/// V2-4（实施基线 §20/§21）：OnConnect 接收流由 Runtime Start 布防一次并跨根运行保持；
+/// 根运行只通过 BeginEpoch/EndEpoch 开放与收口采集代次，退役不停流、不关设备，
+/// 无活动代次的回调帧被释放并计数但不触发故障。
+/// </para>
 /// </summary>
 [TestClass]
 public sealed class BufferedExternalInboxTests
@@ -257,9 +262,9 @@ public sealed class BufferedExternalInboxTests
     }
 
     /// <summary>
-    /// 第二根根运行复用同一台已打开的设备，不重新打开相机。
+    /// 第二根根运行复用同一台已打开的设备和同一条接收流，不重新打开相机、不重新布防。
     /// <para>
-    /// 设备在两次布防之间保持打开（退役只停流），所以第二轮必须复用会话里已有的设备：
+    /// V2-4：接收流由 Runtime Start 布防一次并跨根运行保持，根运行之间只收口/重开采集代次；
     /// 重新打开会让真实相机第二次直接失败（同一进程通常无法独占打开同一台相机），
     /// 并且会把上一根运行持有的设备对象漏掉——它既不会停流，也不会被释放。
     /// </para>
@@ -282,7 +287,7 @@ public sealed class BufferedExternalInboxTests
             sequence = captured.Metadata.DeviceSequence;
 
         Assert.AreEqual(2L, sequence, "第二轮必须领到自己代次的帧。");
-        Assert.AreEqual(2, rig.Device.StreamStartCount, "第二根根运行必须重新布防接收流。");
+        Assert.AreEqual(1, rig.Device.StreamStartCount, "V2-4：OnConnect 接收流由 Runtime Start 布防一次，跨根运行保持。");
         Assert.AreEqual(1, rig.Provider.OpenedBindings.Count, "设备在两次布防之间保持打开，不得重新打开相机。");
         Assert.AreEqual(0, rig.Device.DisposeCount, "上一根运行持有的设备对象不得被静默丢弃。");
         Assert.IsTrue(rig.Counter.IsBalanced, rig.Counter.ToString());
@@ -418,26 +423,95 @@ public sealed class BufferedExternalInboxTests
     }
 
     /// <summary>
-    /// 运行结束（租约退役）就必须停接收流，而运行时仍存活——生产常态是运行时比单根运行活得久。
+    /// V2-4：根运行退役只收口采集代次，不停流、不关设备——接收流由 Runtime Start 布防一次，
+    /// 跨根运行保持。退役后无活动代次，回调帧被释放并计数，但绝不触发 Source 故障。
     /// <para>
-    /// 这条独立锁住 <c>DisarmAsync</c> 的停流。如果停流只由"释放运行时"兜底，长驻宿主里
-    /// 上一根运行结束后相机会一直布防、帧持续进入队列，直到进程退出才暴露。
+    /// 完成条件要求"第二根运行不重新 Open、不重新创建 SDK 对象"：若退役停流，
+    /// 长驻宿主里每根运行结束都会让相机一直停流，下一根再重新布防，SDK 对象反复重建。
     /// </para>
     /// </summary>
     [TestMethod]
-    public async Task RunEnd_StopsStreamWhileRuntimeStaysAlive()
+    public async Task RunEnd_KeepsStreamRunningAndRejectsFramesWithoutEpoch()
     {
         await using var rig = new Rig(Policy());
         await rig.ArmAsync("run-1");
         Assert.IsTrue(rig.Device.Emit(1, seed: 1));
+        Assert.AreEqual(1, rig.Diagnostics.InboxCount);
 
         await rig.Lease.DisposeAsync();
 
-        Assert.AreEqual(1, rig.Device.StreamDisposeCount, "运行结束必须停接收流，不能等运行时释放。");
-        Assert.IsFalse(rig.Device.IsStreaming, "运行结束后设备不得仍在布防。");
-        Assert.AreEqual(0, rig.Device.DisposeCount, "设备保持打开以便下次布防复用。");
-        Assert.IsFalse(rig.Device.Emit(2, seed: 2), "停流后回调不得再被交付。");
-        Assert.AreEqual(1, rig.Counter.Disposes, "运行结束必须清退未领取帧。");
+        Assert.AreEqual(0, rig.Diagnostics.InboxCount, "退役必须清空本代次未领取帧。");
+        Assert.AreEqual(1, rig.Counter.Disposes, "退役必须释放本代次未领取帧。");
+        Assert.AreEqual(0, rig.Device.StreamDisposeCount, "退役不停流。");
+        Assert.AreEqual(0, rig.Device.DisposeCount, "退役不关设备。");
+        Assert.IsTrue(rig.Device.IsStreaming, "接收流保持运行，供下一根根运行复用。");
+
+        // 无活动代次的回调帧被释放并计数，但流仍正常交付，不触发故障。
+        Assert.IsTrue(rig.Device.Emit(2, seed: 2), "接收流仍在运行，回调必须被交付给会话。");
+        Assert.AreEqual(1, rig.Diagnostics.FramesRejectedWithoutEpoch);
+        Assert.AreEqual(0, rig.Diagnostics.InboxCount);
+        Assert.AreEqual(2, rig.Counter.Disposes);
+        Assert.IsFalse(rig.Diagnostics.IsFaulted, "无活动代次的帧属正常间隔隔离，不触发故障。");
+        Assert.IsTrue(rig.Counter.IsBalanced, rig.Counter.ToString());
+
+        // 没有活动代次时领取必须立即失败，而不是等到超时。
+        var offline = await Assert.ThrowsExactlyAsync<VisionDeviceOfflineException>(
+            async () => await rig.CaptureAsync(TimeSpan.FromMilliseconds(200)));
+        StringAssert.Contains(offline.Message, "没有活动代次");
+    }
+
+    /// <summary>
+    /// V2-4 §21.10：OnConnect 接收流由 Runtime Start 布防，发生在第一根根运行之前。
+    /// <para>
+    /// 布防提前到 Start 后，根运行只推进代次：设备与接收流都只在 Start 阶段各建立一次，
+    /// 这正是"第二根运行不重新 Open、不重新创建 SDK 对象"的落地形态。
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task OnConnectStream_ArmedAtRuntimeStart_BeforeFirstRun()
+    {
+        await using var rig = new Rig(Policy());
+
+        Assert.AreEqual(1, rig.Provider.OpenedBindings.Count, "Start 阶段必须打开设备。");
+        Assert.AreEqual(1, rig.Device.StreamStartCount, "Start 阶段必须布防接收流。");
+        Assert.IsTrue(rig.Device.IsStreaming);
+        Assert.AreEqual("Streaming", rig.Diagnostics.State, "尚无根运行时处于流运行、无活动代次的 Streaming 态。");
+
+        // 没有根运行就没有活动代次：回调帧被释放并计数，不触发故障。
+        Assert.IsTrue(rig.Device.Emit(1, seed: 1));
+        Assert.AreEqual(1, rig.Diagnostics.FramesRejectedWithoutEpoch);
+        Assert.AreEqual(0, rig.Diagnostics.InboxCount);
+        Assert.AreEqual(1, rig.Counter.Disposes);
+        Assert.IsFalse(rig.Diagnostics.IsFaulted);
+        Assert.IsTrue(rig.Counter.IsBalanced, rig.Counter.ToString());
+    }
+
+    /// <summary>
+    /// V2-4 §21.15/17：EndEpoch 收口本代次时，已领取的帧不受影响，未领取的帧被移出并释放并计数。
+    /// <para>退役不停流、不关设备；下一根根运行直接复用同一接收流。</para>
+    /// </summary>
+    [TestMethod]
+    public async Task EndEpoch_DrainsUnclaimedFramesAndRecordsCount()
+    {
+        await using var rig = new Rig(Policy());
+        await rig.ArmAsync("run-1");
+        Assert.IsTrue(rig.Device.Emit(1, seed: 1));
+        Assert.IsTrue(rig.Device.Emit(2, seed: 2));
+        Assert.AreEqual(2, rig.Diagnostics.InboxCount);
+
+        long? claimed;
+        using (var captured = await rig.CaptureAsync())
+            claimed = captured.Metadata.DeviceSequence;
+        Assert.AreEqual(1L, claimed);
+        Assert.AreEqual(1, rig.Diagnostics.InboxCount);
+
+        await rig.Lease.DisposeAsync();
+
+        Assert.AreEqual(1, rig.Diagnostics.UnclaimedAtEpochEnd, "只有未领取的那一帧被计为代次收口未领取。");
+        Assert.AreEqual(0, rig.Diagnostics.InboxCount);
+        Assert.AreEqual(0, rig.Device.StreamDisposeCount, "退役不停流。");
+        Assert.AreEqual(0, rig.Device.DisposeCount, "退役不关设备。");
+        Assert.IsTrue(rig.Device.IsStreaming, "接收流保持运行。");
         Assert.IsTrue(rig.Counter.IsBalanced, rig.Counter.ToString());
     }
 
@@ -514,9 +588,9 @@ public sealed class BufferedExternalInboxTests
         /// <summary>假Provider；用来观察相机到底被打开了几次。</summary>
         public FakeVisionProvider Provider => _provider;
 
-        /// <summary>已打开的假流式设备；未布防时访问会明确失败而不是返回空。</summary>
+        /// <summary>已打开的假流式设备；未打开时访问会明确失败而不是返回空。</summary>
         public FakeStreamingVisionDevice Device =>
-            _device ?? throw new InvalidOperationException("设备尚未打开：请先 ArmAsync。");
+            _device ?? throw new InvalidOperationException("设备尚未打开：请先确认 Runtime 已启动。");
 
         /// <summary>当前根运行租约。</summary>
         public IVisionAcquisitionRunLease Lease =>

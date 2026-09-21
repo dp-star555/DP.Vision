@@ -11,10 +11,10 @@ internal enum EVisionResourceState
     /// <summary>已创建但尚未打开设备。</summary>
     Created = 0,
 
-    /// <summary>正在打开设备或布防接收流。</summary>
+    /// <summary>正在打开设备或启动接收流。</summary>
     Opening = 1,
 
-    /// <summary>已布防，接收生产帧。</summary>
+    /// <summary>接收流运行中且有活动采集代次；可接收、可领取。</summary>
     Armed = 2,
 
     /// <summary>已故障；拒绝新的采集与领取，直到宿主执行显式恢复。</summary>
@@ -24,7 +24,10 @@ internal enum EVisionResourceState
     Stopping = 4,
 
     /// <summary>已释放。</summary>
-    Disposed = 5
+    Disposed = 5,
+
+    /// <summary>接收流运行中但没有活动采集代次；可接收（无代次帧被释放并计数）但不可领取。</summary>
+    Streaming = 6
 }
 
 /// <summary>
@@ -63,7 +66,6 @@ internal sealed class VisionResourceSession : IAsyncDisposable
     private long _callbackFaults;
     private long? _lastDeviceSequence;
     private long _rejectedWhileNotArmed;
-    private long _epochStartCount;
     private long _expiredTotal;
     private long _staleEpochTotal;
     private long _overflowCount;
@@ -204,72 +206,89 @@ internal sealed class VisionResourceSession : IAsyncDisposable
         WakeWaiters();
     }
 
-    /// <summary>开始新一轮采集代次并清退上一轮遗留的未领取帧。</summary>
+    /// <summary>
+    /// 开放新一轮采集代次。只开放本代次的接收与领取，不驱动任何设备动作：
+    /// 接收流由 Runtime Start 布防一次并跨根运行保持，BeginEpoch 与设备打开/停流完全解耦。
+    /// </summary>
     /// <param name="epoch">新的采集代次；必须严格递增。</param>
-    /// <returns>被清退的帧数。</returns>
+    /// <returns>被清退的上一代次遗留帧数。</returns>
     /// <exception cref="InvalidOperationException">代次没有严格递增。</exception>
+    /// <exception cref="VisionDeviceOfflineException">会话已故障或正在停止。</exception>
+    /// <exception cref="VisionSourceConfigurationException">接收流未在运行。</exception>
     public int BeginEpoch(int epoch)
     {
+        int dropped;
         lock (_sync)
         {
             ThrowIfDisposed();
+            switch (_state)
+            {
+                case EVisionResourceState.Faulted:
+                    throw new VisionDeviceOfflineException(
+                        $"资源键 {ResourceKey} 已标记为故障（{_faultKind}）：{_faultMessage}；请先排除故障再开始本代次。");
+                case EVisionResourceState.Stopping:
+                    throw new VisionDeviceOfflineException(
+                        $"资源键 {ResourceKey} 正在停止，不再接受新的采集代次。");
+                case EVisionResourceState.Streaming:
+                case EVisionResourceState.Armed:
+                    break;
+                default:
+                    throw new VisionSourceConfigurationException(
+                        $"资源键 {ResourceKey} 的接收流未在运行；请确认 Runtime Start 已为该 OnConnect 源布防接收流。");
+            }
+
             if (epoch <= _epoch)
                 throw new InvalidOperationException(
                     $"采集代次必须严格递增：当前 {_epoch}，收到 {epoch}；旧帧不允许进入新代次。");
             _epoch = epoch;
-            _epochStartCount++;
+            dropped = _inbox?.BeginEpoch(epoch) ?? 0;
+            _state = EVisionResourceState.Armed;
         }
 
-        var dropped = _inbox is null ? 0 : _inbox.DropStaleEpochs(epoch);
         _staleEpochTotal += dropped;
         return dropped;
     }
 
-    /// <summary>打开设备并布防接收流。</summary>
-    /// <param name="openDevice">打开设备的委托；由 Runtime 提供以复用设备会话。</param>
+    /// <summary>
+    /// 启动接收流并进入 Streaming（流运行、无活动代次）；由 Runtime Start 阶段调用，设备必须先已打开。
+    /// <para>幂等：接收流已运行则直接返回。接收流布防一次，跨根运行保持。</para>
+    /// </summary>
     /// <param name="cancellationToken">协作取消。</param>
-    /// <returns>布防完成时结束的异步操作。</returns>
-    /// <exception cref="VisionSourceConfigurationException">设备不支持持续接收能力。</exception>
-    public async ValueTask ArmAsync(
-        Func<CancellationToken, ValueTask<IVisionAcquisitionDevice>> openDevice,
-        CancellationToken cancellationToken)
+    /// <exception cref="VisionSourceConfigurationException">设备未打开或不支持持续接收能力。</exception>
+    /// <exception cref="VisionDeviceOfflineException">会话已故障。</exception>
+    public async ValueTask StartStreamAsync(CancellationToken cancellationToken)
     {
-        if (openDevice is null)
-            throw new ArgumentNullException(nameof(openDevice));
-
+        IVisionStreamingAcquisitionDevice streaming;
         lock (_sync)
         {
             ThrowIfDisposed();
             if (_state == EVisionResourceState.Faulted)
                 throw new VisionDeviceOfflineException(
-                    $"资源键 {ResourceKey} 已标记为故障（{_faultKind}）：{_faultMessage}；请先排除故障再布防。");
+                    $"资源键 {ResourceKey} 已标记为故障（{_faultKind}）：{_faultMessage}；请先排除故障再启动接收流。");
             if (_stream is not null)
                 return;
+            var device = _device;
+            if (device is null)
+                throw new VisionSourceConfigurationException(
+                    $"资源键 {ResourceKey} 的设备尚未打开；接收流只能由 Runtime Start 打开设备后启动。");
+            if (!(device is IVisionStreamingAcquisitionDevice declared))
+                throw new VisionSourceConfigurationException(
+                    $"资源键 {ResourceKey} 的设备没有声明持续接收能力，无法作为外部回调缓冲源；"
+                    + "请把该 Source 改回 OnDemand，或更换支持长连接回调的 Provider 设备适配。");
+            streaming = declared;
             _state = EVisionResourceState.Opening;
         }
 
         try
         {
-            var device = await openDevice(cancellationToken).ConfigureAwait(false);
-            if (!(device is IVisionStreamingAcquisitionDevice streaming))
-            {
-                throw new VisionSourceConfigurationException(
-                    $"资源键 {ResourceKey} 的设备没有声明持续接收能力，无法作为外部回调缓冲源；"
-                    + "请把该 Source 改回 OnDemand，或更换支持长连接回调的 Provider 设备适配。");
-            }
-
-            lock (_sync)
-                _device = device;
-
             var stream = await streaming.StartStreamAsync(_sink, cancellationToken).ConfigureAwait(false);
-
             lock (_sync)
             {
                 ThrowIfDisposed();
                 _stream = stream;
                 _streamCompleted = false;
                 _streamFailure = null;
-                _state = EVisionResourceState.Armed;
+                _state = EVisionResourceState.Streaming;
             }
         }
         catch
@@ -284,32 +303,32 @@ internal sealed class VisionResourceSession : IAsyncDisposable
         }
     }
 
-    /// <summary>停止接收流并释放未领取帧；设备保持打开以便下次布防复用。</summary>
-    /// <param name="cancellationToken">协作取消。</param>
-    /// <returns>停流完成时结束的异步操作。</returns>
-    public async ValueTask DisarmAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// 收口本轮采集代次：移出并释放本代次未领取的帧，回到"流运行、无活动代次"的 Streaming 状态。
+    /// <para>不停流、不关设备：接收流由 Runtime Start 布防一次，跨根运行保持。</para>
+    /// </summary>
+    /// <returns>本代次未领取而释放的帧数。</returns>
+    public int EndEpoch()
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        IVisionAcquisitionStream? stream;
+        List<VisionFrameInboxEntry>? unclaimed = null;
         lock (_sync)
         {
-            if (_state == EVisionResourceState.Disposed)
-                return;
-            stream = _stream;
-            _stream = null;
+            if (_state == EVisionResourceState.Disposed || _state == EVisionResourceState.Stopping)
+                return 0;
+            if (_inbox is not null)
+                unclaimed = new List<VisionFrameInboxEntry>(_inbox.EndEpoch());
             if (_state == EVisionResourceState.Armed)
-                _state = EVisionResourceState.Created;
+                _state = EVisionResourceState.Streaming;
         }
 
-        // 停流必须等待已经进入的回调退出，这是接收流的契约而不是可选优化。
-        if (stream is not null)
-            await stream.DisposeAsync().ConfigureAwait(false);
-
-        if (_inbox is not null)
+        if (unclaimed is not null)
         {
-            foreach (var entry in _inbox.Drain())
+            foreach (var entry in unclaimed)
                 entry.Frame.Dispose();
         }
+
+        WakeWaiters();
+        return unclaimed?.Count ?? 0;
     }
 
     /// <summary>
@@ -346,7 +365,7 @@ internal sealed class VisionResourceSession : IAsyncDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 EnsureClaimable();
 
-                var claim = _inbox.TryClaim(DateTimeOffset.UtcNow, Epoch);
+                var claim = _inbox.TryClaim(DateTimeOffset.UtcNow);
                 _expiredTotal += claim.ExpiredCount;
                 _staleEpochTotal += claim.StaleEpochCount;
                 if (claim.Entry is not null)
@@ -384,7 +403,7 @@ internal sealed class VisionResourceSession : IAsyncDisposable
                 _inbox?.ReceivedCount ?? 0,
                 _inbox?.ClaimedCount ?? 0,
                 _expiredTotal,
-                (_inbox?.RejectedCount ?? 0) + _rejectedWhileNotArmed,
+                (_inbox?.RejectedCount ?? 0) + _rejectedWhileNotArmed + (_inbox?.RejectedWithoutEpochCount ?? 0),
                 _inbox?.Count ?? 0,
                 _inbox?.Bytes ?? 0,
                 _inbox?.HighWatermark ?? 0,
@@ -394,7 +413,9 @@ internal sealed class VisionResourceSession : IAsyncDisposable
                 _faultKind,
                 _faultMessage,
                 _connectionState,
-                _connectionMessage);
+                _connectionMessage,
+                _inbox?.RejectedWithoutEpochCount ?? 0,
+                _inbox?.UnclaimedAtEpochEndCount ?? 0);
         }
     }
 
@@ -537,9 +558,9 @@ internal sealed class VisionResourceSession : IAsyncDisposable
         long? previous;
         lock (_sync)
         {
-            if (_state != EVisionResourceState.Armed || _inbox is null)
+            if ((_state != EVisionResourceState.Streaming && _state != EVisionResourceState.Armed) || _inbox is null)
             {
-                // 停止、故障或未布防期间不接受生产帧；所有权已转移，必须由这里释放。
+                // 停止、故障或流未运行期间不接受生产帧；所有权已转移，必须由这里释放。
                 _rejectedWhileNotArmed++;
                 frame.Dispose();
                 return;
@@ -553,14 +574,20 @@ internal sealed class VisionResourceSession : IAsyncDisposable
                 _lastDeviceSequence = current;
         }
 
-        if (!_inbox.TryEnqueue(frame, Epoch, DateTimeOffset.UtcNow, out _, out var overflowReason))
+        if (!_inbox.TryEnqueue(frame, DateTimeOffset.UtcNow, out _, out var rejectReason, out var reject))
         {
-            // 帧已由队列释放；溢出策略固定为 FaultSource，不做 DropOldest 或静默覆盖。
-            Interlocked.Increment(ref _overflowCount);
-            MarkFaulted(
-                "InboxOverflow",
-                $"逻辑源（资源键 {ResourceKey}）的外部回调队列溢出：{overflowReason}"
-                + "V1 策略为 FaultSource，已停止接收并拒绝后续领取；请排除消费端阻塞后显式恢复。");
+            // 帧已由队列释放。
+            if (reject == VisionFrameInboxReject.Overflow)
+            {
+                // 溢出策略固定为 FaultSource，不做 DropOldest 或静默覆盖。
+                Interlocked.Increment(ref _overflowCount);
+                MarkFaulted(
+                    "InboxOverflow",
+                    $"逻辑源（资源键 {ResourceKey}）的外部回调队列溢出：{rejectReason}"
+                    + "V1 策略为 FaultSource，已停止接收并拒绝后续领取；请排除消费端阻塞后显式恢复。");
+            }
+
+            // 无活动代次（NoActiveEpoch）属正常运行间隔隔离：已由队列计数并释放，不视为故障。
             return;
         }
 
@@ -584,8 +611,9 @@ internal sealed class VisionResourceSession : IAsyncDisposable
                 case EVisionResourceState.Armed:
                     break;
                 default:
-                    throw new VisionSourceConfigurationException(
-                        $"资源键 {ResourceKey} 的外部回调源尚未布防；请先由根运行取得所有权，再领取帧。");
+                    // 流未运行或无活动代次：本代次的领取资格只能由根运行取得采集所有权后开放。
+                    throw new VisionDeviceOfflineException(
+                        $"资源键 {ResourceKey} 的外部回调流没有活动代次；根运行必须先取得采集所有权开放本代次，再领取帧。");
             }
 
             if (_streamCompleted)
