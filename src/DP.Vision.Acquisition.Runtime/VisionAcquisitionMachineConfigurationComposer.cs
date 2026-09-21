@@ -79,7 +79,11 @@ public sealed class VisionAcquisitionMachineConfigurationComposer
                 registrations.Add(new VisionAcquisitionProviderRegistration(
                     typeId,
                     descriptor.Version,
-                    descriptor.Factory));
+                    descriptor.Factory)
+                {
+                    // Type的显示名是操作员可读的Provider名；组合把它带进只读注册清单，界面不必再反查Catalog。
+                    DisplayName = descriptor.DisplayName,
+                });
         }
 
         return new VisionAcquisitionProviderComposer().Compose(

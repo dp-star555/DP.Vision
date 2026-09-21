@@ -28,4 +28,11 @@ public interface IVisionAcquisitionProviderContributionBuilder
 public sealed record VisionAcquisitionProviderRegistration(
     string ProviderId,
     string Version,
-    Func<IVisionAcquisitionProvider> Factory);
+    Func<IVisionAcquisitionProvider> Factory)
+{
+    /// <summary>
+    /// 面向操作员的Provider显示名；为空表示未声明，消费方应回退为 <see cref="ProviderId"/>。
+    /// <para>它只用于界面与诊断，不参与身份判定，也不进入组合身份。</para>
+    /// </summary>
+    public string? DisplayName { get; init; }
+}

@@ -172,6 +172,44 @@ public sealed class ComposerTests
         CollectionAssert.AreEqual(new[] { "dp.fake.one@1.0.0" }, first.ProviderManifest.ToArray());
     }
 
+    /// <summary>
+    /// 只读注册清单是版本清单的结构化形式：按身份排序、一项一个Provider，
+    /// 未配置任何Source的Provider同样在列，声明的显示名原样带出。
+    /// </summary>
+    [TestMethod]
+    public void Providers_ExposesStructuredRegistrationList()
+    {
+        var composition = _composer.Compose(
+            new[]
+            {
+                new VisionAcquisitionProviderRegistration(
+                    "dp.fake.two", "2.0.0", () => FakeVisionProvider.WithDevices("dp.fake.two")),
+                new VisionAcquisitionProviderRegistration(
+                    "dp.fake.one", "1.0.0", () => FakeVisionProvider.WithDevices("dp.fake.one"))
+                {
+                    DisplayName = "一号Provider"
+                }
+            },
+            new[] { new VisionAcquisitionSourceBinding("Camera.Top", "dp.fake.one", "top", "camera:serial:A") });
+
+        CollectionAssert.AreEqual(
+            new[] { "dp.fake.one", "dp.fake.two" },
+            composition.Providers.Select(provider => provider.ProviderId).ToArray(),
+            "注册清单必须按ProviderId排序，界面顺序不得依赖字典枚举顺序。");
+        CollectionAssert.AreEqual(
+            composition.ProviderManifest.ToArray(),
+            composition.Providers.Select(provider => provider.ProviderId + "@" + provider.Version).ToArray(),
+            "注册清单与版本清单必须表达同一批Provider，否则消费方会看到两套事实。");
+
+        Assert.AreEqual("1.0.0", composition.Providers[0].Version);
+        Assert.AreEqual("一号Provider", composition.Providers[0].DisplayName);
+        Assert.IsNull(composition.Providers[1].DisplayName, "未声明显示名时保持为空，由消费方回退为ProviderId。");
+
+        // 未配置Source的Provider同样在列：发现正是要在"还没配置"时先看见现场。
+        Assert.AreEqual(1, composition.Sources.Count);
+        Assert.AreEqual(2, composition.Providers.Count);
+    }
+
     private static VisionAcquisitionProviderRegistration Registration(string providerId, string version = "1.0.0")
     {
         return new VisionAcquisitionProviderRegistration(

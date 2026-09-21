@@ -47,6 +47,16 @@ public sealed class VisionAcquisitionProviderComposition : IVisionAcquisitionSou
     /// <summary>Provider与Source版本清单，按ProviderId排序；可导出用于运行制品。</summary>
     public IReadOnlyList<string> ProviderManifest { get; }
 
+    /// <summary>
+    /// 已注册Provider的只读清单，按ProviderId排序；身份、版本与显示名可被界面与诊断直接读取。
+    /// <para>
+    /// 这是 <see cref="ProviderManifest"/> 的结构化形式：消费方不应再自行切分清单行。
+    /// 清单按身份去重且顺序确定，与已发布Source无关——尚未配置任何Source的Provider同样在列。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<VisionAcquisitionProviderRegistration> Providers =>
+        _providers.Values.OrderBy(registration => registration.ProviderId, StringComparer.Ordinal).ToArray();
+
     /// <summary>全部已发布的Source绑定，按SourceId排序。</summary>
     public IReadOnlyList<VisionAcquisitionSourceBinding> Sources =>
         _sources.Values.OrderBy(binding => binding.SourceId, StringComparer.Ordinal).ToArray();

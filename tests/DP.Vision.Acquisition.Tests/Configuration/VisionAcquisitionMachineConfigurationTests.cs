@@ -79,6 +79,12 @@ public sealed class VisionAcquisitionMachineConfigurationTests
         CollectionAssert.AreEqual(
             new[] { AreaTypeId + "@1.0.0" },
             composition.ProviderManifest.ToArray());
+
+        // 只读注册清单是版本清单的结构化形式，并带出Type声明的显示名；界面不必再切分清单行。
+        var provider = composition.Providers.Single();
+        Assert.AreEqual(AreaTypeId, provider.ProviderId);
+        Assert.AreEqual("1.0.0", provider.Version);
+        Assert.AreEqual("测试面阵相机", provider.DisplayName);
     }
 
     /// <summary>机器配置单对象与数组两种形态解析出相同定义，产生相同组合身份。</summary>

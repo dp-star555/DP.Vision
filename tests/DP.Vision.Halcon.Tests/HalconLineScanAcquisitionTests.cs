@@ -76,7 +76,7 @@ public sealed class HalconLineScanAcquisitionTests
         Assert.AreEqual(height, frame.Image.Info.Height);
         Assert.AreEqual(EPixelLayout.Gray8, frame.Image.Info.Layout);
         Assert.IsFalse(
-            frame.Image.GetType().Assembly.GetName().Name!.Contains("Halcon", StringComparison.OrdinalIgnoreCase),
+            frame.Image.GetType().Assembly.GetName().Name!.IndexOf("Halcon", StringComparison.OrdinalIgnoreCase) >= 0,
             "适配器必须交付中立图像，不能把厂商对象越过公共接口。");
         Assert.AreEqual(1, camera.SingleCaptureCount, "一次请求对应一张整图。");
 
@@ -102,7 +102,7 @@ public sealed class HalconLineScanAcquisitionTests
     }
 
     private static bool ContainsAny(string value, params string[] candidates) =>
-        candidates.Any(candidate => value.Contains(candidate, StringComparison.Ordinal));
+        candidates.Any(candidate => value.IndexOf(candidate, StringComparison.Ordinal) >= 0);
 
     private static HalconAcquisitionDevice Device(FakeHalconStreamCamera camera) =>
         new HalconAcquisitionDevice(

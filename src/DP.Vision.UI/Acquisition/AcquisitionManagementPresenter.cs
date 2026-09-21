@@ -323,32 +323,15 @@ public sealed class AcquisitionManagementPresenter
     }
 
     /// <summary>
-    /// 当前组合里已注册的Provider身份，按身份排序去重。
+    /// 当前组合里已注册的Provider身份，按身份排序。
     /// <para>
-    /// 只用组合对外的Provider清单，不能用 <see cref="VisionAcquisitionProviderComposition.Sources"/>：
+    /// 只用组合对外的Provider注册清单，不能用 <see cref="VisionAcquisitionProviderComposition.Sources"/>：
     /// 发现的意义正是"还没有给这个Provider配置任何Source时先看见现场有哪些设备"，
     /// 按已发布Source反推会让尚未配置的Provider永远发现不到设备。
     /// </para>
     /// </summary>
     private IReadOnlyList<string> ProviderIds() =>
-        _composition.ProviderManifest
-            .Select(ProviderIdOf)
-            .Where(id => !string.IsNullOrEmpty(id))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToArray();
-
-    /// <summary>从清单行 <c>providerId@version</c> 取出Provider身份；按最后一个分隔符切分，身份里含分隔符也不会被截断。</summary>
-    private static string ProviderIdOf(string manifestLine)
-    {
-        if (string.IsNullOrWhiteSpace(manifestLine))
-            return string.Empty;
-
-        var separator = manifestLine.LastIndexOf('@');
-        return separator < 0
-            ? manifestLine
-            : manifestLine.Substring(0, separator);
-    }
+        _composition.Providers.Select(provider => provider.ProviderId).ToArray();
 
     /// <summary>当前组合里已发布Source占用的规范资源键；空键（未安装Type）不参与比对。</summary>
     private HashSet<string> ConfiguredResourceKeys()

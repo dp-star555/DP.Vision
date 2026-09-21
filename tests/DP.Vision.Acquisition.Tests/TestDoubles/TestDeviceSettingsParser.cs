@@ -17,7 +17,8 @@ public static class TestDeviceSettingsParser
         if (string.IsNullOrWhiteSpace(settingsJson))
             throw new VisionSourceConfigurationException("测试deviceSettings不能为空。");
 
-        using var document = JsonDocument.Parse(settingsJson);
+        // net48 的引用程序集没有 IsNullOrWhiteSpace 的 [NotNullWhen(false)] 标注，这里显式断言非空以保持零警告。
+        using var document = JsonDocument.Parse(settingsJson!);
         if (!document.RootElement.TryGetProperty("serialNumber", out var serial) ||
             string.IsNullOrWhiteSpace(serial.GetString()))
             throw new VisionSourceConfigurationException("测试deviceSettings缺少serialNumber。");
