@@ -851,5 +851,5 @@ DP.Vision.Basler.Tests 104 · DP.Vision.Halcon.Tests 145 · DP.Vision.Acquisitio
   后续若在 Composition 上补一个只读注册清单，应替换掉这处解析。
 - **`DP.Vision.UI` 未新增 `Compatibility\IsExternalInit.cs`**：该工程既有类型不使用 `record`，
   新类型改用 internal 构造器 + 只读属性以保持在 `netstandard2.0` 下零警告（`record` 仍需占位类型，故回避）。
-- **提交状态**：本次改动随 V2-9b 提交（提交号见"提交记录"）。
+- **提交状态**：已提交为 `6911496`（18 文件 +3152/-13）。
 
