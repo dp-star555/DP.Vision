@@ -18,6 +18,11 @@
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
   <ItemGroup>
+    <!-- 流式接入缝（IHalconGrabFrame / IHalconStreamCamera）与采集循环是内部实现，只对采集测试程序集开放：
+         测试用可控假设备驱动"自建采集线程 + 停止等待"，从而在没有相机、没有 HALCON 许可的机器上验证流式纪律。 -->
+    <InternalsVisibleTo Include="DP.Vision.Halcon.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- 插件Manifest随程序集一起输出，使该目录本身就是一个可被插件加载器扫描的插件包。 -->
     <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

@@ -15,6 +15,8 @@ public static class HalconProviderConfiguration
     private const string InterfaceNameKey = "interfaceName";
     private const string DeviceNameKey = "deviceName";
     private const string SerialNumberKey = "serialNumber";
+    private const string TriggerSourceKey = "triggerSource";
+    private const string GrabTimeoutKey = "grabTimeoutMilliseconds";
 
     /// <summary>解析并校验私有配置文本。</summary>
     /// <param name="configuration">私有配置JSON文本；为空表示本Provider尚未配置任何设备绑定。</param>
@@ -82,6 +84,8 @@ public static class HalconProviderConfiguration
         string? interfaceName = null;
         string? deviceName = null;
         string? serialNumber = null;
+        string? triggerSource = null;
+        var grabTimeout = HalconAcquisitionBinding.DefaultGrabTimeoutMilliseconds;
         foreach (var field in element.EnumerateObject())
         {
             switch (field.Name)
@@ -95,10 +99,17 @@ public static class HalconProviderConfiguration
                 case SerialNumberKey:
                     serialNumber = ReadText(bindingId, field);
                     break;
+                case TriggerSourceKey:
+                    triggerSource = ReadText(bindingId, field);
+                    break;
+                case GrabTimeoutKey:
+                    grabTimeout = ReadPositiveInt(bindingId, field);
+                    break;
                 default:
                     throw new VisionSourceConfigurationException(
                         $"HALCON Provider 绑定 {bindingId} 含未知字段 {field.Name}；"
-                        + $"只支持 {InterfaceNameKey}、{DeviceNameKey}、{SerialNumberKey}。");
+                        + $"只支持 {InterfaceNameKey}、{DeviceNameKey}、{SerialNumberKey}、"
+                        + $"{TriggerSourceKey}、{GrabTimeoutKey}。");
             }
         }
 
@@ -106,7 +117,18 @@ public static class HalconProviderConfiguration
             throw new VisionSourceConfigurationException($"HALCON Provider 绑定 {bindingId} 缺少或留空了 {InterfaceNameKey}。");
         if (string.IsNullOrWhiteSpace(deviceName))
             throw new VisionSourceConfigurationException($"HALCON Provider 绑定 {bindingId} 缺少或留空了 {DeviceNameKey}。");
-        return new HalconAcquisitionBinding(bindingId, interfaceName!, deviceName!, serialNumber);
+        return new HalconAcquisitionBinding(bindingId, interfaceName!, deviceName!, serialNumber, triggerSource, grabTimeout);
+    }
+
+    private static int ReadPositiveInt(string bindingId, JsonProperty field)
+    {
+        if (field.Value.ValueKind != JsonValueKind.Number || !field.Value.TryGetInt32(out var value))
+            throw new VisionSourceConfigurationException(
+                $"HALCON Provider 绑定 {bindingId} 的 {field.Name} 必须是整数。");
+        if (value < 1)
+            throw new VisionSourceConfigurationException(
+                $"HALCON Provider 绑定 {bindingId} 的 {field.Name} 必须为正；无限等待会让停止无法收敛。");
+        return value;
     }
 
     private static string? ReadText(string bindingId, JsonProperty field)

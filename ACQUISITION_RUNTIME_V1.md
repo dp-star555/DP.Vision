@@ -1,6 +1,6 @@
 # 图像采集深化 V1：主动请求与外部回调 FIFO
 
-状态：**V1-A、V1-B、V1-C 已实施；V1-D 软件结构验收已完成、真实相机现场验收待做；V1-E、V1-F 待实现**
+状态：**V1-A、V1-B、V1-C 已实施；V1-D、V1-E 软件结构验收已完成、真实相机现场验收待做；V1-F 待实现**
 范围：`DP.Vision.Acquisition.*`、HALCON/Basler 采集 Adapter 及 Workflow 采集节点接线。  
 目的：解决“外部触发图像已经回调，但 Workflow 尚未运行到采集节点”的问题，同时保留现有主动采集路径。
 
@@ -857,24 +857,146 @@ BaslerNeutralFramesTests.cs           3 例  直接可复制格式仍走设备�
 - 长时间吞吐下的内存与租约回收。
 
 
-### V1-E：HALCON真实流式Adapter
+### V1-E：HALCON真实流式Adapter【软件结构验收已完成 · 现场验收待做】
 
 1. 使用HALCON支持的异步Grab循环或明确的回调机制。
 2. 不把HObject/HFramegrabber越过Provider Interface。
 3. 明确External触发源与KeepCurrent语义。
 4. 验证超时、停止和许可证故障。
 
-**实施提示（尚未开始，写下来避免重复摸索）**：V1-D 已经把可复用的骨架定下来了——
-SDK 无关的窄接口（设备帧视图 + 设备侧动作）、单一像素落地实现、回调边界纪律（不抛、停流等待在途）。
-HALCON 侧的差异需要显式处理而不是抹平：
+验收分为软件结构验收和真实相机现场验收，不能混写。
 
-- HALCON 没有 pylon 那样的 `ImageGrabbed` 事件，通常是**异步 Grab 循环 + 独立线程**。
-  线程所有权、停止等待与"停流后不得再交付"的语义要自己建立，不能靠 SDK 保证。
-- `HObject` / `HFramegrabber` **不得越过 Provider Interface**（本仓已有 `AssemblyBoundaryTests` 守着），
-  因此像素必须在边界内复制为中立图像；HALCON 原生图像释放后中立像素仍要可读。
-- 许可证故障（`HALCON_SDK` 是**编译期**开关，许可证是**运行期**问题）需要单独一类故障诊断，
-  不要和"设备离线"混在一起——现场排查路径完全不同。
-- `External` 触发源同样要求私有配置显式声明；`KeepCurrent` 不写任何触发参数。
+#### 与 V1-D 的根本差异：HALCON 没有事件回调
+
+pylon 由 SDK 在 `ImageGrabbed` 回调线程上推帧，会话只需守纪律。**HALCON 没有等价的事件回调**，
+只有阻塞式异步抓取，因此采集循环、线程所有权、停止等待与"停流后不得再交付"**必须由会话自建**，
+不能指望 SDK 提供任何保证。这是 V1-E 与 V1-D 唯一的结构性差异，也是本轮的主要工作量。
+
+#### 软件结构验收（已完成）
+
+沿用 V1-D 的骨架，新增两个 **SDK 无关的窄接口**（`HalconStreamContracts.cs`），把"厂商侧动作"与
+"流式纪律"分开：
+
+```csharp
+internal interface IHalconGrabFrame : IDisposable      // 一帧设备数据的中立视图：尺寸、像素类型、通道数、时刻、按通道复制
+internal interface IHalconStreamCamera : IDisposable   // Open/Close、ApplyArmParameters、GrabOnce、AbortGrab
+```
+
+`IHalconGrabFrame` **刻意没有 ImageNumber**（见下方"能力差异"）。真实实现
+`HalconFramegrabberCamera` / `HObjectGrabFrame` 只在 `HALCON_SDK` 下编译，其余部分（会话、故障分类、
+像素落地）**无条件编译**，因此可以在没有相机、没有 HALCON 许可证的机器上确定性验证；
+`HalconAcquisitionDevice` 通过内部构造函数接收设备工厂，测试注入假相机。
+
+落地内容：
+
+- `HalconNeutralFrames.Copy` 成为**唯一的像素落地实现**，OnDemand（`HalconImageSource.CopyFrom`）
+  与长连接交付共用同一条路径。此前两条路径各有一份 `#if HALCON_SDK` 像素代码，是漂移的来源；
+  合并后 OnDemand 侧的诊断文本逐字不变。
+- `HalconStreamSession`（`IVisionAcquisitionStream`）**自建采集线程**：
+  - 线程所有权：`Arm` 打开设备、写布防参数，然后启动一条 `IsBackground` 线程
+    （`DP.Vision.Halcon.GrabLoop`），循环 `GrabOnce` → 像素落地 → `Publish`。
+    交付**运行在采集线程上**，因此"等采集线程退出"同时就是"等已经进入 `Publish` 的交付退出"。
+    这是**刻意依赖**的结构事实，已写进 `DisposeAsync` 的注释（含"若将来改用
+    `set_framegrabber_callback` 把交付挪到别的线程，必须补回在途计数与等待"的警示）。
+    这里刻意**没有**额外的"等在途计数归零"循环：在该结构下它永远不会生效（变异验证确认过）。
+  - 停止：先关交付口 → `AbortGrab()`（尽力而为）→ 等采集线程退出。`DisposeAsync` 返回时
+    不再有任何交付，且在途设备帧已释放。
+  - 停流后到达的帧被拒绝、计数并**释放**，不交给接收方。
+  - 接收方 `Publish` 抛异常被吞掉并计数，**绝不逃逸到采集线程之外**。
+- `HalconAcquisitionDevice` 实现 `IVisionStreamingAcquisitionDevice`：相机**跨布防复用**（只在设备
+  释放时才关闭）；上一次布防**已停止**时允许重新布防（宿主每根根运行都会重新布防），仍在进行中才
+  拒绝；释放顺序先停流再关设备；布防期间拒绝节点级单次采集。
+- 触发三态与 `KeepCurrent` 语义：`KeepCurrent` → 打开参数 `'default'`（**一个触发参数都不写**）；
+  `FreeRun` → `'false'`；`External` → `'true'` + `TriggerSelector=FrameStart` + `TriggerSource` +
+  `TriggerMode=On`（`TriggerSource` 由私有配置显式声明，不猜物理接线）；`Software` **明确拒绝**
+  （`VisionParameterNotSupportedException`），不静默按自由运行采集。
+  > 这里修掉一个既有缺陷：原实现把 `KeepCurrent` 也映射成 `'false'`，即"保持设备当前设置"
+  > 实际会**显式关闭外部触发**，把硬件触发的相机改成自由运行。
+- 故障分类（`HalconStreamFaults`，无 SDK 依赖、可确定性验证）：抓取超时（5322）→ 只计诊断并继续等
+  下一轮，**不结束流**；许可证类 → `VisionProviderUnavailableException`；图像采集类（53xx）→
+  `VisionDeviceOfflineException`；其余 → `VisionDataException`。超时、许可证与设备故障**必须分开**
+  ——现场排查路径完全不同。
+
+**从本机 HALCON 23.11 安装核实的事实**（不是猜的，写进注释以免后人重复踩）：
+
+| 事实 | 后果 |
+|---|---|
+| 官方连续取流写法（`examples/hdevelop/Image/Acquisition/genicamtl_simple.hdev`）：`grab_image_start(-1)` → 循环 `grab_image_async(Image, Acq, -1)` → 停止用 `set_framegrabber_param('do_abort_grab', -1)` | 采集循环必须自建；`MaxDelay=-1` 表示**停用"图像太旧就丢"**，缓冲源要每一帧 |
+| `do_abort_grab` 是**尽力而为**（"if the specific image acquisition interface supports it"）；它是"多线程并发使用"规则的唯一例外，可从另一线程调用 | 停止等待的上界＝布防时写入的 `grab_timeout`：中止成功则立即收敛，不支持则退化为等满超时 |
+| `H_ERR_FGTIMEOUT`(5322) 表示"这一轮没等到帧"，外部触发下属正常现象；`H_ERR_TIMEOUT`(9400) 是通用超时，可能来自任何算子 | 只有 5322 计为抓取超时并继续；把 9400 也当抓取超时会让真故障被静默重试掉 |
+| 许可证错误码**不构成连续区间**（`include/HErrorDef.h`）：2000/2001/2002 分别是 `H_ERR_WNP`/`H_ERR_HONI`/`H_ERR_WRKNN`，2100–2108、2200+ 也是别的错误类；2300–2399 整段是 `H_ERR_LIC_*` | 2003–2091 必须**逐个列出**，不能写 `>= 2000 && <= 2091` |
+| HALCON **不提供设备帧序号**：通用采集参数表里没有帧计数项 | 中立帧 `DeviceSequence` 上报 `null`（`long?` 合法）。这是 Provider 能力差异，不是缺陷 |
+| `HOperatorException` 的 `GetErrorNumber()`/`GetErrorText()` 已过时，现行 API 是 `GetErrorCode()`/`GetErrorMessage()`；继承链 `HOperatorException → HalconException → ApplicationException` | 分类器按现行访问器读错误码 |
+| `HTuple` 与 `string` **双向隐式转换** | `SetFramegrabberParam(name, tuple)` 会造成 CS0121 二义性，两个实参都必须显式写成 `HTuple` |
+| `grab_image_async` 把图像所有权交给调用方（与 pylon 回调帧相反） | `HObjectGrabFrame` 用 `Borrow`/`Own` 两个**具名工厂**区分所有权，写在调用点上而不是靠布尔参数 |
+
+测试（新增 77 例，双 TFM 各一套）：
+
+```text
+HalconStreamSessionTests.cs            14 例  布防顺序、中立帧交付与 DeviceSequence 为空、抓取超时不算故障、
+                                              设备故障只结束一次、许可证故障分类、像素落地失败结束流并释放帧、
+                                              接收方违约不逃逸不结束流、停流后拒绝并释放、Dispose 等采集线程退出、
+                                              幂等、未布防即释放、布防失败保持相机打开可重试、
+                                              布防失败后会话仍可释放、释放不关闭设备
+HalconAcquisitionDeviceStreamTests.cs  11 例  布防触发模式、交付、第二根运行复用相机、重复布防拒绝、
+                                              布防失败保持相机打开、布防期间拒绝主动采集、释放顺序、幂等、
+                                              未布防释放不碰相机、释放后拒绝布防
+HalconNeutralFramesTests.cs            12 例  Gray8 / Gray16 / BGR 交错 / 不支持布局（5 组）/ 预算 / 取消 /
+                                              null / 中立图像独立于设备帧存活
+HalconStreamFaultsTests.cs             31 例  抓取超时、通用超时不算、许可证码分类、同区间非许可证码不被误判、
+                                              区间端点、设备码分类、两类可区分、兜底分类、缺消息仍可读
+HalconTriggerMappingTests.cs            4 例  保持当前不写触发参数（且不等于 'false'）、自由运行关闭外部触发、
+                                              外部触发打开、软件触发明确拒绝
+HalconAcquisitionProviderPluginTests.cs +5 例 私有配置 triggerSource / grabTimeoutMilliseconds 默认值与解析、
+                                              非法输入（超时非正/非整数、触发源非字符串）
+```
+
+**实测**：`DP.Vision.Halcon.Tests` **102 例 0 失败**（25 → 102，双 TFM）；`DP.Vision.sln`
+**960 例 0 失败**（6 个工程 × 双 TFM，12 个运行条目，0 错误）。
+
+**变异验证**（20 项，撤销后全部复绿；"红灯数"含双 TFM）：
+
+| 改坏的行为 | 精确变红 |
+|---|---|
+| 会话：停止后仍然交付帧 | 1 例 |
+| 会话：释放不等待采集线程退出 | 1 例 |
+| 会话：循环返回时不释放设备帧 | 5 例 |
+| 会话：抓取超时被当成故障 | 1 例 |
+| 会话：布防失败不关交付口 | 2 例 |
+| 会话：释放时关闭设备 | 4 例 |
+| 会话：交付不检查停止 | 3 例 |
+| 设备：已停止的布防不允许重新布防 | 1 例 |
+| 设备：释放先关设备再停流 | 1 例 |
+| 设备：布防失败时关闭设备 | 1 例 |
+| 设备：布防期间允许单次采集 | 1 例 |
+| 设备：布防触发模式恒为保持当前 | 2 例 |
+| 中立帧：跳过预算校验 | 2 例 |
+| 中立帧：BGR 交错写成 RGB | 2 例 |
+| 中立帧：不支持的通道数按三通道处理 | 1 例 |
+| 中立帧：去掉取消检查 | 1 例 |
+| 故障：许可证按 2xxx 区间判断（复现原始错误） | 8 例 |
+| 故障：通用超时也当成抓取超时 | 1 例 |
+| 触发：保持当前写成关闭外部触发（复现原始缺陷） | 1 例 |
+| 触发：软件触发静默按自由运行 | 1 例 |
+
+> 变异验证还抓出一处**死代码**：会话里原本照抄 V1-D 写了一段"等 `_inFlight` 归零"的等待循环，
+> 但在"交付与采集循环同线程"的结构下它永远不会生效（改坏后测试仍然全绿）。按发现**删除代码**
+> 而不是弱化断言，并把这条结构依赖写成注释。
+>
+> 另有一项变异会让用例永久阻塞（把"释放时中止抓取"换成"释放时关闭设备"，假相机不会唤醒阻塞中的
+> 抓取）——变异脚本因此加了子进程超时兜底与"挂起"判定。**续跑必须跳过基线**，否则会把未还原的
+> 变异当成基线。
+
+#### 真实相机现场验收（未做）
+
+以下只能在装有 HALCON 运行时与真实相机（且具备外部触发接线）的现场签署，**不能用假相机替代**：
+
+- 目标采集接口**是否真的支持 `do_abort_grab`**（不支持时停止耗时会等于 `grab_timeout`）；
+- `grab_image_async` 的真实取流频率上限与 CPU 占用；
+- 停流时序：`AbortGrab` 之后在途帧的实际数量与耗时；
+- 断线、重连与 `H_ERR_FG*` 的实际取值；
+- 外部触发脉宽/极性/触发源，以及曝光时间对最大触发频率的限制；
+- 长时间吞吐下的内存与租约回收（`HObject` 是否真的全部释放）。
 
 ### V1-F：运行审计与长期验证
 
@@ -905,7 +1027,7 @@ HALCON 侧的差异需要显式处理而不是抹平：
 17. 每个被拒绝、超龄和未领取帧最终只Dispose一次。
 18. Provider设备关闭后，已返回Frame仍可读。
 
-当前覆盖（V1-C 完成时）：
+当前覆盖（V1-E 完成时）：
 
 | 项 | 状态 | 覆盖用例 |
 |---|---|---|
@@ -933,11 +1055,16 @@ HALCON 侧的差异需要显式处理而不是抹平：
 | 22 真实 Adapter 的回调边界纪律 | 已覆盖（V1-D 软件结构） | `Frame_IsDeliveredAsNeutralImageWithDeviceSequence`、`SinkThrow_DoesNotEscapeCallbackAndDoesNotEndStream`、`Dispose_WaitsForInFlightCallback`、`Dispose_LateInFlightFrame_IsRejectedNotForwarded`、`UnsupportedPixelFormat_CompletesStreamAndReleasesFrame` |
 | 23 真实 Adapter 的设备复用与重复布防 | 已覆盖（V1-D 软件结构） | `SecondArm_ReusesOpenCameraInsteadOfOpeningAgain`、`SecondArm_WhileArmed_IsRejectedWithoutReplacingSink`、`ArmFailure_KeepsCameraOpenForRetry`、`CaptureAsync_WhileArmed_IsRejected` |
 | 24 断线进入故障态 | 已覆盖（V1-D） | `StreamFailure_EndsStreamOnceWithReason`（适配器侧上报一次）+ `StreamCompletion_FailsWaitersImmediately`（运行时侧标为 `StreamFailure` 且是终态） |
+| 25 真实 Adapter 的自建采集线程纪律（HALCON） | 已覆盖（V1-E 软件结构） | `Frame_IsDeliveredAsNeutralImageWithNullDeviceSequence`、`SinkThrow_DoesNotEscapeAndDoesNotEndStream`、`Dispose_RejectsFrameArrivingAfterStopAndReleasesIt`、`Dispose_IsIdempotent`、`Dispose_StopsStreamWithoutClosingCamera`、`ConversionFailure_EndsStreamAndReleasesFrame` |
+| 26 真实 Adapter 的布防/停止设备侧顺序（HALCON） | 已覆盖（V1-E 软件结构） | `Arm_OpensConfiguresAndStartsGrabbing`、`DeviceDispose_StopsStreamBeforeClosingCamera`、`SecondArm_ReusesOpenCameraInsteadOfOpeningAgain`、`ArmFailure_KeepsCameraOpenForRetry`、`CaptureAsync_WhileArmed_IsRejected` |
+| 27 HALCON 超时 / 许可证 / 设备故障三分（不能混） | 已覆盖（V1-E 软件结构） | `GrabTimeout_IsCountedAndDoesNotEndStream`、`GenericTimeout_IsNotAGrabTimeout`、`LicenseFault_IsReportedAsProviderUnavailable`、`DeviceFault_EndsStreamOnceWithReason`、`NonLicenseCodesInTheSameRange_AreNotClassifiedAsLicense` |
+| 28 `KeepCurrent` 不写触发参数（不得退化为关闭外部触发） | 已覆盖（V1-E 软件结构） | `KeepCurrent_LeavesTheDeviceTriggerSettingUntouched`（断言 `'default'` 且 `AreNotEqual("false", …)`）、`Software_IsExplicitlyRejected` |
 
-**仍未覆盖（属于 V1-D 现场验收与 V1-E/F）**：真实相机回调下的断线、重连与停流时序；DeviceSequence
-在真实设备上的复位行为与可靠性；`ImageGrabbed` 的真实线程行为与吞吐上限；长时间内存与租约回收。
-这些只能在现场验收（§15）中签署，不能用假设备替代——V1-D 的软件结构验收只证明"接线与纪律正确"，
-不证明"真实相机上一定成立"。
+**仍未覆盖（属于 V1-D/V1-E 现场验收与 V1-F）**：真实相机回调下的断线、重连与停流时序；
+DeviceSequence 在真实设备上的复位行为与可靠性；`ImageGrabbed` 的真实线程行为与吞吐上限；
+HALCON 侧 `do_abort_grab` 在目标采集接口上是否真的支持、`grab_image_async` 的真实频率上限；
+长时间内存与租约回收。这些只能在现场验收（§15）中签署，不能用假设备替代——V1-D/V1-E 的软件结构
+验收只证明"接线与纪律正确"，不证明"真实相机上一定成立"。
 
 ## 15. 现场验收清单
 
@@ -950,6 +1077,8 @@ HALCON 侧的差异需要显式处理而不是抹平：
 - 网络丢包、重传和帧丢失；
 - 曝光时间对最大触发频率的限制；
 - 停流、断线和重连；
+- HALCON `do_abort_grab` 在目标采集接口上是否真的支持，以及不支持时的停止耗时（上界是 `grab_timeout`）；
+- HALCON `grab_image_async` 的真实取流频率上限与 CPU 占用；
 - HALCON许可证与Basler运行时部署；
 - 长时间吞吐、内存和租约回收；
 - 设备安全互锁和跨进程独占。
@@ -963,8 +1092,10 @@ HALCON 侧的差异需要显式处理而不是抹平：
 3. Runtime关闭不再与活动Capture/Publish竞态。
 4. 根运行与Nested的资源所有权完成结构性收口。（**采集侧已满足**：根宿主是唯一解析
    `IWorkflowRunScopeOwner` 的位置，Nested 在类型上拿不到；AR-01 阶段 3 的其余运行级状态迁移不在本版范围。）
-5. 至少一个真实Provider完成长连接外触发回调现场验收。（**未满足**：Basler 的软件结构验收已完成，
-   真实相机现场验收待做；HALCON 的流式 Adapter 尚未实现。）
-6. 文档明确列出另一个Provider未验收的状态。（**已满足**：本节与 §13 V1-E 均标注 HALCON 未实现。）
+5. 至少一个真实Provider完成长连接外触发回调现场验收。（**未满足**：Basler（V1-D）与 HALCON（V1-E）
+   的**软件结构验收均已完成**，但两个 Provider 的真实相机现场验收都待做——本机无相机，
+   且验收必须现场签署，不能用假相机替代。）
+6. 文档明确列出另一个Provider未验收的状态。（**已满足**：本节与 §13 V1-D/V1-E 的标题、现场验收清单
+   均标注"软件结构验收已完成 · 现场验收待做"。）
 7. 没有把FrameInbox暴露为Workflow公共帧仓。
 8. 没有引入TriggerId、Broadcast或厂商SDK公共类型。

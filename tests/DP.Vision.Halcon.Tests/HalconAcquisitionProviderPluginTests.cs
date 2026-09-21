@@ -143,6 +143,30 @@ public sealed class HalconAcquisitionProviderPluginTests
         Assert.AreEqual("camera:serial:DEMO0001", binding.CanonicalKey);
     }
 
+    /// <summary>未声明触发源时保持设备当前触发设置，抓取超时取默认值。</summary>
+    [TestMethod]
+    public void PrivateConfiguration_DefaultsTriggerSourceAndGrabTimeout()
+    {
+        var binding = HalconProviderConfiguration.ParseBindings(SampleConfiguration).Single();
+
+        Assert.IsNull(binding.TriggerSource);
+        Assert.AreEqual(HalconAcquisitionBinding.DefaultGrabTimeoutMilliseconds, binding.GrabTimeoutMilliseconds);
+    }
+
+    /// <summary>外部触发的触发源与抓取超时都由私有配置显式声明。</summary>
+    [TestMethod]
+    public void PrivateConfiguration_ParsesTriggerSourceAndGrabTimeout()
+    {
+        const string configuration =
+            "{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam-top\","
+            + "\"triggerSource\":\"Line1\",\"grabTimeoutMilliseconds\":800}}}";
+
+        var binding = HalconProviderConfiguration.ParseBindings(configuration).Single();
+
+        Assert.AreEqual("Line1", binding.TriggerSource);
+        Assert.AreEqual(800, binding.GrabTimeoutMilliseconds);
+    }
+
     /// <summary>插件入口把私有配置交给Provider Module；缺少配置表示尚未配置设备而不是解析失败。</summary>
     [TestMethod]
     public void PluginEntry_CreatesModuleWithConfiguredBindings()
@@ -173,6 +197,9 @@ public sealed class HalconAcquisitionProviderPluginTests
     [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\"}}}", "deviceName")]
     [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":12}}}", "必须是字符串")]
     [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"\"}}}", "不能为空")]
+    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam\",\"grabTimeoutMilliseconds\":0}}}", "必须为正")]
+    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam\",\"grabTimeoutMilliseconds\":\"800\"}}}", "必须是整数")]
+    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam\",\"triggerSource\":true}}}", "必须是字符串")]
     [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"A\",\"deviceName\":\"B\"},\"top\":{\"interfaceName\":\"A\",\"deviceName\":\"C\"}}}", "重复")]
     [DataRow("[1,2]", "必须是JSON对象")]
     [DataRow("{ not json", "不是有效JSON")]
