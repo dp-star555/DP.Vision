@@ -5,7 +5,7 @@
 > 本文回答"现在是什么、验收到哪一步、还差什么"。
 >
 > 最后更新：2026-09-22 · 基线 `DP.Vision.sln` 构建 **0 警告 0 错误**、
-> 测试 **1198 例 0 失败**（6 工程 × 双 TFM = 12 运行条目）。
+> 测试 **1202 例 0 失败**（6 工程 × 双 TFM = 12 运行条目）。
 
 ## 文档地图
 
@@ -118,7 +118,7 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
 
 ## 4. 尚未验证 / 待办
 
-### 4.0 优化项 Phase A（相机自治）— 设计已定形，**当前被跨仓在途改动阻塞**
+### 4.0 优化项 Phase A（相机自治）— 并行启停**已落地**；契约部分仍被跨仓在途改动阻塞
 
 **目标**：相机只管理"连接 / 取流 / 帧窗口 / 缓冲 / 诊断"，**不理解 Workflow、根流程或流程资源集合**。
 
@@ -131,12 +131,12 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
 | 改名 | `VisionFrameInbox.BeginEpoch/EndEpoch` → 窗口的 open/close | **窗口是唯一持有代次的对象**，队列只有一条实现，不保留第二套 |
 | 改签名 | `IVisionAcquisition.CaptureAsync` → `VisionCaptureResult(Image, Failure)` | 让"取到了但这一帧有问题"不必靠异常表达 |
 | 收窄 | `EVisionRuntimeState` | 只反映软件生命周期（打开/关闭/降级），不与运行状态耦合 |
-| 并行 | `StartAsync` / `StopAsync` | 不同 `ResourceKey` 互相独立，一个慢相机不阻塞其他 |
+| 并行 | `StartAsync` / `StopAsync` | 不同 `ResourceKey` 互相独立，一个慢相机不阻塞其他 —— **已落地，见 §4.0.2** |
 
 **关键语义**：窗口的持有者是**消费方**（节点侧的帧作用域），不是根运行。
 窗口关闭 = 收口本代次并释放未领取帧；窗口之外的帧仍按现有规则被拒绝并计数。
 
-**为什么现在不做**：`IVisionAcquisition` 在 DP.WorkFlow 侧的**全部 5 个消费点**
+**为什么契约部分现在不做**：`IVisionAcquisition` 在 DP.WorkFlow 侧的**全部 5 个消费点**
 （`VisionCaptureNodeExecution.cs`、`WorkflowImageRuntimePluginModule.cs`、两个 sample、
 `BufferedExternalRunScopeEndToEndTests.cs`）此刻正被**另一个进程暂存或修改中**
 （2026-09-22 17:2x 仍在写），而 `VisionAcquisitionRunScope.cs` 与 `WorkflowVisionFrameScope.cs`
@@ -156,6 +156,35 @@ C 的计数口径要点已定：`FramesReceived` 定义为**到达会话回调�
 使 `Received = Claimed + Expired + 被拒(溢出/无窗口/未布防) + 收口未领取 + 在队列` 恒成立，
 并暴露 `FramesUnaccounted` 供断言——现在的口径里 `FramesRejected` 含了
 `FramesReceived` 不含的一类（未布防拒绝），等式不成立，这正是 C 要修的。
+
+### 4.0.2 已落地：按 `ResourceKey` 并行启动 / 停止（2026-09-22）
+
+`VisionAcquisitionRuntime.StartAsync` / `StopAsync` 现在对**不同 `ResourceKey` 并行**执行，
+**单个资源内的行为一字未改**。这一项不依赖任何被对方占用的契约，因此可以先落地。
+
+- `StartAsync`：先在**单线程**里按 `ResourceKey` 选出代表 Source（去重），再 `Task.WhenAll` 并行打开。
+- `StopAsync`：先并行释放全部会话，再并行释放全部 Provider。用 `WhenAll` 而不是逐个 `await`——
+  某个会话释放失败也不会让其余会话与 Provider 永远得不到释放（异常在所有任务落定后抛出）。
+- 取消语义未变：`WhenAll` 等**全部**任务落定才抛，所以取消时不会出现"打开动作还在半空中就重置状态"。
+- 每个会话"先关接受门、再停流、再等在途操作退出、最后释放设备"的顺序**没有变**，
+  它由 `VisionResourceSession.DisposeAsync` 自己保证（同步前段就在锁内置位停止态并唤醒等待者）。
+
+**验证**：`tests/DP.Vision.Acquisition.Tests/Concurrency/ParallelResourceStartStopTests.cs` 两条用例
+在**未修复代码上确认变红**（两个 TFM 各 2 失败 / 0 通过；失败信息分别是
+"第一个资源还卡在打开里时，另一个资源必须已经打开完成"与"另一台必须已经停流完成"），
+修复后本工程 196 例 0 失败（基线 194，+2 即本用例）。
+变异验证 3/3 咬住，且隔离干净：启动改回串行 → 只有启动用例红；停止改回串行 → 只有停止用例红；
+停止时不释放 Provider → 停止用例 + 既有 `MultipleCaptures_OpenOnceAndNeverCloseUntilStop` 红。
+
+> **断言刻意不按名字假定谁先谁后**：`VisionAcquisitionProviderComposition.Sources` 按 `SourceId` 排序，
+> 声明顺序不作数。第一版用例把"慢"绑在 `Camera.Slow` 上，于是**串行实现也假绿**
+> （`Camera.Fast` 排在前面，快相机本来就会先打开完）。现在卡住的是"第一个真正开始动作的资源"，
+> 由测试自己分辨出另一个，顺序无关。
+>
+> **一个未命中的变异（如实记录）**：去掉"单线程选代表源"后全部用例仍绿。原因是该不变式另有
+> `GetOrOpenDeviceAsync` 的 `OpenGate` + 二次判空独立保证，且组合期已禁止两个外部回调缓冲源
+> 共用一个资源键。保留去重是为了让本次改动**只涉及并发**、不改单个资源的语义，
+> 而不是因为有一条测试咬得住它。
 
 - **真实相机现场验收**：V1-D / V1-E 的断线、重连、停流时序只能在现场签署。
   待现场确认项：HALCON 目标采集接口是否支持 `do_abort_grab`；`grab_image_async` 的实际取流频率上限。
@@ -188,8 +217,8 @@ cd DP.Vision && dotnet build DP.Vision.sln -c Debug
 cd DP.Vision && dotnet test DP.Vision.sln
 ```
 
-- 12 个运行条目（6 工程 × 双 TFM），当前 **1198 例 0 失败**：
-  Algorithms 69、Acquisition 194、Basler 91、Halcon 127、Integration 3、Vision 115（各 ×2）。
+- 12 个运行条目（6 工程 × 双 TFM），当前 **1202 例 0 失败**：
+  Algorithms 69、Acquisition 196、Basler 91、Halcon 127、Integration 3、Vision 115（各 ×2）。
 - **解决方案级 `dotnet build` / `dotnet test` 建议加 `-m:1`**：本机同时构建 `DP.WorkFlow`
   （源码引用本仓工程）时，`obj/` 下的 dll/pdb 会被另一个 MSBuild 进程持有，
   多线程构建会报 CS2012「文件被占用」——那是**文件锁**，不是编译错误。

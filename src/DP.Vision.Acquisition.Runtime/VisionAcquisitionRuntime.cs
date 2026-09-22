@@ -67,6 +67,10 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
     /// 同一ResourceKey只创建一个Device Adapter和一个SDK对象（§21.4）；任一失败都不得自动选择其他Provider。
     /// Required源打开失败时Runtime进入NotReady，Optional源失败只降级为Degraded且对应Source保留完整诊断。
     /// </para>
+    /// <para>
+    /// 不同ResourceKey**并行**打开：一台相机的SDK打开慢，不得让其他相机排队等它。
+    /// 但"同一ResourceKey只打开一次"是**单线程**选出代表Source时保证的，不靠并发碰运气。
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">协作取消。</param>
     /// <returns>启动后的运行时状态（Ready/Degraded/NotReady）。</returns>
@@ -84,17 +88,31 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         }
 
         var sources = _composition.Sources;
+
+        // 代表Source必须先**单线程**选出来：同一物理资源只打开一次。
+        // 目的是让"一个ResourceKey一个设备"（§21.4）在**结构上**成立，而不是靠并发时序碰运气——
+        // 并发的两次打开若各自看到"设备还没打开"，就会各自去开一次SDK对象。
+        // （GetOrOpenDeviceAsync 里还有一道 OpenGate + 二次判空兜底；两道都在才谈得上稳。）
+        // 顺带让每个ResourceKey的 MarkConnecting/MarkConnected/StartStreamAsync 仍只被调用一次，
+        // 于是本次改动**只把不同ResourceKey之间并行**，单个资源内的行为一字未改。
+        var representatives = new List<VisionAcquisitionSourceBinding>();
         var handledKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var binding in sources)
+        {
+            if (handledKeys.Add(binding.ResourceKey))
+                representatives.Add(binding);
+        }
+
         try
         {
-            foreach (var binding in sources)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                // 同一物理资源只打开一次；多个Source有意映射同一ResourceKey时必须共享同一设备。
-                if (!handledKeys.Add(binding.ResourceKey))
-                    continue;
-                await StartResourceAsync(binding, cancellationToken).ConfigureAwait(false);
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // WhenAll 会等**全部**任务落定才抛异常，所以取消时不会出现"还有打开动作在半空中就重置状态"。
+            var starts = new Task[representatives.Count];
+            for (var index = 0; index < representatives.Count; index++)
+                starts[index] = StartResourceAsync(representatives[index], cancellationToken).AsTask();
+
+            await Task.WhenAll(starts).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -117,6 +135,15 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
     /// <summary>
     /// 按关闭顺序停止运行时：关闭接受门、拒绝新采集与根运行、停流并清退未领取帧、
     /// 等待在途操作退出、释放唯一SDK设备对象、释放Provider。重复调用无副作用。
+    /// <para>
+    /// 不同ResourceKey**并行**关闭：一台相机的停流慢，不得让其他相机跟着一起等。
+    /// 并行不改变每个会话内部的关闭顺序——"先关接受门、再停流"仍由
+    /// <c>VisionResourceSession.DisposeAsync</c> 自己保证（同步前段就在锁内置位停止态并唤醒等待者）。
+    /// </para>
+    /// <para>
+    /// 用 <c>WhenAll</c> 而不是逐个 <c>await</c>：某个会话释放失败也不会让其余会话与Provider
+    /// 永远得不到释放，异常在所有任务落定后抛出。
+    /// </para>
     /// </summary>
     public async ValueTask StopAsync()
     {
@@ -135,10 +162,17 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         }
 
         // 每个会话先关接受门、再停流（等待已进入的回调退出）、再等在途操作退出，最后释放设备。
-        foreach (var session in sessions)
-            await session.DisposeAsync().ConfigureAwait(false);
-        foreach (var provider in providers)
-            await provider.DisposeAsync().ConfigureAwait(false);
+        var sessionStops = new Task[sessions.Length];
+        for (var index = 0; index < sessions.Length; index++)
+            sessionStops[index] = sessions[index].DisposeAsync().AsTask();
+
+        await Task.WhenAll(sessionStops).ConfigureAwait(false);
+
+        var providerStops = new Task[providers.Length];
+        for (var index = 0; index < providers.Length; index++)
+            providerStops[index] = providers[index].DisposeAsync().AsTask();
+
+        await Task.WhenAll(providerStops).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

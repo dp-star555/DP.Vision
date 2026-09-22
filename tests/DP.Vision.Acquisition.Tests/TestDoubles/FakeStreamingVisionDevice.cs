@@ -51,6 +51,15 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
     public int StreamStartCount => Volatile.Read(ref _streamStartCount);
 
     /// <summary>
+    /// 可选的停流闸门：设置后 <c>IVisionAcquisitionStream.DisposeAsync</c> 会先等待它返回。
+    /// <para>
+    /// 用来模拟"这台相机的 SDK 停流很慢"，从而验证运行时的启动/停止不会把不同相机串起来。
+    /// 默认为空，此时停流同步完成（既有用例依赖这个行为）。
+    /// </para>
+    /// </summary>
+    public Func<ValueTask>? StreamStopGate { get; set; }
+
+    /// <summary>
     /// 接收流被**显式**释放的次数。
     /// <para>
     /// 只统计 <c>IVisionAcquisitionStream.DisposeAsync()</c>。设备自身被释放时也会结束接收，
@@ -191,10 +200,15 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
         public Stream(FakeStreamingVisionDevice device) => _device = device;
 
         /// <summary>释放接收流：等待已经进入的回调退出，之后不再交付任何帧。</summary>
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
-                return default;
+                return;
+
+            // 模拟厂商SDK停流的耗时；闸门为空时（默认）仍然同步完成，既有用例不受影响。
+            var gate = _device.StreamStopGate;
+            if (gate is not null)
+                await gate().ConfigureAwait(false);
 
             lock (_device._callbackGate)
             {
@@ -203,8 +217,6 @@ internal sealed class FakeStreamingVisionDevice : IVisionAcquisitionDevice, IVis
                 _device._events.Add("stream-stop");
                 Interlocked.Increment(ref _device._streamDisposeCount);
             }
-
-            return default;
         }
     }
 }
