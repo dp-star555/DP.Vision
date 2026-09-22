@@ -4,7 +4,8 @@
 > 计划与设计文档只作为归档保留，不再与本文平行描述现状；它们回答"当初为什么这样决定"，
 > 本文回答"现在是什么、验收到哪一步、还差什么"。
 >
-> 最后更新：2026-09-22 · 基线 `DP.Vision.sln` 构建 **0 警告 0 错误**、测试 **1252 例 0 失败**（双 TFM）。
+> 最后更新：2026-09-22 · 基线 `DP.Vision.sln` 构建 **0 警告 0 错误**、
+> 测试 **1198 例 0 失败**（6 工程 × 双 TFM = 12 运行条目）。
 
 ## 文档地图
 
@@ -27,13 +28,13 @@ DP.Vision.Acquisition.Abstractions  中立采集契约（33 个文件，无厂�
     ↑
 DP.Vision.Acquisition.Runtime       组合 / 机器配置 / 设备生命周期 / 帧仓
     ↑
-DP.Vision.Halcon  ·  DP.Vision.Basler   厂商 Provider 插件（各自 plugin.json）
+DP.Vision.Halcon  ·  DP.Vision.Basler   厂商 Driver Module（目录扫描发现，无 Manifest）
 ```
 
 | 工程 | 职责 |
 |---|---|
-| `DP.Vision.Acquisition.Abstractions` | `IVisionAcquisition`、Provider/DriverModule 契约、运行所有者、机器相机定义、中立帧与诊断 |
-| `DP.Vision.Acquisition.Runtime` | 插件目录发现与加载、不可变 Provider 组合、机器配置解析与修订、`VisionAcquisitionTypeCatalog`、`VisionResourceSession`、`VisionFrameInbox` |
+| `DP.Vision.Acquisition.Abstractions` | `IVisionAcquisition`、DriverModule 契约（含可选健康报告）、运行所有者、机器相机定义、中立帧与诊断 |
+| `DP.Vision.Acquisition.Runtime` | Driver Module 目录扫描与加载、不可变 Provider 组合、机器配置解析与修订、`VisionAcquisitionTypeCatalog`、`VisionResourceSession`、`VisionFrameInbox` |
 | `DP.Vision.Halcon` | HALCON 采集接口 Provider（面阵/线扫/采集卡通道），编译期 `HALCON_SDK` 开关 |
 | `DP.Vision.Basler` | pylon Provider，原生运行时健康探测 |
 
@@ -58,8 +59,15 @@ DP.Vision.Halcon  ·  DP.Vision.Basler   厂商 Provider 插件（各自 plugin.
    - 停止：`DisposeAsync` 必须**等待已进入的交付退出**，之后不得再交付。
 6. **厂商差异显式处理而非抹平**：HALCON 缺 SDK 是编译期问题；Basler 缺的是原生运行时。
 7. **插件包必须自包含厂商依赖，但不得包含宿主契约程序集**（否则插件拿到第二份类型，组合必然失败）。
-8. **运行隔离**：根运行 Epoch 只属于 `FrameInbox`；`EndEpoch` 清理本 Epoch 未领取帧并计入诊断，不交给下一根运行。
-9. **Provider 失败不自动切换**到另一个 Provider。
+   插件发现**不读 Manifest**：依据是"程序集里存在实现 `IVisionAcquisitionDriverModule` 的公开类型"。
+8. **插件可用性是机器部署状态，不是内容身份**：缺 SDK / 缺原生运行时 / 架构不匹配由
+   `IVisionAcquisitionDriverModuleHealth.TryGetHealth` 在 Type Catalog 冻结时**按 Module 记录一次**，
+   **不进入 `CatalogId`**——两台部署相同的机器必须得到同一个 `CatalogId`。
+   不可用插件声明的 Source 被**保真保留**并带诊断，但**不产生绑定**，因此不会进入 Runtime 的
+   打开设备流程；与"Type 未安装"同一条路，缺 SDK 在首节点执行前就可见。
+   未实现健康报告的 Module 视为**可用**（可选接口，不是"默认不可用"）。
+9. **运行隔离**：根运行 Epoch 只属于 `FrameInbox`；`EndEpoch` 清理本 Epoch 未领取帧并计入诊断，不交给下一根运行。
+10. **Provider 失败不自动切换**到另一个 Provider。
 
 ## 3. 验收状态
 
@@ -92,6 +100,22 @@ V2-0..V2-9、V2-11 全部完成，逐阶段证据见 [STATUS](ACQUISITION_CONNEC
 TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider 迁移、首个线扫/采集卡 Adapter、
 采集管理界面与审计。
 
+### 3.4 采集插件体系收口（优化项 Phase B）— 已完成
+
+- **B-1**（`a8da196`）：`deviceSettings` 成为设备配置唯一来源，插件私有配置不再承载设备绑定。
+- **B-2**（`337604e`）：删除旧插件路径——`IVisionAcquisitionProviderPlugin` /
+  `IVisionAcquisitionProviderHealth` / `VisionAcquisitionProviderPluginLoader` /
+  厂商 `*AcquisitionProviderPlugin`·`*AcquisitionProviderModule` / 两家 `plugin.json`；
+  SDK 健康检查与 `PluginIdentity` 迁到 `IVisionAcquisitionDriverModule`，
+  并以可选接口 `IVisionAcquisitionDriverModuleHealth` 承载"已安装但当前不可用"的诊断。
+
+结果：**采集插件只剩一条发现路径**——目录扫描 Driver Module + Type Catalog 冻结。
+`tests/DP.Vision.Acquisition.Tests/Architecture/LegacyProviderPluginPathTests.cs` 冻结该删除
+（被删类型缺席 + `plugin.json` 不再随包投放 + `.csproj` 不再引用，且带扫描下限防假绿）。
+
+> 注意：本仓另有**一套无关的** `plugin.json` 体系——Workflow 节点插件的
+> `WorkflowPluginLoader.ManifestFileName`。那是节点插件契约，与采集无关，未改动。
+
 ## 4. 尚未验证 / 待办
 
 - **真实相机现场验收**：V1-D / V1-E 的断线、重连、停流时序只能在现场签署。
@@ -101,11 +125,11 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
   真正生效的像素格式来自 `BaslerNeutralFrames` 对设备上报格式的转换，超出支持范围会明确报错。
   把配置值写到 `PLCamera.PixelFormat` 需要 pylon 现场验证，因此留待现场验收一并处理。
 - **V1-F（运行审计与长期验证）** 未实现。
-- **组合键与 Provider 自身身份是两个不同的字符串**：机器配置路径下，
+- **组合键与插件身份仍是两个不同的字符串，必须区分**：机器配置路径下，
   组合/绑定里的 `ProviderId` 实际是 `AcquisitionTypeId`（如 `dp.acquisition.halcon.area`），
-  而 Provider 对外报告的 `ProviderId` 是插件身份（`dp.vision.halcon`），设备身份里也用后者。
-  两者目前各自一致、能正常工作，但混用会得到"Provider 不在当前组合中"这类误导性诊断，
-  属于 Phase B「迁移 PluginIdentity」要收口的问题。
+  而插件对外报告的身份是 `PluginIdentity`（`dp.vision.halcon`），设备身份与可用性诊断里用后者。
+  Phase B-2 已把 `PluginIdentity` 收敛到各厂商 Driver Module 的**单一常量**，不再有两份声明；
+  但两个字符串本身不会合并——在断言或诊断里混用，仍会得到"Provider 不在当前组合中"这类误导信息。
 - **`Software` 触发**（HALCON）依据 MVTec 官方示例与本机 SDK 反射实现，未经现场验收；
   若所用采集接口不接受 `[Consumer]trigger`，以 `VisionParameterNotSupportedException` 明确失败，不静默降级。
 - 采集侧遗留：`WorkflowVisionAcquisitionSession` 仍兼"文件夹采集会话 + 帧作用域准备"两职责；
@@ -125,5 +149,9 @@ cd DP.Vision && dotnet build DP.Vision.sln -c Debug
 cd DP.Vision && dotnet test DP.Vision.sln
 ```
 
-- 12 个运行条目（6 工程 × 双 TFM），当前 **1252 例 0 失败**。
+- 12 个运行条目（6 工程 × 双 TFM），当前 **1198 例 0 失败**：
+  Algorithms 69、Acquisition 194、Basler 91、Halcon 127、Integration 3、Vision 115（各 ×2）。
+- **解决方案级 `dotnet build` / `dotnet test` 建议加 `-m:1`**：本机同时构建 `DP.WorkFlow`
+  （源码引用本仓工程）时，`obj/` 下的 dll/pdb 会被另一个 MSBuild 进程持有，
+  多线程构建会报 CS2012「文件被占用」——那是**文件锁**，不是编译错误。
 - **"文件已投放"不等于"插件能加载"**：验证部署必须在目标输出目录里真正跑一次加载器。

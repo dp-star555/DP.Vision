@@ -74,40 +74,39 @@ var captured = await acquisition.CaptureAsync(
 - 设备帧在回调边界内复制为中立图像，`HObject`/`HFramegrabber` 不越过 Provider Interface；停止后到达的帧同样被拒绝并释放。
 
 
-## 采集 Provider 插件
+## 采集 Driver Module
 
-本程序集同时是一个采集Provider插件包：随程序集输出 `plugin.json`，由宿主扫描插件目录发现，宿主不需要在编译期引用任何 HALCON 类型。
+本程序集同时是一个采集 **Driver Module** 包：宿主**扫描插件目录**，在程序集里找实现
+`IVisionAcquisitionDriverModule` 的公开类型即可发现，**不读取任何 Manifest**，
+宿主不需要在编译期引用任何 HALCON 类型。
+
+- `HalconAcquisitionDriverModule` 实现 `IVisionAcquisitionDriverModule`，以
+  `dp.acquisition.halcon.area` 与 `dp.acquisition.halcon.line` 两个 AcquisitionType
+  向 Type Catalog 注册候选工厂；插件身份常量 `PluginIdentity` 为 `dp.vision.halcon`。
+- 同一个类实现可选接口 `IVisionAcquisitionDriverModuleHealth`：SDK 未部署时 `TryGetHealth`
+  报告不可用并给出带插件身份的诊断。该结论在 Type Catalog 冻结时**按 Module 记录一次**，
+  使机器配置里引用这些 Type 的逻辑源在**首节点执行前**就被标记为不可用，而不是等到采集时才失败。
+  **未实现该接口的 Module 视为可用**——它是可选能力，不是"默认不可用"。
+- 设备绑定属于该 AcquisitionType 的 `deviceSettings`，由 `HalconDeviceSettingsParser` 解析一次，
+  结果装进插件私有 `ProviderState` 随公共绑定一路带到 `OpenAsync`；公共层只原样转交、不解释。
+  **插件私有配置不再承载设备绑定**（非空即拒绝）：同一台相机绝不能在两处各写一遍。
+
+`deviceSettings` 是**单设备扁平对象**：
 
 ```json
 {
-  "manifestVersion": 1,
-  "pluginId": "dp.vision.halcon",
-  "version": "1.0.0",
-  "modules": { "visionAcquisition": [ "DP.Vision.Halcon.dll" ] }
+  "interfaceName": "GigEVision2",
+  "deviceName": "cam-top",
+  "serialNumber": "DEMO0001",
+  "triggerSource": "Line1",
+  "grabTimeoutMilliseconds": 5000
 }
 ```
 
-- `HalconAcquisitionProviderPlugin` 实现 `IVisionAcquisitionProviderPlugin`，只向公共层提交Provider候选工厂；`ProviderId` 为 `dp.vision.halcon`。
-- 设备绑定属于Provider私有配置，公共配置只引用其绑定身份：
-
-```json
-{
-  "bindings": {
-    "top-camera": {
-      "interfaceName": "GigEVision2",
-      "deviceName": "cam-top",
-      "serialNumber": "DEMO0001",
-      "triggerSource": "Line1",
-      "grabTimeoutMilliseconds": 5000
-    }
-  }
-}
-```
-
-  未知字段、缺失字段、重复绑定身份和非法类型一律拒绝，不静默忽略；`serialNumber` 缺省时无法报告规范资源键。
+  `interfaceName` 与 `deviceName` 必填；未知字段、缺失字段和非法类型一律拒绝，不静默忽略。
+  `serialNumber` 缺省时无法报告规范资源键。
   `triggerSource` 只有外部回调缓冲源进入外部触发模式时才需要（缺省表示"保持设备当前触发设置"，不猜物理接线）；
   `grabTimeoutMilliseconds` 是长连接的抓取等待上限，同时决定停止等待的上界，缺省 5000。
-- 插件实现 `IVisionAcquisitionProviderHealth`：SDK未部署时报告不可用并给出带Provider身份的诊断，使采集节点在首节点执行前失败，而不是等到采集时才失败。
 
 ## 像素边界
 
@@ -115,4 +114,4 @@ var captured = await acquisition.CaptureAsync(
 
 真正的像素落地与布局/预算判定在 `HalconNeutralFrames`，主动单次采集与外部回调长连接**共用同一份实现**——两条路径各写一份通道排布，只会在现场以"偶发图像错位"的形式暴露。
 
-测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；另有 145 例（含双 TFM）覆盖触发/曝光/增益参数决策、句柄复用、单次采集与取流的双向互斥、停止等待、回调边界纪律、错误码分类、两个AcquisitionType的Kind与整图交付、**设备发现**（`info_boards` 权威条目解析、与配置解析一致的资源键、跨接口去重、全接口失败时明确抛不可用），全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**：`Software` 触发按 MVTec 官方示例实现（`[Consumer]trigger` + 抓取前 `[Consumer]trigger_software`），是否被现场接口接受、曝光/触发精度、`do_abort_grab` 支持情况与吞吐都必须现场确认；线扫还需现场确认整图高度由哪一侧决定（相机帧触发 vs 采集接口/采集卡参数）以及行频与整图尺寸的对应关系；设备发现还需确认默认接口名集合与 `info_boards` 条目形态。
+测试覆盖真实 SDK 灰度/16位/RGB 像素、借用对象释放边界、取消、预算和非法格式；`DP.Vision.Halcon.Tests` 共 **127 例 × 双 TFM**，覆盖触发/曝光/增益参数决策、句柄复用、单次采集与取流的双向互斥、停止等待、回调边界纪律、错误码分类、两个AcquisitionType的Kind与整图交付、Driver Module 身份与 SDK 健康报告、**设备发现**（`info_boards` 权威条目解析、与配置解析一致的资源键、跨接口去重、全接口失败时明确抛不可用），全部由可控假设备驱动，不需要相机与许可证。**没有真实相机硬件验收**：`Software` 触发按 MVTec 官方示例实现（`[Consumer]trigger` + 抓取前 `[Consumer]trigger_software`），是否被现场接口接受、曝光/触发精度、`do_abort_grab` 支持情况与吞吐都必须现场确认；线扫还需现场确认整图高度由哪一侧决定（相机帧触发 vs 采集接口/采集卡参数）以及行频与整图尺寸的对应关系；设备发现还需确认默认接口名集合与 `info_boards` 条目形态。

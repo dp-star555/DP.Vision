@@ -95,34 +95,40 @@ var captured = await acquisition.CaptureAsync(
 - `CameraFinder.Enumerate()` 是阻塞调用且没有超时参数，枚举耗时与打开设备期间的枚举行为需实测。
 - 同一台相机在枚举结果中的身份字段是否稳定：`userDefinedName` 可被现场改写，只有序列号是长期稳定键。
 
-## 采集 Provider 插件
+## 采集 Driver Module
 
-本程序集同时是一个采集Provider插件包：随程序集输出 `plugin.json`，由宿主扫描插件目录发现，宿主不需要在编译期引用任何 Basler 类型。
+本程序集同时是一个采集 **Driver Module** 包：宿主**扫描插件目录**，在程序集里找实现
+`IVisionAcquisitionDriverModule` 的公开类型即可发现，**不读取任何 Manifest**，
+宿主不需要在编译期引用任何 Basler 类型。
+
+- `BaslerAcquisitionDriverModule` 实现 `IVisionAcquisitionDriverModule`，以
+  `dp.acquisition.basler.area` 向 Type Catalog 注册候选工厂；插件身份常量 `PluginIdentity`
+  为 `dp.vision.basler`。
+- 同一个类实现可选接口 `IVisionAcquisitionDriverModuleHealth`。与 HALCON 不同，这里的"缺 SDK"
+  是**运行时**问题：pylon 托管程序集随 NuGet 包还原，编译期一定在；缺的是原生运行时。
+  健康探测直接检查进程能否解析 `PylonBase_v10.dll`，不可用时给出带插件身份的诊断；
+  该结论在 Type Catalog 冻结时**按 Module 记录一次**，使机器配置里引用该 Type 的逻辑源在
+  **首节点执行前**就被标记为不可用，而不是等到采集时抛原生 `SEHException`。
+  **未实现该接口的 Module 视为可用**——它是可选能力，不是"默认不可用"。
+- 设备绑定属于该 AcquisitionType 的 `deviceSettings`，由 `BaslerDeviceSettingsParser` 解析一次，
+  结果装进插件私有 `ProviderState` 随公共绑定一路带到 `OpenAsync`；公共层只原样转交、不解释。
+  **插件私有配置不再承载设备绑定**（非空即拒绝）。
+
+`deviceSettings` 是**单设备扁平对象**，`serialNumber` 与 `userDefinedName` **恰好给一个**：
 
 ```json
-{
-  "manifestVersion": 1,
-  "pluginId": "dp.vision.basler",
-  "version": "1.0.0",
-  "modules": { "visionAcquisition": [ "DP.Vision.Basler.dll" ] }
-}
+{ "serialNumber": "40123456" }
 ```
-
-- `BaslerAcquisitionProviderPlugin` 实现 `IVisionAcquisitionProviderPlugin`；`ProviderId` 为 `dp.vision.basler`。
-- 设备绑定属于Provider私有配置，公共配置只引用其绑定身份：
 
 ```json
-{
-  "bindings": {
-    "top-camera": { "serialNumber": "40123456" },
-    "side-camera": { "userDefinedName": "SideView" },
-    "triggered-camera": { "serialNumber": "40123457", "triggerSource": "Line1" }
-  }
-}
+{ "serialNumber": "40123457", "triggerSource": "Line1", "pixelFormat": "Mono8" }
 ```
 
-  未知字段、缺失字段、重复绑定身份、非法类型和"两个选择器都给了/都没给"一律拒绝，不静默忽略；按 `userDefinedName` 选择时无法报告规范资源键。
-- 插件实现 `IVisionAcquisitionProviderHealth`。与 HALCON 不同，这里的"缺 SDK"是**运行时**问题：pylon 托管程序集随 NuGet 包还原，编译期一定在；缺的是原生运行时。健康探测直接检查进程能否解析 `PylonBase_v10.dll`，不可用时报告带Provider身份的诊断，使采集节点在**首节点执行前**失败，而不是等到采集时抛原生 `SEHException`。
+  未知字段、缺失字段、非法类型和"两个选择器都给了/都没给"一律拒绝，不静默忽略；
+  按 `userDefinedName` 选择时无法报告规范资源键。
+  `pixelFormat` 目前**只进入配置摘要、不写回设备**：真正生效的像素格式来自
+  `BaslerNeutralFrames` 对设备上报格式的转换，超出支持范围会明确报错；
+  把它写到 `PLCamera.PixelFormat` 需要 pylon 现场验证，因此留待现场验收一并处理。
 
 ## 像素边界
 

@@ -8,7 +8,7 @@
 
 `DP.Vision.Algorithms/Calibration` 提供独立仿射标定、旋转中心拟合和坐标变换，中心化/尺度归一并拒绝退化观测；RMS不是产品合格判定。Workflow已直接使用新版强类型标定、文件/文件夹采集、Blob、RGB均值、线圆边缘拟合、平移定位和原生双平台ROI页面，旧Workflow视觉兼容已删除。相机通过独立 [DP.Vision.Halcon](src/DP.Vision.Halcon/README.md) 直接调用SDK并复制中立图像，不经过旧设备Adapter；一个绑定只有一个设备适配器、只持有一个已连接的SDK设备对象，主动单次采集与外部回调缓冲源共用它（外部回调缓冲源用长连接会话接管设备：自建采集线程、跨布防复用、停止等待有上界），两种模式互斥且设备只在释放时关闭。
 
-采集已经按插件组织：`DP.Vision.Acquisition.Abstractions` 定义中立契约，`DP.Vision.Acquisition.Runtime` 负责不可变Provider组合、机器级逻辑Source绑定、设备生命周期和按物理ResourceKey互斥，`DP.Vision.Halcon` 与 `DP.Vision.Basler` 各自发布 `plugin.json` 并由宿主扫描插件目录发现。工作流文档只保存逻辑SourceId，换机器只改机器配置。旧 `ICameraCapture`/`CameraCaptureOptions`/`HalconCameraCapture` 已随旧设备适配路径删除，采集只有 `IVisionAcquisition` 一条路径。
+采集已经按插件组织：`DP.Vision.Acquisition.Abstractions` 定义中立契约，`DP.Vision.Acquisition.Runtime` 负责不可变Provider组合、机器级逻辑Source绑定、设备生命周期和按物理ResourceKey互斥，`DP.Vision.Halcon` 与 `DP.Vision.Basler` 各自以 **Driver Module** 形式被宿主扫描目录发现（**不读 Manifest**：依据是程序集里存在实现 `IVisionAcquisitionDriverModule` 的公开类型）。工作流文档只保存逻辑SourceId，换机器只改机器配置。旧 `ICameraCapture`/`CameraCaptureOptions`/`HalconCameraCapture` 已随旧设备适配路径删除，旧采集 Provider 插件路径（`IVisionAcquisitionProviderPlugin` + `plugin.json`）也已删除并有架构测试冻结，采集只有 `IVisionAcquisition` 一条路径。
 
 **当前形态、不变式、验收状态与待办统一收在 [ACQUISITION_STATUS.md](ACQUISITION_STATUS.md)**（唯一现状入口）；逐阶段提交号与测试证据见 [ACQUISITION_CONNECTION_V2_STATUS.md](ACQUISITION_CONNECTION_V2_STATUS.md)，设计归档见 [ACQUISITION_RUNTIME_V1.md](ACQUISITION_RUNTIME_V1.md) 与 [ACQUISITION_CONNECTION_V2_PLAN.md](ACQUISITION_CONNECTION_V2_PLAN.md)，Provider 化改造的动机与验收矩阵见 [图像采集Provider实施基线](../DP.WorkFlow/docs/vision-acquisition-providers.md)。既有Workflow接入记录见 `../DP.WorkFlow/docs/dp-vision-integration-plan.md`。
 
@@ -47,11 +47,11 @@
 |---|---|---|
 | `src/DP.Vision` | netstandard2.0 | 图像布局/只读租约/有界缓冲池、ROI/Region/XLD几何、图层、帧身份、预览邮箱、分块规划、LRU、显示LOD |
 | `src/DP.Vision.Algorithms` | netstandard2.0 | 中立采集、Blob/颜色、测量/定位、标定及既有业务算法契约 |
-| `src/DP.Vision.Acquisition.Abstractions` | netstandard2.0 | 采集公共契约：Provider/设备/逻辑源/请求/结果/错误、插件入口；只引用 `DP.Vision` |
-| `src/DP.Vision.Acquisition.Runtime` | netstandard2.0 | 不可变Provider组合、机器级逻辑源绑定、设备生命周期与按ResourceKey互斥、`plugin.json` 插件加载 |
+| `src/DP.Vision.Acquisition.Abstractions` | netstandard2.0 | 采集公共契约：DriverModule/设备/逻辑源/请求/结果/错误、可选健康报告；只引用 `DP.Vision` |
+| `src/DP.Vision.Acquisition.Runtime` | netstandard2.0 | 不可变Provider组合、机器级逻辑源绑定、设备生命周期与按ResourceKey互斥、Driver Module 目录扫描与加载 |
 | `src/DP.Vision.OpenCv` | net48 / net8.0-windows，x64 | 文件、Blob、测量、定位及既有业务算法的真实OpenCV实现 |
-| `src/DP.Vision.Halcon` | net48 / net8.0-windows，x64 | 独立SDK相机采集和Gray8/Gray16/RGB像素复制；可选SDK构建；发布 `plugin.json` 作为采集Provider插件 |
-| `src/DP.Vision.Basler` | net48 / net8.0-windows，x64 | Basler pylon 相机采集（官方 NuGet 包 `Basler.Pylon.NET.x64`，免费）；显式像素格式映射；发布 `plugin.json` 作为采集Provider插件 |
+| `src/DP.Vision.Halcon` | net48 / net8.0-windows，x64 | 独立SDK相机采集和Gray8/Gray16/RGB像素复制；可选SDK构建；作为采集 Driver Module 被目录扫描发现 |
+| `src/DP.Vision.Basler` | net48 / net8.0-windows，x64 | Basler pylon 相机采集（官方 NuGet 包 `Basler.Pylon.NET.x64`，免费）；显式像素格式映射；作为采集 Driver Module 被目录扫描发现 |
 | `src/DP.Vision.UI` | netstandard2.0 | ROI编辑、画布接口、共享结果浏览会话与呈现器 |
 | `src/DP.Vision.Winform` | net48 / net8.0-windows，x64 | `VisionCanvasControl`及`ResultBrowserControl`，GDI+ |
 | `src/DP.Vision.WPF` | net48 / net8.0-windows，x64 | `VisionCanvasControl`及`ResultBrowserControl`，WriteableBitmap/原生DrawingContext |
