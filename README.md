@@ -49,6 +49,8 @@
 | `src/DP.Vision.Algorithms` | netstandard2.0 | 中立采集、Blob/颜色、测量/定位、标定及既有业务算法契约 |
 | `src/DP.Vision.Acquisition.Abstractions` | netstandard2.0 | 采集公共契约：DriverModule/设备/逻辑源/请求/结果/错误、可选健康报告；只引用 `DP.Vision` |
 | `src/DP.Vision.Acquisition.Runtime` | netstandard2.0 | 不可变Provider组合、机器级逻辑源绑定、设备生命周期与按ResourceKey互斥、Driver Module 目录扫描与加载 |
+| `src/DP.Vision.Acquisition.Management` | netstandard2.0 | 采集配置/发现/监控快照与呈现模型（`AcquisitionManagementPresenter`）；**不引用任何 UI 套件** |
+| `src/DP.Vision.Acquisition.WinForms` | net48 / net8.0-windows | 采集会话视图 `AcquisitionManagementControl`；**只依赖 Management** |
 | `src/DP.Vision.OpenCv` | net48 / net8.0-windows，x64 | 文件、Blob、测量、定位及既有业务算法的真实OpenCV实现 |
 | `src/DP.Vision.Halcon` | net48 / net8.0-windows，x64 | 独立SDK相机采集和Gray8/Gray16/RGB像素复制；可选SDK构建；作为采集 Driver Module 被目录扫描发现 |
 | `src/DP.Vision.Basler` | net48 / net8.0-windows，x64 | Basler pylon 相机采集（官方 NuGet 包 `Basler.Pylon.NET.x64`，免费）；显式像素格式映射；作为采集 Driver Module 被目录扫描发现 |
@@ -176,8 +178,8 @@ dotnet samples/DP.Vision.Demo/bin/Release/net8.0-windows/DP.Vision.Demo.dll --wp
 
 见[VALIDATION.md](VALIDATION.md)、[PERFORMANCE.md](PERFORMANCE.md)。
 
-- 共享模块每框架75项测试，算法每框架27项测试，两框架通过。
-- 采集Provider：`DP.Vision.Acquisition.Tests`、`DP.Vision.Halcon.Tests`、`DP.Vision.Basler.Tests`、`DP.Vision.Acquisition.Integration.Tests` 两框架合计286项通过，覆盖契约边界、组合/路由/并发、插件目录加载、插件包自包含厂商依赖、两个真实Provider并存、Basler像素格式映射与绑定选择器、缺运行时诊断。**不含真实相机出图验收。**
+- 共享模块每框架115项测试，算法每框架69项测试，两框架通过。
+- 采集Provider：`DP.Vision.Acquisition.Tests`、`DP.Vision.Halcon.Tests`、`DP.Vision.Basler.Tests`、`DP.Vision.Acquisition.Integration.Tests` 两框架合计838项通过（每框架419：采集198 / HALCON 127 / Basler 91 / 集成3），覆盖契约边界、组合/路由/并发、插件目录加载、插件包自包含厂商依赖、两个真实Provider并存、Basler像素格式映射与绑定选择器、缺运行时诊断、工程级依赖边界。**不含真实相机出图验收。**
 - 原生WinForms/WPF×net48/net8：图层/孔洞/分离岛/XLD、缩放平移、旧帧拒绝、6种像素格式、8K/16K分块缓存探针通过。
 - WPF分块细缝经过失败复现与修复，均匀像素边界检查通过。
 - ROI编辑：WinForms实际Windows消息检查；WPF统一指针接口＋原生渲染/Dispatcher检查。WPF物理输入在本机命中其他窗口，因此未标记为物理鼠标路由已验证。两框架Demo工具栏烟测通过。

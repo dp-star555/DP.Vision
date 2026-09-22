@@ -40,6 +40,8 @@
 | `DP.Vision` | `Imaging`：图像、租约、池和分块源；`Geometry`：点、矩形、轮廓、Region及栅格化；`Display`：显示规划、视口、图层、缓存及显示像素 |
 | `DP.Vision.Algorithms` | `Common`、`Codes`、`Surfaces`；`Text/Recognition`、`Detection`、`Segmentation`、`Matching`、`GlyphComparison`、`Quality` |
 | `DP.Vision.UI` | `Canvas`、`Roi/Definitions`、`Roi/Editing`、`Roi/Persistence` |
+| `DP.Vision.Acquisition.Management` | 采集配置/发现/监控快照与呈现模型（`AcquisitionManagementPresenter` 等），平台中立、不引用 UI 套件 |
+| `DP.Vision.Acquisition.WinForms` | `AcquisitionManagementControl`；只依赖 `Acquisition.Management` |
 | `DP.Vision.OpenCv` | `Imaging`、`Surfaces`、`Codes/Linear`、`Codes/Qr`及文字相关目录 |
 | `DP.Vision.Onnx` | `Recognition` |
 | `DP.Vision.OnnxDetection` | `Detection` |
