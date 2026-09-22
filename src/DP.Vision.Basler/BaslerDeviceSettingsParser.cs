@@ -9,7 +9,9 @@ namespace DP.Vision.Basler;
 /// <summary>
 /// Basler面阵Type的deviceSettings解析器。机器配置的deviceSettings是单设备扁平对象，
 /// 字段含义、校验和诊断都由本Provider拥有；未知字段一律拒绝，避免拼写错误被静默忽略。
-/// 解析结果生成内部绑定身份、规范ResourceKey与进入CompositionId的配置摘要。
+/// 解析结果生成内部绑定身份、规范ResourceKey与进入CompositionId的配置摘要，
+/// 并把 <see cref="BaslerAcquisitionBinding"/> 装进 <c>ProviderState</c> 随绑定带走——
+/// 打开设备时 Provider 直接用它，因此 deviceSettings 是 Basler 设备配置的唯一来源。
 /// </summary>
 public static class BaslerDeviceSettingsParser
 {
@@ -90,10 +92,14 @@ public static class BaslerDeviceSettingsParser
             var resourceKey = hasSerial
                 ? "camera:serial:" + serialNumber
                 : "camera:name:" + userDefinedName;
+            // 设备字段在这里解析一次，就装进 ProviderState 随绑定带走；
+            // 打开设备时 Provider 直接用这份绑定，不再需要第二条私有配置重复声明同一台相机。
+            var binding = new BaslerAcquisitionBinding(selector, serialNumber, userDefinedName, triggerSource);
             return new VisionDeviceSettingsParseResult(
                 selector,
                 resourceKey,
-                BuildSummary(pixelFormat, serialNumber, triggerSource, userDefinedName));
+                BuildSummary(pixelFormat, serialNumber, triggerSource, userDefinedName),
+                binding);
         }
     }
 

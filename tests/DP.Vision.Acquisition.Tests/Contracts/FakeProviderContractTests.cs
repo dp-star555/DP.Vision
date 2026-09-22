@@ -16,7 +16,9 @@ public sealed class FakeProviderContractTests
     public async Task FakeProvider_RecordsOpenedBindingAndReportsIdentity()
     {
         await using var provider = FakeVisionProvider.WithDevices("dp.fake");
-        await using var device = await provider.OpenAsync("top-camera", CancellationToken.None);
+        await using var device = await provider.OpenAsync(
+            new VisionAcquisitionProviderBinding("top-camera"),
+            CancellationToken.None);
 
         CollectionAssert.AreEqual(new[] { "top-camera" }, provider.OpenedBindings.ToArray());
         Assert.AreEqual("dp.fake", device.Identity.ProviderId);

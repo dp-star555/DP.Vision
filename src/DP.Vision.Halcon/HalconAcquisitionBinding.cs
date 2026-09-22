@@ -2,8 +2,14 @@ using System;
 
 namespace DP.Vision.Halcon;
 
-/// <summary>HALCON Provider私有设备绑定；公共配置不解释这些字段，只引用其绑定身份。</summary>
-public sealed class HalconAcquisitionBinding
+/// <summary>
+/// HALCON Provider私有设备绑定；公共配置不解释这些字段，只引用其绑定身份。
+/// <para>
+/// 它是不可变值对象，因此是 <see langword="record"/>：同一份 deviceSettings 解析两次应得到相等的绑定，
+/// 而绑定又会被 <c>VisionDeviceSettingsParseResult</c> 作为 <c>ProviderState</c> 参与该记录的相等性比较。
+/// </para>
+/// </summary>
+public sealed record HalconAcquisitionBinding
 {
     /// <summary>外部回调长连接未在私有配置里指定抓取超时时的默认值（毫秒）。</summary>
     public const int DefaultGrabTimeoutMilliseconds = 5000;

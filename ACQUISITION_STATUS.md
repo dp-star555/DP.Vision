@@ -44,16 +44,22 @@ DP.Vision.Halcon  ·  DP.Vision.Basler   厂商 Provider 插件（各自 plugin.
 1. **依赖方向**：`DP.Vision` → `Abstractions` → `Runtime`；Provider → Abstractions + 厂商 SDK。
    **禁止** `Runtime → DP.WorkFlow`、Provider → Workflow、公共契约 → 厂商 SDK。
    由 `tests/DP.Vision.Acquisition.Tests/Contracts/AssemblyBoundaryTests.cs` 强制。
-2. **设备连接属于软件生命周期，取图属于节点或回调行为**。节点不得打开/关闭/重连/释放物理设备。
-3. **一台物理相机或一个采集卡通道 = 一个 `VisionResourceSession`**，按物理 `ResourceKey` 互斥。
-4. **流式三条契约**（真实 Adapter 必须照做）：
+2. **`deviceSettings` 是设备配置的唯一来源**。设备字段只由该 AcquisitionType 的解析器解析一次，
+   结果作为插件私有的 `ProviderState` 随公共绑定一路带到 `IVisionAcquisitionProvider.OpenAsync`；
+   公共层只原样转交、不解释。**插件私有配置不再承载设备绑定**（非空即明确拒绝）。
+   同一台相机绝不能在两处各写一遍——那会让"改了一处、另一处没改"变成难查的现场问题。
+   由 `tests/DP.Vision.Acquisition.Tests/Contracts/DeviceSettingsBindingFlowTests.cs` 与两家
+   `*DeviceSettingsParserTests` 强制。
+3. **设备连接属于软件生命周期，取图属于节点或回调行为**。节点不得打开/关闭/重连/释放物理设备。
+4. **一台物理相机或一个采集卡通道 = 一个 `VisionResourceSession`**，按物理 `ResourceKey` 互斥。
+5. **流式三条契约**（真实 Adapter 必须照做）：
    - 所有权：`Publish` 一进入即转移，**接收方即使拒绝也必须释放帧**；
    - 线程：异常**不得抛回 SDK 回调线程**；
    - 停止：`DisposeAsync` 必须**等待已进入的交付退出**，之后不得再交付。
-5. **厂商差异显式处理而非抹平**：HALCON 缺 SDK 是编译期问题；Basler 缺的是原生运行时。
-6. **插件包必须自包含厂商依赖，但不得包含宿主契约程序集**（否则插件拿到第二份类型，组合必然失败）。
-7. **运行隔离**：根运行 Epoch 只属于 `FrameInbox`；`EndEpoch` 清理本 Epoch 未领取帧并计入诊断，不交给下一根运行。
-8. **Provider 失败不自动切换**到另一个 Provider。
+6. **厂商差异显式处理而非抹平**：HALCON 缺 SDK 是编译期问题；Basler 缺的是原生运行时。
+7. **插件包必须自包含厂商依赖，但不得包含宿主契约程序集**（否则插件拿到第二份类型，组合必然失败）。
+8. **运行隔离**：根运行 Epoch 只属于 `FrameInbox`；`EndEpoch` 清理本 Epoch 未领取帧并计入诊断，不交给下一根运行。
+9. **Provider 失败不自动切换**到另一个 Provider。
 
 ## 3. 验收状态
 
@@ -91,7 +97,15 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
 - **真实相机现场验收**：V1-D / V1-E 的断线、重连、停流时序只能在现场签署。
   待现场确认项：HALCON 目标采集接口是否支持 `do_abort_grab`；`grab_image_async` 的实际取流频率上限。
   **真实 SDK 像素测试不代替相机现场验收。**
+- **`deviceSettings.pixelFormat`（Basler）目前只进入配置摘要，没有写到设备上**：
+  真正生效的像素格式来自 `BaslerNeutralFrames` 对设备上报格式的转换，超出支持范围会明确报错。
+  把配置值写到 `PLCamera.PixelFormat` 需要 pylon 现场验证，因此留待现场验收一并处理。
 - **V1-F（运行审计与长期验证）** 未实现。
+- **组合键与 Provider 自身身份是两个不同的字符串**：机器配置路径下，
+  组合/绑定里的 `ProviderId` 实际是 `AcquisitionTypeId`（如 `dp.acquisition.halcon.area`），
+  而 Provider 对外报告的 `ProviderId` 是插件身份（`dp.vision.halcon`），设备身份里也用后者。
+  两者目前各自一致、能正常工作，但混用会得到"Provider 不在当前组合中"这类误导性诊断，
+  属于 Phase B「迁移 PluginIdentity」要收口的问题。
 - **`Software` 触发**（HALCON）依据 MVTec 官方示例与本机 SDK 反射实现，未经现场验收；
   若所用采集接口不接受 `[Consumer]trigger`，以 `VisionParameterNotSupportedException` 明确失败，不静默降级。
 - 采集侧遗留：`WorkflowVisionAcquisitionSession` 仍兼"文件夹采集会话 + 帧作用域准备"两职责；

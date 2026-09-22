@@ -36,9 +36,18 @@ public sealed class HalconAcquisitionProviderPlugin : IVisionAcquisitionProvider
     public string PluginId => PluginIdentity;
 
     /// <inheritdoc/>
-    /// <exception cref="VisionSourceConfigurationException">私有配置含未知字段或缺少必填字段。</exception>
-    public IVisionAcquisitionProviderModule CreateModule(string? configuration) =>
-        new HalconAcquisitionProviderModule(HalconProviderConfiguration.ParseBindings(configuration));
+    /// <exception cref="VisionSourceConfigurationException">私有配置非空：设备配置已统一由机器配置的 deviceSettings 提供。</exception>
+    public IVisionAcquisitionProviderModule CreateModule(string? configuration)
+    {
+        // 设备绑定曾经从这里解析，现在只从机器配置的 deviceSettings 来。
+        // 静默忽略遗留私有配置会把"配置没生效"藏起来，所以这里明确拒绝并指路。
+        if (!string.IsNullOrWhiteSpace(configuration))
+            throw new VisionSourceConfigurationException(
+                "HALCON Provider 不再接受插件私有配置：设备字段（interfaceName/deviceName/serialNumber/"
+                + "triggerSource/grabTimeoutMilliseconds）已统一由机器配置中每个逻辑源的 deviceSettings 提供；"
+                + "请把该配置迁移到对应相机的 deviceSettings，并清空 Provider 私有配置。");
+        return new HalconAcquisitionProviderModule();
+    }
 
     /// <summary>
     /// 报告HALCON Provider当前是否可用。本程序集在未装配SDK的构建下不包含任何采集实现，

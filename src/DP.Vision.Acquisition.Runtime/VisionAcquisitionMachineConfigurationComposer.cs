@@ -124,7 +124,10 @@ public sealed class VisionAcquisitionMachineConfigurationComposer
             DeriveSharingPolicy(camera),
             DeriveAcquisitionMode(camera),
             inbox,
-            camera.IsRequired);
+            camera.IsRequired,
+            // 插件私有绑定随公共绑定一起发布，打开设备时原样交回同一个插件；
+            // 这是"deviceSettings 是设备配置唯一来源"的接线点。
+            parseResult.ProviderState);
         return new ValidatedBinding(binding, parseResult.ConfigurationSummary);
     }
 

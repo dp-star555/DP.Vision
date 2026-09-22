@@ -10,12 +10,15 @@ public interface IVisionAcquisitionProvider : IAsyncDisposable
     /// <summary>Provider稳定身份，例如dp.vision.halcon。</summary>
     string ProviderId { get; }
 
-    /// <summary>按Provider私有绑定身份打开设备。</summary>
-    /// <param name="providerBindingId">Provider配置内的设备绑定身份。</param>
+    /// <summary>
+    /// 按Provider私有绑定打开设备。绑定由该Type的 <c>DeviceSettingsParser</c> 从机器配置的
+    /// <c>deviceSettings</c> 解析而来，公共层只转交不解释。
+    /// </summary>
+    /// <param name="binding">中立绑定：身份 + 插件私有不透明状态。</param>
     /// <param name="cancellationToken">协作取消。</param>
     /// <returns>调用方拥有的已打开设备。</returns>
     ValueTask<IVisionAcquisitionDevice> OpenAsync(
-        string providerBindingId,
+        VisionAcquisitionProviderBinding binding,
         CancellationToken cancellationToken);
 }
 

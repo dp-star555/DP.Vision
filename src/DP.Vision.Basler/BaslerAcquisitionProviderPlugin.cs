@@ -39,9 +39,18 @@ public sealed class BaslerAcquisitionProviderPlugin : IVisionAcquisitionProvider
     public string PluginId => PluginIdentity;
 
     /// <inheritdoc/>
-    /// <exception cref="VisionSourceConfigurationException">私有配置含未知字段、缺少必填字段或选择器不唯一。</exception>
-    public IVisionAcquisitionProviderModule CreateModule(string? configuration) =>
-        new BaslerAcquisitionProviderModule(BaslerProviderConfiguration.ParseBindings(configuration));
+    /// <exception cref="VisionSourceConfigurationException">私有配置非空：设备配置已统一由机器配置的 deviceSettings 提供。</exception>
+    public IVisionAcquisitionProviderModule CreateModule(string? configuration)
+    {
+        // 设备绑定曾经从这里解析，现在只从机器配置的 deviceSettings 来。
+        // 静默忽略遗留私有配置会把"配置没生效"藏起来，所以这里明确拒绝并指路。
+        if (!string.IsNullOrWhiteSpace(configuration))
+            throw new VisionSourceConfigurationException(
+                "Basler Provider 不再接受插件私有配置：设备字段（serialNumber/userDefinedName/"
+                + "triggerSource/pixelFormat）已统一由机器配置中每个逻辑源的 deviceSettings 提供；"
+                + "请把该配置迁移到对应相机的 deviceSettings，并清空 Provider 私有配置。");
+        return new BaslerAcquisitionProviderModule();
+    }
 
     /// <summary>
     /// 报告Basler Provider当前是否可用。缺运行时必须让宿主在首节点执行前就看到Provider级诊断，

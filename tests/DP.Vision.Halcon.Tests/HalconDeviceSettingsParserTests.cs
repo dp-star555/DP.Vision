@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using DP.Vision.Acquisition;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -89,5 +91,57 @@ public sealed class HalconDeviceSettingsParserTests
     {
         Assert.ThrowsExactly<VisionSourceConfigurationException>(() =>
             HalconDeviceSettingsParser.Parse(null));
+    }
+
+    /// <summary>
+    /// 解析结果必须把私有绑定对象一并带出。设备字段只在这里解析一次，
+    /// 之后随绑定一路带到打开设备；丢掉它，Provider 就只能另找一条配置通道重写同一台相机。
+    /// </summary>
+    [TestMethod]
+    public void ParsedSettings_CarryPrivateBinding()
+    {
+        var result = HalconDeviceSettingsParser.Parse(
+            "{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam-top\","
+            + "\"serialNumber\":\"SN-001\",\"triggerSource\":\"Line1\",\"grabTimeoutMilliseconds\":800}");
+
+        var binding = Assert.IsInstanceOfType<HalconAcquisitionBinding>(result.ProviderState);
+        Assert.AreEqual("SN-001", binding.BindingId);
+        Assert.AreEqual("GigEVision2|cam-top", binding.CameraId);
+        Assert.AreEqual("Line1", binding.TriggerSource);
+        Assert.AreEqual(800, binding.GrabTimeoutMilliseconds);
+        Assert.AreEqual("camera:serial:SN-001", binding.CanonicalKey);
+    }
+
+    /// <summary>
+    /// Provider 只凭 deviceSettings 解析出的绑定就能构建设备，全程不需要插件私有配置、也不需要相机。
+    /// 这是"deviceSettings 是设备配置唯一来源"在厂商侧的证据。
+    /// </summary>
+    [TestMethod]
+    public async Task Provider_OpensFromParsedBindingWithoutPrivateConfiguration()
+    {
+        var result = HalconDeviceSettingsParser.Parse(
+            "{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam-top\",\"serialNumber\":\"SN-001\"}");
+
+        await using var provider = new HalconAcquisitionProvider();
+        await using var device = await provider.OpenAsync(
+            new VisionAcquisitionProviderBinding(result.ProviderBindingId, result.ProviderState),
+            CancellationToken.None);
+
+        Assert.AreEqual(HalconAcquisitionProvider.ProviderIdentity, device.Identity.ProviderId);
+        Assert.AreEqual("SN-001", device.Identity.ProviderBindingId);
+        Assert.AreEqual("camera:serial:SN-001", device.Identity.CanonicalKey);
+    }
+
+    /// <summary>绑定里没有 HALCON 私有状态时必须明确拒绝，不能猜成"某台设备"。</summary>
+    [TestMethod]
+    public async Task Provider_RejectsBindingWithoutHalconState()
+    {
+        await using var provider = new HalconAcquisitionProvider();
+
+        var failure = Assert.ThrowsExactly<VisionSourceConfigurationException>(() =>
+            provider.OpenAsync(new VisionAcquisitionProviderBinding("SN-001"), CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult());
+
+        StringAssert.Contains(failure.Message, "SN-001");
     }
 }

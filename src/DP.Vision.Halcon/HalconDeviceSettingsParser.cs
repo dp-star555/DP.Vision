@@ -10,7 +10,9 @@ namespace DP.Vision.Halcon;
 /// <summary>
 /// HALCON面阵Type的deviceSettings解析器。机器配置的deviceSettings是单设备扁平对象，
 /// 字段含义、校验和诊断都由本Provider拥有；未知字段一律拒绝，避免拼写错误被静默忽略。
-/// 解析结果生成内部绑定身份、规范ResourceKey与进入CompositionId的配置摘要。
+/// 解析结果生成内部绑定身份、规范ResourceKey与进入CompositionId的配置摘要，
+/// 并把 <see cref="HalconAcquisitionBinding"/> 装进 <c>ProviderState</c> 随绑定带走——
+/// 打开设备时 Provider 直接用它，因此 deviceSettings 是 HALCON 设备配置的唯一来源。
 /// </summary>
 public static class HalconDeviceSettingsParser
 {
@@ -94,12 +96,22 @@ public static class HalconDeviceSettingsParser
             var resourceKey = hasSerial
                 ? "camera:serial:" + serialNumber
                 : "halcon:camera:" + interfaceName + "|" + deviceName;
+            // 设备字段在这里解析一次，就装进 ProviderState 随绑定带走；
+            // 打开设备时 Provider 直接用这份绑定，不再需要第二条私有配置重复声明同一台相机。
+            var binding = new HalconAcquisitionBinding(
+                bindingId,
+                interfaceName!,
+                deviceName!,
+                serialNumber,
+                triggerSource,
+                grabTimeoutMilliseconds);
             return new VisionDeviceSettingsParseResult(
                 bindingId,
                 resourceKey,
                 // net48 的引用程序集里没有 NotNullWhen，编译器学不到上面两个 IsNullOrWhiteSpace 守卫的非空结论，
                 // 这里显式断言以保持 net48 与 net8.0-windows 两个目标都零警告。
-                BuildSummary(interfaceName!, deviceName!, serialNumber, triggerSource, grabTimeoutMilliseconds));
+                BuildSummary(interfaceName!, deviceName!, serialNumber, triggerSource, grabTimeoutMilliseconds),
+                binding);
         }
     }
 

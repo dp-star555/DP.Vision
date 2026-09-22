@@ -496,7 +496,12 @@ public sealed class VisionAcquisitionRuntime : IVisionAcquisition, IVisionAcquis
         CancellationToken cancellationToken)
     {
         var provider = GetProvider(registration);
-        var device = await provider.OpenAsync(binding.ProviderBindingId, cancellationToken).ConfigureAwait(false);
+        // deviceSettings 解析出的私有绑定随Source绑定一路带到这里；公共层只转交不解释。
+        var device = await provider
+            .OpenAsync(
+                new VisionAcquisitionProviderBinding(binding.ProviderBindingId, binding.ProviderState),
+                cancellationToken)
+            .ConfigureAwait(false);
         var identity = device.Identity;
         if (identity.HasCanonicalKey
             && !string.Equals(identity.CanonicalKey, binding.ResourceKey, StringComparison.Ordinal))

@@ -13,13 +13,27 @@ namespace DP.Vision.Acquisition.Integration.Tests;
 ///
 /// 这是"多Provider架构是否真的成立"的关键回归：只有第二个真实Adapter接入后，
 /// 多Provider接口才算经过真实变化验证。两个Provider都只通过中立契约被使用，
-/// 全程不需要相机、也不需要任何一个厂商SDK在场（设备身份由Provider私有绑定决定）。
+/// 全程不需要相机、也不需要任何一个厂商SDK在场。
 /// </summary>
+/// <remarks>
+/// 组合走的是**机器配置路径**（Driver Module → TypeCatalog → 机器相机定义 → 不可变组合），
+/// 也就是生产装配的那一条。设备字段只写在每个逻辑源的 <c>deviceSettings</c> 里，
+/// 由各厂商自己的解析器解析后随公共绑定发布；因此本组用例同时守住
+/// "deviceSettings 是设备配置唯一来源"这条不变式——它不需要任何插件私有配置。
+/// </remarks>
 [TestClass]
 public sealed class CrossVendorProviderCoexistenceTests
 {
-    private const string HalconBindingId = "top-camera";
-    private const string BaslerBindingId = "side-camera";
+    private const string HalconSourceId = "Camera.Top";
+    private const string BaslerSourceId = "Camera.Side";
+
+    /// <summary>
+    /// 机器配置路径下组合里的 Provider 键就是 AcquisitionTypeId（一个 Type 一个 Provider 注册），
+    /// 而 Provider 自身对外报告的是 <c>dp.vision.*</c> 插件身份。两者都要能对上，不能混用。
+    /// </summary>
+    private const string HalconCompositionKey = HalconAcquisitionDriverModule.AreaScanTypeId;
+
+    private const string BaslerCompositionKey = BaslerAcquisitionDriverModule.AreaScanTypeId;
 
     /// <summary>两个真实Provider在同一组合里并存，并按SourceId各自路由到自己的设备。</summary>
     [TestMethod]
@@ -28,12 +42,14 @@ public sealed class CrossVendorProviderCoexistenceTests
         var composition = ComposeTwoVendors();
 
         Assert.AreEqual(2, composition.Sources.Count, "两个逻辑源都必须被发布。");
-        Assert.AreEqual("Camera.Side", composition.Sources[0].SourceId);
-        Assert.AreEqual("Camera.Top", composition.Sources[1].SourceId);
+        Assert.AreEqual(BaslerSourceId, composition.Sources[0].SourceId);
+        Assert.AreEqual(HalconSourceId, composition.Sources[1].SourceId);
+        Assert.AreEqual(BaslerCompositionKey, composition.Sources[0].ProviderId);
+        Assert.AreEqual(HalconCompositionKey, composition.Sources[1].ProviderId);
 
-        // 公共层只按ProviderId取工厂，不需要知道任何厂商类型。
-        Assert.IsTrue(composition.TryGetProvider(HalconAcquisitionProvider.ProviderIdentity, out var halconRegistration));
-        Assert.IsTrue(composition.TryGetProvider(BaslerAcquisitionProvider.ProviderIdentity, out var baslerRegistration));
+        // 公共层只按组合键取工厂，不需要知道任何厂商类型。
+        Assert.IsTrue(composition.TryGetProvider(HalconCompositionKey, out var halconRegistration));
+        Assert.IsTrue(composition.TryGetProvider(BaslerCompositionKey, out var baslerRegistration));
 
         await using var halconProvider = halconRegistration!.Factory();
         await using var baslerProvider = baslerRegistration!.Factory();
@@ -41,8 +57,9 @@ public sealed class CrossVendorProviderCoexistenceTests
         Assert.AreEqual(HalconAcquisitionProvider.ProviderIdentity, halconProvider.ProviderId);
         Assert.AreEqual(BaslerAcquisitionProvider.ProviderIdentity, baslerProvider.ProviderId);
 
-        await using var halconDevice = await halconProvider.OpenAsync(HalconBindingId, default);
-        await using var baslerDevice = await baslerProvider.OpenAsync(BaslerBindingId, default);
+        // 绑定取自组合本身：公共绑定携带的插件私有状态正是打开设备所需的那一份。
+        await using var halconDevice = await halconProvider.OpenAsync(OpenBinding(composition, HalconSourceId), default);
+        await using var baslerDevice = await baslerProvider.OpenAsync(OpenBinding(composition, BaslerSourceId), default);
 
         // 各自报告自己的身份与规范资源键，没有串台。
         Assert.AreEqual(HalconAcquisitionProvider.ProviderIdentity, halconDevice.Identity.ProviderId);
@@ -52,43 +69,33 @@ public sealed class CrossVendorProviderCoexistenceTests
         Assert.AreNotEqual(halconDevice.Identity.ProviderBindingId, baslerDevice.Identity.ProviderBindingId);
     }
 
-    /// <summary>Provider只能打开自己私有配置里的绑定，不接受另一个厂商的绑定身份。</summary>
+    /// <summary>
+    /// 厂商解析器写出的私有绑定不可互换：把 HALCON 的绑定交给 Basler Provider 必须明确失败，
+    /// 而不是被静默当成"没有配置"。
+    /// </summary>
     [TestMethod]
-    public async Task Provider_DoesNotResolveAnotherVendorsBinding()
+    public async Task Provider_RejectsAnotherVendorsBinding()
     {
         var composition = ComposeTwoVendors();
-        Assert.IsTrue(composition.TryGetProvider(HalconAcquisitionProvider.ProviderIdentity, out var halconRegistration));
-        Assert.IsTrue(composition.TryGetProvider(BaslerAcquisitionProvider.ProviderIdentity, out var baslerRegistration));
+        Assert.IsTrue(composition.TryGetProvider(HalconCompositionKey, out var halconRegistration));
+        Assert.IsTrue(composition.TryGetProvider(BaslerCompositionKey, out var baslerRegistration));
 
         await using var halconProvider = halconRegistration!.Factory();
         await using var baslerProvider = baslerRegistration!.Factory();
 
-        Assert.ThrowsExactly<VisionSourceConfigurationException>(
-            () => halconProvider.OpenAsync(BaslerBindingId, default).AsTask().GetAwaiter().GetResult());
-        Assert.ThrowsExactly<VisionSourceConfigurationException>(
-            () => baslerProvider.OpenAsync(HalconBindingId, default).AsTask().GetAwaiter().GetResult());
-    }
+        var halconBinding = OpenBinding(composition, HalconSourceId);
+        var baslerBinding = OpenBinding(composition, BaslerSourceId);
 
-    /// <summary>把Source绑到未参与本次组合的Provider必须在组合阶段失败，而不是留到运行时。</summary>
-    [TestMethod]
-    public void Composition_RejectsSourceBoundToUndeclaredProvider()
-    {
-        var modules = new IVisionAcquisitionProviderModule[]
-        {
-            new BaslerAcquisitionProviderModule(new[] { new BaslerAcquisitionBinding(BaslerBindingId, serialNumber: "40123456") })
-        };
+        Assert.ThrowsExactly<VisionSourceConfigurationException>(
+            () => halconProvider.OpenAsync(baslerBinding, default).AsTask().GetAwaiter().GetResult());
+        Assert.ThrowsExactly<VisionSourceConfigurationException>(
+            () => baslerProvider.OpenAsync(halconBinding, default).AsTask().GetAwaiter().GetResult());
 
-        Assert.ThrowsExactly<VisionSourceConfigurationException>(() =>
-            new VisionAcquisitionProviderComposer().Compose(
-                modules,
-                new[]
-                {
-                    new VisionAcquisitionSourceBinding(
-                        "Camera.Top",
-                        HalconAcquisitionProvider.ProviderIdentity,
-                        HalconBindingId,
-                        "camera:serial:DEMO0001")
-                }));
+        // 完全没有私有状态的绑定同样不能被猜成"某台设备"。
+        Assert.ThrowsExactly<VisionSourceConfigurationException>(
+            () => baslerProvider
+                .OpenAsync(new VisionAcquisitionProviderBinding(baslerBinding.ProviderBindingId), default)
+                .AsTask().GetAwaiter().GetResult());
     }
 
     /// <summary>组合清单要能作为运行制品导出：两个Provider的实现版本都在里面。</summary>
@@ -97,38 +104,47 @@ public sealed class CrossVendorProviderCoexistenceTests
     {
         var manifest = string.Join("；", ComposeTwoVendors().ProviderManifest);
 
-        StringAssert.Contains(manifest, BaslerAcquisitionProvider.ProviderIdentity);
-        StringAssert.Contains(manifest, HalconAcquisitionProvider.ProviderIdentity);
-        StringAssert.Contains(manifest, BaslerAcquisitionProviderModule.ProviderVersion);
+        StringAssert.Contains(manifest, HalconCompositionKey);
+        StringAssert.Contains(manifest, BaslerCompositionKey);
+        StringAssert.Contains(manifest, BaslerAcquisitionDriverModule.TypeVersion);
     }
 
-    /// <summary>两个真实Provider加上两个公共Source绑定构成的机器配置。</summary>
+    /// <summary>
+    /// 两个真实Provider加上两个公共Source绑定构成的机器配置；设备字段只在 deviceSettings 里。
+    /// </summary>
     /// <returns>不可变组合快照。</returns>
     private static VisionAcquisitionProviderComposition ComposeTwoVendors()
     {
-        var halconModule = new HalconAcquisitionProviderModule(new[]
-        {
-            new HalconAcquisitionBinding(HalconBindingId, "GigEVision2", "cam-top", serialNumber: "DEMO0001")
-        });
-        var baslerModule = new BaslerAcquisitionProviderModule(new[]
-        {
-            new BaslerAcquisitionBinding(BaslerBindingId, serialNumber: "40123456")
-        });
-
-        return new VisionAcquisitionProviderComposer().Compose(
-            new IVisionAcquisitionProviderModule[] { halconModule, baslerModule },
-            new[]
+        var catalog = new VisionAcquisitionTypeCatalogComposer().Compose(
+            new IVisionAcquisitionDriverModule[]
             {
-                new VisionAcquisitionSourceBinding(
-                    "Camera.Top",
-                    HalconAcquisitionProvider.ProviderIdentity,
-                    HalconBindingId,
-                    "camera:serial:DEMO0001"),
-                new VisionAcquisitionSourceBinding(
-                    "Camera.Side",
-                    BaslerAcquisitionProvider.ProviderIdentity,
-                    BaslerBindingId,
-                    "camera:serial:40123456")
+                new HalconAcquisitionDriverModule(),
+                new BaslerAcquisitionDriverModule()
             });
+
+        var cameras = VisionAcquisitionMachineConfigurationParser.Parse(
+            "["
+            + "{\"sourceId\":\"" + HalconSourceId + "\","
+            + "\"acquisitionType\":\"" + HalconAcquisitionDriverModule.AreaScanTypeId + "\","
+            + "\"settingsVersion\":" + HalconAcquisitionDriverModule.DeviceSettingsVersion + ","
+            + "\"deviceSettings\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam-top\","
+            + "\"serialNumber\":\"DEMO0001\"}},"
+            + "{\"sourceId\":\"" + BaslerSourceId + "\","
+            + "\"acquisitionType\":\"" + BaslerAcquisitionDriverModule.AreaScanTypeId + "\","
+            + "\"settingsVersion\":" + BaslerAcquisitionDriverModule.DeviceSettingsVersion + ","
+            + "\"deviceSettings\":{\"serialNumber\":\"40123456\"}}"
+            + "]");
+
+        return new VisionAcquisitionMachineConfigurationComposer().Compose(catalog, cameras);
+    }
+
+    /// <summary>从组合里取出某个逻辑源的打开绑定；公共层只转交私有状态，不解释它。</summary>
+    private static VisionAcquisitionProviderBinding OpenBinding(
+        VisionAcquisitionProviderComposition composition,
+        string sourceId)
+    {
+        var source = composition.Sources.Single(item => item.SourceId == sourceId);
+        Assert.IsNotNull(source.ProviderState, $"逻辑源 {sourceId} 的 deviceSettings 没有解析出私有绑定。");
+        return new VisionAcquisitionProviderBinding(source.ProviderBindingId, source.ProviderState);
     }
 }

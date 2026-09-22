@@ -6,11 +6,13 @@ using DP.Vision.Acquisition;
 
 namespace DP.Vision.Acquisition.Tests;
 
-/// <summary>确定性内存Provider；记录打开过的绑定身份，可注入打开失败，也可充当设备发现Provider。</summary>
+/// <summary>确定性内存Provider；记录打开过的绑定，可注入打开失败，也可充当设备发现Provider。</summary>
 internal sealed class FakeVisionProvider : IVisionAcquisitionProvider, IVisionDeviceDiscovery
 {
     private readonly Func<string, IVisionAcquisitionDevice> _deviceFactory;
     private readonly List<string> _opened = new List<string>();
+    private readonly List<VisionAcquisitionProviderBinding> _openRequests =
+        new List<VisionAcquisitionProviderBinding>();
     private readonly object _gate = new object();
     private int _disposeCount;
     private int _discoveryCount;
@@ -33,6 +35,16 @@ internal sealed class FakeVisionProvider : IVisionAcquisitionProvider, IVisionDe
     public IReadOnlyList<string> OpenedBindings
     {
         get { lock (_gate) return _opened.ToArray(); }
+    }
+
+    /// <summary>
+    /// 已收到的完整打开绑定（含插件私有状态），按调用顺序。
+    /// 用于证明 deviceSettings 解析出的私有绑定真的被带到了 <c>OpenAsync</c>，
+    /// 而不是在中途被丢掉、只剩一个身份字符串。
+    /// </summary>
+    public IReadOnlyList<VisionAcquisitionProviderBinding> OpenRequests
+    {
+        get { lock (_gate) return _openRequests.ToArray(); }
     }
 
     /// <summary>已执行的释放次数。</summary>
@@ -63,13 +75,19 @@ internal sealed class FakeVisionProvider : IVisionAcquisitionProvider, IVisionDe
 
     /// <inheritdoc/>
     public ValueTask<IVisionAcquisitionDevice> OpenAsync(
-        string providerBindingId,
+        VisionAcquisitionProviderBinding binding,
         CancellationToken cancellationToken)
     {
+        if (binding is null)
+            throw new ArgumentNullException(nameof(binding));
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
-            _opened.Add(providerBindingId);
-        return new ValueTask<IVisionAcquisitionDevice>(_deviceFactory(providerBindingId));
+        {
+            _opened.Add(binding.ProviderBindingId);
+            _openRequests.Add(binding);
+        }
+
+        return new ValueTask<IVisionAcquisitionDevice>(_deviceFactory(binding.ProviderBindingId));
     }
 
     /// <inheritdoc/>

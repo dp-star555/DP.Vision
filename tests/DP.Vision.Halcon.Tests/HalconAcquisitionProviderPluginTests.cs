@@ -9,14 +9,11 @@ namespace DP.Vision.Halcon.Tests;
 /// <summary>
 /// HALCON作为正式采集Provider插件的回归（实施基线§7与§13阶段D验收）：
 /// 插件目录只靠 <c>plugin.json</c> 与中立插件契约发现HALCON；缺SDK时给出Provider级诊断；
-/// 私有配置由本Provider自己解析与校验，公共层不解释其中任何字段。
+/// 设备字段统一由机器配置的 <c>deviceSettings</c> 提供，插件私有配置不再承载设备绑定。
 /// </summary>
 [TestClass]
 public sealed class HalconAcquisitionProviderPluginTests
 {
-    private const string SampleConfiguration =
-        "{\"bindings\":{\"top-camera\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam-top\",\"serialNumber\":\"DEMO0001\"}}}";
-
     private static readonly string PluginDirectory =
         Path.GetDirectoryName(typeof(HalconAcquisitionProviderPlugin).Assembly.Location)!;
 
@@ -44,7 +41,7 @@ public sealed class HalconAcquisitionProviderPluginTests
     [TestMethod]
     public void PluginDirectory_LoadsHalconProvider()
     {
-        var result = new VisionAcquisitionProviderPluginLoader().Load(PluginDirectory, _ => SampleConfiguration);
+        var result = new VisionAcquisitionProviderPluginLoader().Load(PluginDirectory);
 
         Assert.AreEqual(0, result.Failures.Count, Describe(result));
         var plugin = result.Plugins.Single(item => item.PluginId == HalconAcquisitionProviderPlugin.PluginIdentity);
@@ -67,7 +64,7 @@ public sealed class HalconAcquisitionProviderPluginTests
         File.Copy(Path.Combine(PluginDirectory, assemblyName), Path.Combine(package, assemblyName), overwrite: true);
         File.Copy(Path.Combine(PluginDirectory, "plugin.json"), Path.Combine(package, "plugin.json"), overwrite: true);
 
-        var result = new VisionAcquisitionProviderPluginLoader().Load(root, _ => SampleConfiguration);
+        var result = new VisionAcquisitionProviderPluginLoader().Load(root);
 
         Assert.AreEqual(0, result.Failures.Count, Describe(result));
         CollectionAssert.Contains(
@@ -111,104 +108,57 @@ public sealed class HalconAcquisitionProviderPluginTests
         Assert.IsNull(diagnostic);
     }
 
-    /// <summary>插件私有配置加上公共Source绑定可以完成一次正式组合，全程不需要SDK在场。</summary>
+    /// <summary>无私有配置时Module照常贡献Provider注册，组合不需要SDK在场。</summary>
     [TestMethod]
-    public void PrivateConfiguration_ComposesIntoPublishedSources()
+    public void ModuleWithoutPrivateConfiguration_ComposesIntoPublishedSources()
     {
-        var result = new VisionAcquisitionProviderPluginLoader().Load(PluginDirectory, _ => SampleConfiguration);
-
         var composition = new VisionAcquisitionProviderComposer().Compose(
-            result.Modules,
+            new IVisionAcquisitionProviderModule[] { new HalconAcquisitionProviderModule() },
             new[]
             {
                 new VisionAcquisitionSourceBinding(
                     "Camera.Top",
                     HalconAcquisitionProvider.ProviderIdentity,
-                    "top-camera",
-                    "camera:serial:DEMO0001")
+                    "GigEVision2|cam-top",
+                    "halcon:camera:GigEVision2|cam-top")
             });
 
         Assert.AreEqual(1, composition.Sources.Count);
         Assert.IsTrue(composition.TryGetProvider(HalconAcquisitionProvider.ProviderIdentity, out _));
     }
 
-    /// <summary>私有配置被解析为Provider私有绑定；这些字段不进入公共配置。</summary>
+    /// <summary>
+    /// 非空的插件私有配置必须被拒绝：设备字段已经统一到 deviceSettings。
+    /// 静默忽略遗留配置会把"配置没生效"藏起来，那比直接失败更难查。
+    /// </summary>
+    /// <param name="configuration">遗留的私有配置文本。</param>
     [TestMethod]
-    public void PrivateConfiguration_ParsesBindings()
-    {
-        var binding = HalconProviderConfiguration.ParseBindings(SampleConfiguration).Single();
-
-        Assert.AreEqual("top-camera", binding.BindingId);
-        Assert.AreEqual("GigEVision2|cam-top", binding.CameraId);
-        Assert.AreEqual("camera:serial:DEMO0001", binding.CanonicalKey);
-    }
-
-    /// <summary>未声明触发源时保持设备当前触发设置，抓取超时取默认值。</summary>
-    [TestMethod]
-    public void PrivateConfiguration_DefaultsTriggerSourceAndGrabTimeout()
-    {
-        var binding = HalconProviderConfiguration.ParseBindings(SampleConfiguration).Single();
-
-        Assert.IsNull(binding.TriggerSource);
-        Assert.AreEqual(HalconAcquisitionBinding.DefaultGrabTimeoutMilliseconds, binding.GrabTimeoutMilliseconds);
-    }
-
-    /// <summary>外部触发的触发源与抓取超时都由私有配置显式声明。</summary>
-    [TestMethod]
-    public void PrivateConfiguration_ParsesTriggerSourceAndGrabTimeout()
-    {
-        const string configuration =
-            "{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam-top\","
-            + "\"triggerSource\":\"Line1\",\"grabTimeoutMilliseconds\":800}}}";
-
-        var binding = HalconProviderConfiguration.ParseBindings(configuration).Single();
-
-        Assert.AreEqual("Line1", binding.TriggerSource);
-        Assert.AreEqual(800, binding.GrabTimeoutMilliseconds);
-    }
-
-    /// <summary>插件入口把私有配置交给Provider Module；缺少配置表示尚未配置设备而不是解析失败。</summary>
-    [TestMethod]
-    public void PluginEntry_CreatesModuleWithConfiguredBindings()
+    [DataRow("{\"bindings\":{\"top-camera\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam-top\"}}}")]
+    [DataRow("{}")]
+    [DataRow("not json at all")]
+    public void PluginEntry_RejectsLegacyPrivateConfiguration(string configuration)
     {
         var plugin = new HalconAcquisitionProviderPlugin();
 
-        var module = (HalconAcquisitionProviderModule)plugin.CreateModule(SampleConfiguration);
-        Assert.AreEqual("top-camera", module.Bindings.Single().BindingId);
-        Assert.AreEqual(0, ((HalconAcquisitionProviderModule)plugin.CreateModule(null)).Bindings.Count);
-    }
-
-    /// <summary>非法私有配置必须在创建Module时就被拒绝，而不是得到一个半可用的Provider。</summary>
-    [TestMethod]
-    public void PluginEntry_RejectsInvalidPrivateConfiguration()
-    {
-        var plugin = new HalconAcquisitionProviderPlugin();
-
-        Assert.ThrowsExactly<VisionSourceConfigurationException>(() => plugin.CreateModule("{\"unknown\":1}"));
-    }
-
-    /// <summary>私有配置校验必须拒绝未知字段、缺失字段和重复绑定身份，避免拼写错误被静默忽略。</summary>
-    /// <param name="configuration">待校验的私有配置文本。</param>
-    /// <param name="expectedFragment">诊断中必须出现的关键片段。</param>
-    [TestMethod]
-    [DataRow("{\"binding\":{}}", "未知字段")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam\",\"serial\":\"X\"}}}", "未知字段")]
-    [DataRow("{\"bindings\":{\"top\":{\"deviceName\":\"cam\"}}}", "interfaceName")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\"}}}", "deviceName")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":12}}}", "必须是字符串")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"\"}}}", "不能为空")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam\",\"grabTimeoutMilliseconds\":0}}}", "必须为正")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam\",\"grabTimeoutMilliseconds\":\"800\"}}}", "必须是整数")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"GigEVision2\",\"deviceName\":\"cam\",\"triggerSource\":true}}}", "必须是字符串")]
-    [DataRow("{\"bindings\":{\"top\":{\"interfaceName\":\"A\",\"deviceName\":\"B\"},\"top\":{\"interfaceName\":\"A\",\"deviceName\":\"C\"}}}", "重复")]
-    [DataRow("[1,2]", "必须是JSON对象")]
-    [DataRow("{ not json", "不是有效JSON")]
-    public void PrivateConfiguration_RejectsInvalidInput(string configuration, string expectedFragment)
-    {
         var failure = Assert.ThrowsExactly<VisionSourceConfigurationException>(
-            () => HalconProviderConfiguration.ParseBindings(configuration));
+            () => plugin.CreateModule(configuration));
 
-        StringAssert.Contains(failure.Message, expectedFragment);
+        StringAssert.Contains(failure.Message, "deviceSettings");
+    }
+
+    /// <summary>空或空白配置表示"没有私有配置"，这是合法状态，Module 照常创建。</summary>
+    /// <param name="configuration">空的私有配置。</param>
+    [TestMethod]
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("   ")]
+    public void PluginEntry_AcceptsEmptyPrivateConfiguration(string? configuration)
+    {
+        var plugin = new HalconAcquisitionProviderPlugin();
+
+        var module = Assert.IsInstanceOfType<HalconAcquisitionProviderModule>(plugin.CreateModule(configuration));
+
+        Assert.AreEqual(HalconAcquisitionProviderModule.ModuleIdentity, module.ExtensionId);
     }
 
     /// <summary>

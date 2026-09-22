@@ -14,6 +14,10 @@ public sealed record VisionAcquisitionSourceBinding
     /// <param name="acquisitionMode">该Source采用主动单次采集还是外部回调缓冲。</param>
     /// <param name="inboxPolicy">外部回调缓冲的有界策略；主动单次采集必须为空。</param>
     /// <param name="isRequired">该源是否必需；必需源在Runtime启动阶段必须成功打开，否则Runtime不得就绪。</param>
+    /// <param name="providerState">
+    /// Plugin私有绑定对象（由该Type的deviceSettings解析器产生）；公共层原样保存并转交给Provider的
+    /// <c>OpenAsync</c>，不解释其类型与内容。为空表示该Provider不需要额外状态。
+    /// </param>
     /// <exception cref="ArgumentException">任一身份为空、资源键含空白字符，或模式与缓冲策略不匹配。</exception>
     public VisionAcquisitionSourceBinding(
         string sourceId,
@@ -23,7 +27,8 @@ public sealed record VisionAcquisitionSourceBinding
         EVisionSourceSharingPolicy sharingPolicy = EVisionSourceSharingPolicy.ExclusiveOperation,
         EVisionAcquisitionMode acquisitionMode = EVisionAcquisitionMode.OnDemand,
         VisionFrameInboxPolicy? inboxPolicy = null,
-        bool isRequired = true)
+        bool isRequired = true,
+        object? providerState = null)
     {
         SourceId = Require(sourceId, "逻辑源标识", nameof(sourceId));
         ProviderId = Require(providerId, "Provider身份", nameof(providerId));
@@ -51,6 +56,7 @@ public sealed record VisionAcquisitionSourceBinding
         AcquisitionMode = acquisitionMode;
         InboxPolicy = inboxPolicy;
         IsRequired = isRequired;
+        ProviderState = providerState;
     }
 
     /// <summary>逻辑视觉源标识。</summary>
@@ -76,6 +82,12 @@ public sealed record VisionAcquisitionSourceBinding
 
     /// <summary>该源是否必需；必需源在Runtime启动阶段必须成功打开，否则Runtime不得就绪。</summary>
     public bool IsRequired { get; }
+
+    /// <summary>
+    /// Plugin私有绑定对象；公共层不解释其类型与内容，只在打开设备时原样转交给Provider。
+    /// 它由 <c>deviceSettings</c> 解析器产生，因此设备字段不需要在第二条私有配置里重复声明。
+    /// </summary>
+    public object? ProviderState { get; }
 
     private static string Require(string value, string label, string parameterName)
     {

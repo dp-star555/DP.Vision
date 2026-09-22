@@ -1,14 +1,17 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using DP.Vision.Acquisition;
 
 namespace DP.Vision.Halcon;
 
 /// <summary>
-/// HALCON采集Provider插件Module。只向候选Builder提交Provider工厂和私有设备绑定，
+/// HALCON采集Provider插件Module。只向候选Builder提交Provider工厂，
 /// 不接触当前正式Provider目录；贡献失败时调用方持有的正式组合保持不变。
 /// </summary>
+/// <remarks>
+/// Module 不携带任何设备绑定：设备配置由机器配置的 <c>deviceSettings</c> 提供，
+/// 经 <see cref="HalconDeviceSettingsParser"/> 解析后随公共绑定发布。
+/// 这样同一台相机只有一处声明，不会出现"插件私有配置与机器配置各写一遍"的漂移。
+/// </remarks>
 public sealed class HalconAcquisitionProviderModule : IVisionAcquisitionProviderModule
 {
     /// <summary>Module稳定身份。</summary>
@@ -16,29 +19,6 @@ public sealed class HalconAcquisitionProviderModule : IVisionAcquisitionProvider
 
     /// <summary>Provider实现版本；进入组合清单，供运行制品记录本次实际使用的实现。</summary>
     public const string ProviderVersion = "1.0.0";
-
-    private readonly IReadOnlyList<HalconAcquisitionBinding> _bindings;
-
-    /// <summary>创建Module。</summary>
-    /// <param name="bindings">Provider私有设备绑定；为空表示本Module尚未配置任何设备。</param>
-    /// <exception cref="ArgumentException">绑定列表含空项或绑定身份重复。</exception>
-    public HalconAcquisitionProviderModule(IEnumerable<HalconAcquisitionBinding>? bindings = null)
-    {
-        var candidates = bindings is null ? Array.Empty<HalconAcquisitionBinding>() : bindings.ToArray();
-        var identities = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var binding in candidates)
-        {
-            if (binding is null)
-                throw new ArgumentException("绑定列表不能包含空项。", nameof(bindings));
-            if (!identities.Add(binding.BindingId))
-                throw new ArgumentException($"HALCON Provider 绑定身份重复：{binding.BindingId}。", nameof(bindings));
-        }
-
-        _bindings = candidates;
-    }
-
-    /// <summary>本Module提供的Provider私有设备绑定；公共配置只引用其绑定身份。</summary>
-    public IReadOnlyList<HalconAcquisitionBinding> Bindings => _bindings;
 
     /// <inheritdoc/>
     public string ExtensionId => ModuleIdentity;
@@ -51,6 +31,6 @@ public sealed class HalconAcquisitionProviderModule : IVisionAcquisitionProvider
         builder.Register(new VisionAcquisitionProviderRegistration(
             HalconAcquisitionProvider.ProviderIdentity,
             ProviderVersion,
-            () => new HalconAcquisitionProvider(_bindings)));
+            static () => new HalconAcquisitionProvider()));
     }
 }

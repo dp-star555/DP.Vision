@@ -5,8 +5,12 @@ namespace DP.Vision.Basler;
 /// <summary>
 /// Basler pylon Provider私有设备绑定。公共配置不解释这些字段，只引用其绑定身份；
 /// 选择器必须唯一指定，避免"碰巧连上另一台相机"这种不可复现的路由。
+/// <para>
+/// 它是不可变值对象，因此是 <see langword="record"/>：同一份 deviceSettings 解析两次应得到相等的绑定，
+/// 而绑定又会被 <c>VisionDeviceSettingsParseResult</c> 作为 <c>ProviderState</c> 参与该记录的相等性比较。
+/// </para>
 /// </summary>
-public sealed class BaslerAcquisitionBinding
+public sealed record BaslerAcquisitionBinding
 {
     /// <summary>创建绑定。</summary>
     /// <param name="bindingId">Provider私有绑定身份，供机器配置的providerBindingId引用。</param>

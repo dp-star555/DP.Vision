@@ -9,14 +9,11 @@ namespace DP.Vision.Basler.Tests;
 /// <summary>
 /// Basler作为第二个真实采集Provider插件的回归（实施基线§13阶段E）：
 /// 插件目录只靠 <c>plugin.json</c> 与中立插件契约发现Basler；缺pylon运行时给出Provider级诊断；
-/// 私有配置由本Provider自己解析与校验，公共层不解释其中任何字段。
+/// 设备字段统一由机器配置的 <c>deviceSettings</c> 提供，插件私有配置不再承载设备绑定。
 /// </summary>
 [TestClass]
 public sealed class BaslerAcquisitionProviderPluginTests
 {
-    private const string SampleConfiguration =
-        "{\"bindings\":{\"top-camera\":{\"serialNumber\":\"40123456\"}}}";
-
     private static readonly string PluginDirectory =
         Path.GetDirectoryName(typeof(BaslerAcquisitionProviderPlugin).Assembly.Location)!;
 
@@ -44,7 +41,7 @@ public sealed class BaslerAcquisitionProviderPluginTests
     [TestMethod]
     public void PluginDirectory_LoadsBaslerProvider()
     {
-        var result = new VisionAcquisitionProviderPluginLoader().Load(PluginDirectory, _ => SampleConfiguration);
+        var result = new VisionAcquisitionProviderPluginLoader().Load(PluginDirectory);
 
         Assert.AreEqual(0, result.Failures.Count, Describe(result));
         var plugin = result.Plugins.Single(item => item.PluginId == BaslerAcquisitionProviderPlugin.PluginIdentity);
@@ -67,7 +64,7 @@ public sealed class BaslerAcquisitionProviderPluginTests
         File.Copy(Path.Combine(PluginDirectory, assemblyName), Path.Combine(package, assemblyName), overwrite: true);
         File.Copy(Path.Combine(PluginDirectory, "plugin.json"), Path.Combine(package, "plugin.json"), overwrite: true);
 
-        var result = new VisionAcquisitionProviderPluginLoader().Load(root, _ => SampleConfiguration);
+        var result = new VisionAcquisitionProviderPluginLoader().Load(root);
 
         Assert.AreEqual(0, result.Failures.Count, Describe(result));
         CollectionAssert.Contains(
@@ -111,20 +108,18 @@ public sealed class BaslerAcquisitionProviderPluginTests
         Assert.IsNull(diagnostic);
     }
 
-    /// <summary>插件私有配置加上公共Source绑定可以完成一次正式组合，全程不需要pylon运行时在场。</summary>
+    /// <summary>无私有配置时Module照常贡献Provider注册，组合不需要pylon运行时在场。</summary>
     [TestMethod]
-    public void PrivateConfiguration_ComposesIntoPublishedSources()
+    public void ModuleWithoutPrivateConfiguration_ComposesIntoPublishedSources()
     {
-        var result = new VisionAcquisitionProviderPluginLoader().Load(PluginDirectory, _ => SampleConfiguration);
-
         var composition = new VisionAcquisitionProviderComposer().Compose(
-            result.Modules,
+            new IVisionAcquisitionProviderModule[] { new BaslerAcquisitionProviderModule() },
             new[]
             {
                 new VisionAcquisitionSourceBinding(
-                    "Camera.Top",
+                    "Camera.Side",
                     BaslerAcquisitionProvider.ProviderIdentity,
-                    "top-camera",
+                    "40123456",
                     "camera:serial:40123456")
             });
 
@@ -132,55 +127,38 @@ public sealed class BaslerAcquisitionProviderPluginTests
         Assert.IsTrue(composition.TryGetProvider(BaslerAcquisitionProvider.ProviderIdentity, out _));
     }
 
-    /// <summary>私有配置被解析为Provider私有绑定；这些字段不进入公共配置。</summary>
+    /// <summary>
+    /// 非空的插件私有配置必须被拒绝：设备字段已经统一到 deviceSettings。
+    /// 静默忽略遗留配置会把"配置没生效"藏起来，那比直接失败更难查。
+    /// </summary>
+    /// <param name="configuration">遗留的私有配置文本。</param>
     [TestMethod]
-    public void PrivateConfiguration_ParsesBindings()
-    {
-        var binding = BaslerProviderConfiguration.ParseBindings(SampleConfiguration).Single();
-
-        Assert.AreEqual("top-camera", binding.BindingId);
-        Assert.AreEqual("camera:serial:40123456", binding.CanonicalKey);
-    }
-
-    /// <summary>插件入口把私有配置交给Provider Module；缺少配置表示尚未配置设备而不是解析失败。</summary>
-    [TestMethod]
-    public void PluginEntry_CreatesModuleWithConfiguredBindings()
+    [DataRow("{\"bindings\":{\"top-camera\":{\"serialNumber\":\"40123456\"}}}")]
+    [DataRow("{}")]
+    [DataRow("not json at all")]
+    public void PluginEntry_RejectsLegacyPrivateConfiguration(string configuration)
     {
         var plugin = new BaslerAcquisitionProviderPlugin();
 
-        var module = (BaslerAcquisitionProviderModule)plugin.CreateModule(SampleConfiguration);
-        Assert.AreEqual("top-camera", module.Bindings.Single().BindingId);
-        Assert.AreEqual(0, ((BaslerAcquisitionProviderModule)plugin.CreateModule(null)).Bindings.Count);
-    }
-
-    /// <summary>非法私有配置必须在创建Module时就被拒绝，而不是得到一个半可用的Provider。</summary>
-    [TestMethod]
-    public void PluginEntry_RejectsInvalidPrivateConfiguration()
-    {
-        var plugin = new BaslerAcquisitionProviderPlugin();
-
-        Assert.ThrowsExactly<VisionSourceConfigurationException>(() => plugin.CreateModule("{\"unknown\":1}"));
-    }
-
-    /// <summary>私有配置校验必须拒绝未知字段、缺失字段、非法类型和重复绑定身份，避免拼写错误被静默忽略。</summary>
-    /// <param name="configuration">待校验的私有配置文本。</param>
-    /// <param name="expectedFragment">诊断中必须出现的关键片段。</param>
-    [TestMethod]
-    [DataRow("{\"binding\":{}}", "未知字段")]
-    [DataRow("{\"bindings\":{\"top\":{\"serial\":\"40123456\"}}}", "未知字段")]
-    [DataRow("{\"bindings\":{\"top\":{}}}", "只能指定")]
-    [DataRow("{\"bindings\":{\"top\":{\"serialNumber\":\"1\",\"userDefinedName\":\"A\"}}}", "只能指定")]
-    [DataRow("{\"bindings\":{\"top\":{\"serialNumber\":12}}}", "必须是字符串")]
-    [DataRow("{\"bindings\":{\"top\":{\"serialNumber\":\"\"}}}", "不能为空")]
-    [DataRow("{\"bindings\":{\"top\":{\"serialNumber\":\"1\"},\"top\":{\"serialNumber\":\"2\"}}}", "重复")]
-    [DataRow("[1,2]", "必须是JSON对象")]
-    [DataRow("{ not json", "不是有效JSON")]
-    public void PrivateConfiguration_RejectsInvalidInput(string configuration, string expectedFragment)
-    {
         var failure = Assert.ThrowsExactly<VisionSourceConfigurationException>(
-            () => BaslerProviderConfiguration.ParseBindings(configuration));
+            () => plugin.CreateModule(configuration));
 
-        StringAssert.Contains(failure.Message, expectedFragment);
+        StringAssert.Contains(failure.Message, "deviceSettings");
+    }
+
+    /// <summary>空或空白配置表示"没有私有配置"，这是合法状态，Module 照常创建。</summary>
+    /// <param name="configuration">空的私有配置。</param>
+    [TestMethod]
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("   ")]
+    public void PluginEntry_AcceptsEmptyPrivateConfiguration(string? configuration)
+    {
+        var plugin = new BaslerAcquisitionProviderPlugin();
+
+        var module = Assert.IsInstanceOfType<BaslerAcquisitionProviderModule>(plugin.CreateModule(configuration));
+
+        Assert.AreEqual(BaslerAcquisitionProviderModule.ModuleIdentity, module.ExtensionId);
     }
 
     /// <summary>
