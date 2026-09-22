@@ -118,6 +118,45 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
 
 ## 4. 尚未验证 / 待办
 
+### 4.0 优化项 Phase A（相机自治）— 设计已定形，**当前被跨仓在途改动阻塞**
+
+**目标**：相机只管理"连接 / 取流 / 帧窗口 / 缓冲 / 诊断"，**不理解 Workflow、根流程或流程资源集合**。
+
+**契约变化（实施清单）**
+
+| 动作 | 对象 | 说明 |
+|---|---|---|
+| 删除 | `IVisionAcquisitionRunOwner`、`IVisionAcquisitionRunLease` | 根运行不是相机的概念；`VisionAcquisitionRuntime.BeginRunAsync` 与内部 `RunLease` 一并删除 |
+| 新增 | `IVisionFrameWindow` | `OpenWindow(sourceId, …)` 的返回值：`Generation` + `TakeNextAsync(timeout, ct)` + `IAsyncDisposable` |
+| 改名 | `VisionFrameInbox.BeginEpoch/EndEpoch` → 窗口的 open/close | **窗口是唯一持有代次的对象**，队列只有一条实现，不保留第二套 |
+| 改签名 | `IVisionAcquisition.CaptureAsync` → `VisionCaptureResult(Image, Failure)` | 让"取到了但这一帧有问题"不必靠异常表达 |
+| 收窄 | `EVisionRuntimeState` | 只反映软件生命周期（打开/关闭/降级），不与运行状态耦合 |
+| 并行 | `StartAsync` / `StopAsync` | 不同 `ResourceKey` 互相独立，一个慢相机不阻塞其他 |
+
+**关键语义**：窗口的持有者是**消费方**（节点侧的帧作用域），不是根运行。
+窗口关闭 = 收口本代次并释放未领取帧；窗口之外的帧仍按现有规则被拒绝并计数。
+
+**为什么现在不做**：`IVisionAcquisition` 在 DP.WorkFlow 侧的**全部 5 个消费点**
+（`VisionCaptureNodeExecution.cs`、`WorkflowImageRuntimePluginModule.cs`、两个 sample、
+`BufferedExternalRunScopeEndToEndTests.cs`）此刻正被**另一个进程暂存或修改中**
+（2026-09-22 17:2x 仍在写），而 `VisionAcquisitionRunScope.cs` 与 `WorkflowVisionFrameScope.cs`
+是必须同步改的桥。现在改契约会打断对方在途的工作并让其暂存批次编译不过。
+**等对方那批落地后再动**；解阻后 DP.Vision 侧与本仓侧要作为一个整体提交。
+
+### 4.0.1 顺序约束：Phase A 必须先于 Phase C（诊断重做）
+
+Phase C 要重做的诊断面（`VisionSourceDiagnostics.State`/`Epoch`/`TransferState`、
+`VisionAcquisitionRunSourceArtifact.TransferState`/`Epoch`/`UnclaimedAtEpochEnd`）**与 Phase A 要删的
+根运行/代次概念大面积重叠**——`Epoch`、`UnclaimedAtEpochEnd` 这些字段在 A 之后根本不存在，
+`RunArtifact` 一族也会随租约一起消失。先做 C 等于改一遍马上要删的记录。
+
+因此顺序固定为 **A → C**。解阻后 A 的收尾动作（按上面表格执行）本身就会把
+`State` 拆成"连接 / 取流 / 窗口"三个强类型状态，C 只剩"资源级 vs 源级分离 + 计数等式"。
+C 的计数口径要点已定：`FramesReceived` 定义为**到达会话回调边界的帧（含被拒）**，
+使 `Received = Claimed + Expired + 被拒(溢出/无窗口/未布防) + 收口未领取 + 在队列` 恒成立，
+并暴露 `FramesUnaccounted` 供断言——现在的口径里 `FramesRejected` 含了
+`FramesReceived` 不含的一类（未布防拒绝），等式不成立，这正是 C 要修的。
+
 - **真实相机现场验收**：V1-D / V1-E 的断线、重连、停流时序只能在现场签署。
   待现场确认项：HALCON 目标采集接口是否支持 `do_abort_grab`；`grab_image_async` 的实际取流频率上限。
   **真实 SDK 像素测试不代替相机现场验收。**
