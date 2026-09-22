@@ -26,6 +26,27 @@ public interface IVisionAcquisitionTypeContributionBuilder
 }
 
 /// <summary>
+/// Driver Module可选健康报告。宿主用它把"插件已安装但当前不可用"
+/// （例如缺SDK、缺原生运行时、CPU架构不匹配）在Type Catalog冻结时就记录下来，
+/// 使机器配置里引用这些Type的逻辑源在首节点执行前就带上Provider级诊断。
+/// </summary>
+/// <remarks>
+/// 与"目录里有没有这个DLL"是两件事：DLL在、Type也注册了，但底层运行时可能根本不存在。
+/// 缺运行时必须在冻结阶段就变成 Source 的不可用诊断，而不是等到采集时才抛原生异常。
+/// <para>
+/// 实现是可选的：没有外部依赖的Module不需要报告任何东西。但一旦某个Type的底层运行时可能缺失，
+/// 就必须实现本接口——否则那个Type会一直显示为可用，故障被推迟到运行期。
+/// </para>
+/// </remarks>
+public interface IVisionAcquisitionDriverModuleHealth
+{
+    /// <summary>报告本Module声明的Type当前是否可用。</summary>
+    /// <param name="diagnostic">不可用原因；可用时为空。</param>
+    /// <returns>可用时返回 <see langword="true"/>。</returns>
+    bool TryGetHealth(out string? diagnostic);
+}
+
+/// <summary>
 /// AcquisitionType能力集；描述该Type在设备就绪后支持的取图与触发路径。
 /// 触发/参数能力与完整帧回调在Catalog冻结前做一致性校验。
 /// </summary>

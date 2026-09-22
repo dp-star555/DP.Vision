@@ -118,8 +118,10 @@ public sealed class CrossVendorProviderCoexistenceTests
         var catalog = new VisionAcquisitionTypeCatalogComposer().Compose(
             new IVisionAcquisitionDriverModule[]
             {
-                new HalconAcquisitionDriverModule(),
-                new BaslerAcquisitionDriverModule()
+                // 注入探测使组合结果确定：否则"这台机器没装 pylon 运行时"会让 Basler 源变成不可用，
+                // 用例就会随构建机的部署状态时红时绿。跨厂商路由不是部署状态的函数。
+                new HalconAcquisitionDriverModule(static () => true),
+                new BaslerAcquisitionDriverModule(static () => true)
             });
 
         var cameras = VisionAcquisitionMachineConfigurationParser.Parse(

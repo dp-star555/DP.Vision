@@ -14,7 +14,7 @@ public sealed class VisionAcquisitionMachineConfigurationComposer
     /// <summary>组合机器相机配置。</summary>
     /// <param name="catalog">已冻结的AcquisitionType Catalog；机器配置不负责加载DLL。</param>
     /// <param name="cameras">版本化机器相机定义。</param>
-    /// <returns>一次发布的不可变组合；未安装Type的Source被保真保留并标记为不可用，不阻断组合。</returns>
+    /// <returns>一次发布的不可变组合；未安装Type或插件不可用的Source被保真保留并标记为不可用，不阻断组合。</returns>
     /// <exception cref="ArgumentNullException">参数为空。</exception>
     /// <exception cref="VisionSourceConfigurationException">设置版本不一致、策略与缓冲策略不匹配、Plugin拒绝解析deviceSettings或绑定冲突。</exception>
     public VisionAcquisitionProviderComposition Compose(
@@ -59,6 +59,26 @@ public sealed class VisionAcquisitionMachineConfigurationComposer
                 throw new VisionSourceConfigurationException(
                     $"逻辑源 {sourceId} 的 settingsVersion {camera.SettingsVersion} "
                     + $"与 {typeId} 声明的配置版本 {descriptor.DeviceSettingsVersion} 不一致；请更新机器配置或重新部署Plugin。");
+
+            // 插件不可用（缺SDK、缺原生运行时、架构不匹配）不是配置错误，因此不抛异常：
+            // 与"Type未安装"走同一条路——Source保真保留、带上诊断、不产生绑定，
+            // 于是它不会进入Runtime的设备打开流程，缺SDK的故障在首节点执行前就可见。
+            // 判定放在配置版本校验之后：版本不一致说明机器配置本身写错了，那必须先报出来。
+            if (catalog.TryGetPluginAvailability(descriptor.PluginId, out var availability)
+                && availability is { IsAvailable: false })
+            {
+                sourceInfos.Add(sourceId, new VisionAcquisitionSourceInfo(
+                    sourceId,
+                    typeId,
+                    typeId,
+                    string.Empty,
+                    descriptor.Kind,
+                    DeriveSharingPolicy(camera),
+                    DeriveAcquisitionMode(camera),
+                    IsAvailable: false,
+                    availability.Diagnostic ?? $"插件 {descriptor.PluginId} 当前不可用。"));
+                continue;
+            }
 
             var binding = BuildBinding(camera, descriptor);
             bindings.Add(binding.Binding);

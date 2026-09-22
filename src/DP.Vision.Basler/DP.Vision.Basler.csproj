@@ -36,8 +36,4 @@
          测试用可控假相机驱动回调边界，从而在没有相机与 pylon 运行时的机器上验证流式纪律。 -->
     <InternalsVisibleTo Include="DP.Vision.Basler.Tests" />
   </ItemGroup>
-  <ItemGroup>
-    <!-- 插件Manifest随程序集一起输出，使该目录本身就是一个可被插件加载器扫描的插件包。 -->
-    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
 </Project>

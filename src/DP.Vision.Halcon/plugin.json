@@ -1,9 +1,0 @@
-{
-  "manifestVersion": 1,
-  "pluginId": "dp.vision.halcon",
-  "version": "1.0.0",
-  "displayName": "HALCON 采集 Provider",
-  "modules": {
-    "visionAcquisition": [ "DP.Vision.Halcon.dll" ]
-  }
-}

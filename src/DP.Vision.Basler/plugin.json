@@ -1,9 +1,0 @@
-{
-  "manifestVersion": 1,
-  "pluginId": "dp.vision.basler",
-  "version": "1.0.0",
-  "displayName": "Basler pylon 采集 Provider",
-  "modules": {
-    "visionAcquisition": [ "DP.Vision.Basler.dll" ]
-  }
-}

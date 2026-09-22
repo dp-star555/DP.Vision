@@ -27,13 +27,13 @@ public sealed class SecondAcquisitionDriverModule : IVisionAcquisitionDriverModu
 
         builder.Register(new VisionAcquisitionTypeRegistration(
             AreaScanTypeId,
-            ConfigurableAcquisitionProviderPlugin.PluginIdentity,
+            ConfigurableAcquisitionDriverModule.PluginIdentity,
             "1.0.0",
             EVisionAcquisitionKind.AreaScan,
             1,
             "第二个测试面阵",
             new VisionAcquisitionTypeCapabilities(SupportsSoftwareTrigger: true),
-            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionProviderPlugin.ProviderIdentity),
+            () => FakeVisionProvider.WithDevices(ConfigurableAcquisitionDriverModule.ProviderIdentity),
             TestDeviceSettingsParser.Parse));
     }
 }

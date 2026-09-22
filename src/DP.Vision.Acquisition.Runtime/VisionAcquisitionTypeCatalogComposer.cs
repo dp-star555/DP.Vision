@@ -29,6 +29,7 @@ public sealed class VisionAcquisitionTypeCatalogComposer
         var moduleIds = new HashSet<string>(StringComparer.Ordinal);
         var typeIds = new HashSet<string>(StringComparer.Ordinal);
         var manifest = new List<string>();
+        var availability = new Dictionary<string, PluginHealth>(StringComparer.Ordinal);
 
         foreach (var module in modules)
         {
@@ -44,6 +45,14 @@ public sealed class VisionAcquisitionTypeCatalogComposer
             // 贡献阶段失败直接抛出，调用方持有的正式Catalog保持不变。
             module.Contribute(candidate);
 
+            // 健康报告每个Module只问一次：它可能去解析厂商原生库，不能按Type重复调用。
+            // 未实现健康报告的Module视为可用——这是可选接口，不是"默认不可用"。
+            string? moduleDiagnostic = null;
+            var moduleAvailable = module is not IVisionAcquisitionDriverModuleHealth health
+                || health.TryGetHealth(out moduleDiagnostic);
+            var moduleDiagnosticText = moduleAvailable ? null : moduleDiagnostic;
+
+            var modulePluginIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var registration in candidate.Registrations)
             {
                 var descriptor = ValidateAndBuild(registration);
@@ -52,17 +61,76 @@ public sealed class VisionAcquisitionTypeCatalogComposer
                         $"AcquisitionTypeId 重复：{descriptor.AcquisitionTypeId}；同一进程不能冻结两个同身份Type。");
                 descriptors.Add(descriptor);
                 manifest.Add(FormatManifestLine(descriptor));
+                modulePluginIds.Add(descriptor.PluginId);
             }
+
+            // 一个Module贡献多个Type时，它的健康结论只累计一次；否则同一个原因会按Type重复堆积。
+            foreach (var pluginId in modulePluginIds.OrderBy(id => id, StringComparer.Ordinal))
+                Accumulate(availability, pluginId, moduleAvailable, moduleDiagnosticText);
         }
 
         var ordered = descriptors
             .OrderBy(item => item.AcquisitionTypeId, StringComparer.Ordinal)
             .ToArray();
         var orderedManifest = manifest.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        var orderedAvailability = availability
+            .OrderBy(item => item.Key, StringComparer.Ordinal)
+            .Select(item => new VisionAcquisitionPluginAvailability(
+                item.Key,
+                item.Value.IsAvailable,
+                item.Value.IsAvailable ? null : DescribeUnavailable(item.Key, item.Value)))
+            .ToArray();
         return new VisionAcquisitionTypeCatalog(
             ComputeCatalogId(orderedManifest),
             ordered,
-            orderedManifest);
+            orderedManifest,
+            orderedAvailability);
+    }
+
+    /// <summary>
+    /// 合并同一PluginId的多个Module健康结论：全部可用才算可用，诊断按序数排序后拼接，
+    /// 使冻结结果与Module的传入顺序无关。
+    /// </summary>
+    private static void Accumulate(
+        IDictionary<string, PluginHealth> availability,
+        string pluginId,
+        bool available,
+        string? diagnostic)
+    {
+        if (!availability.TryGetValue(pluginId, out var health))
+        {
+            health = new PluginHealth();
+            availability.Add(pluginId, health);
+        }
+
+        health.IsAvailable &= available;
+        // netstandard2.0 的 BCL 没有 NotNullWhen，IsNullOrWhiteSpace 不参与可空流分析，
+        // 因此这里显式判空再取值。
+        if (diagnostic is not null && diagnostic.Trim().Length > 0)
+            health.Diagnostics.Add(diagnostic.Trim());
+    }
+
+    /// <summary>拼出不可用诊断；Module报告不可用却没给原因时也要留下可读说明，不能变成空字符串。</summary>
+    private static string DescribeUnavailable(string pluginId, PluginHealth health)
+    {
+        if (health.Diagnostics.Count == 0)
+            return $"插件 {pluginId} 报告自身不可用，但没有给出原因。";
+
+        return string.Join(
+            "；",
+            health.Diagnostics
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(text => text, StringComparer.Ordinal));
+    }
+
+    /// <summary>单个PluginId的可用性累计状态。</summary>
+    private sealed class PluginHealth
+    {
+        /// <summary>该PluginId声明的全部Module是否都可用。</summary>
+        public bool IsAvailable { get; set; } = true;
+
+        /// <summary>各Module给出的不可用原因。</summary>
+        public List<string> Diagnostics { get; } = new List<string>();
     }
 
     private static VisionAcquisitionTypeDescriptor ValidateAndBuild(
