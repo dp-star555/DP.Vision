@@ -8,7 +8,9 @@
 
 `DP.Vision.Algorithms/Calibration` 提供独立仿射标定、旋转中心拟合和坐标变换，中心化/尺度归一并拒绝退化观测；RMS不是产品合格判定。Workflow已直接使用新版强类型标定、文件/文件夹采集、Blob、RGB均值、线圆边缘拟合、平移定位和原生双平台ROI页面，旧Workflow视觉兼容已删除。相机通过独立 [DP.Vision.Halcon](src/DP.Vision.Halcon/README.md) 直接调用SDK并复制中立图像，不经过旧设备Adapter；一个绑定只有一个设备适配器、只持有一个已连接的SDK设备对象，主动单次采集与外部回调缓冲源共用它（外部回调缓冲源用长连接会话接管设备：自建采集线程、跨布防复用、停止等待有上界），两种模式互斥且设备只在释放时关闭。
 
-采集已经按插件组织：`DP.Vision.Acquisition.Abstractions` 定义中立契约，`DP.Vision.Acquisition.Runtime` 负责不可变Provider组合、机器级逻辑Source绑定、设备生命周期和按物理ResourceKey互斥，`DP.Vision.Halcon` 与 `DP.Vision.Basler` 各自发布 `plugin.json` 并由宿主扫描插件目录发现，旧 `ICameraCapture` 已无实现者（定义暂留在 `DP.Vision.Algorithms` 待清理）。工作流文档只保存逻辑SourceId，换机器只改机器配置。公共契约、插件组合、Source绑定、设备生命周期和分阶段验收见[图像采集Provider实施基线](../DP.WorkFlow/docs/vision-acquisition-providers.md)：阶段A–E已完成（两个真实厂商Provider可在同一进程组合并按SourceId路由），阶段F（RunScope与高级共享模式）受外部依赖阻塞。主动请求与外部回调FIFO的下一阶段收口方案见[图像采集深化V1](ACQUISITION_RUNTIME_V1.md)：V1-A（公共模型与可控Fake流式Provider）、V1-B（Runtime有界FrameInbox）与V1-C（根运行Epoch接线）已完成；V1-D（Basler真实回调Adapter）与V1-E（HALCON真实流式Adapter）**软件结构验收均已完成、真实相机现场验收待做**；V1-F（运行审计与长期验证）待实现。`BufferedExternal` 现在可以端到端运行——宿主在首节点之前布防、运行结束时停流，上一根运行未领取的帧不会进入下一根运行——两家 Provider 也都已接上各自厂商的长连接机制（Basler 用 `ImageGrabbed` 回调，HALCON 用自建采集线程跑 `grab_image_async` 循环），回调边界复制、停流等待在途交付、断线标记故障均已落地；但**仍没有任何真实相机上的回调验收**，断线、重连与停流时序只能在现场签署。真实SDK像素测试不代替相机现场验收。既有Workflow接入记录见 `../DP.WorkFlow/docs/dp-vision-integration-plan.md`。
+采集已经按插件组织：`DP.Vision.Acquisition.Abstractions` 定义中立契约，`DP.Vision.Acquisition.Runtime` 负责不可变Provider组合、机器级逻辑Source绑定、设备生命周期和按物理ResourceKey互斥，`DP.Vision.Halcon` 与 `DP.Vision.Basler` 各自发布 `plugin.json` 并由宿主扫描插件目录发现。工作流文档只保存逻辑SourceId，换机器只改机器配置。旧 `ICameraCapture`/`CameraCaptureOptions`/`HalconCameraCapture` 已随旧设备适配路径删除，采集只有 `IVisionAcquisition` 一条路径。
+
+**当前形态、不变式、验收状态与待办统一收在 [ACQUISITION_STATUS.md](ACQUISITION_STATUS.md)**（唯一现状入口）；逐阶段提交号与测试证据见 [ACQUISITION_CONNECTION_V2_STATUS.md](ACQUISITION_CONNECTION_V2_STATUS.md)，设计归档见 [ACQUISITION_RUNTIME_V1.md](ACQUISITION_RUNTIME_V1.md) 与 [ACQUISITION_CONNECTION_V2_PLAN.md](ACQUISITION_CONNECTION_V2_PLAN.md)，Provider 化改造的动机与验收矩阵见 [图像采集Provider实施基线](../DP.WorkFlow/docs/vision-acquisition-providers.md)。既有Workflow接入记录见 `../DP.WorkFlow/docs/dp-vision-integration-plan.md`。
 
 ### 模板定位坐标系
 
@@ -31,7 +33,6 @@
 - `ITemplatePoseLocator` / `OpenCvTemplatePoseLocator`：有效掩码上的离散旋转/尺度搜索，独立姿态正反变换；不是连续形状模型。
 
 这些算子已接入Workflow的8个新增节点与双宿主。用法和准确边界见[算子说明](../DP.WorkFlow/docs/nodes/vision-operators.md)。相机实机工作延期，不以合成边缘测试冒充现场精度验收。
-- `ICameraCapture`：宿主设备实现返回IImageSource，设备Adapter不进入图像核心。
 - 分析使用8位输入，越界/Gray16明确拒绝；测量和模板定位只接受声明的矩形范围，不自动取任意ROI外接框或降位深。
 
 ## 视图浏览器

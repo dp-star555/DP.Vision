@@ -2,7 +2,7 @@
 
 ## 客户只管理自己取得的源
 
-`VisionImage.CopyFrom(info, pixels)`、`IImageFileReader.ReadAsync`、`ICameraCapture.CaptureAsync`及`FrameWriter.Publish()`统一返回`IImageSource`。内部`ImageBuffer`、`MemoryImageSource`不再导出，没有旧公开类型的兼容别名；宿主及自定义算法需要重新编译。
+`VisionImage.CopyFrom(info, pixels)`、`IImageFileReader.ReadAsync`及`FrameWriter.Publish()`统一返回`IImageSource`。相机像素不从这里进入：真实采集统一走`DP.Vision.Acquisition`的中立契约与Provider插件体系，旧`ICameraCapture`已删除。内部`ImageBuffer`、`MemoryImageSource`不再导出，没有旧公开类型的兼容别名；宿主及自定义算法需要重新编译。
 
 通用OCR、条码、分割、字形及表面质量接口现在接受`IImageSource`。带原图身份的`ImageFrame`和带叠加证据的`CanvasFrame`仍是元数据/证据包，内部持有源，不是另一套像素存储入口。Blob、测量等已有带身份契约保持其证据语义，不删除帧身份。
 

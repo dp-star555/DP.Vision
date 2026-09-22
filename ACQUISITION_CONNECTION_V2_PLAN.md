@@ -1,8 +1,12 @@
 # 图像采集连接架构 V2：长连接、整图交付与双节点模型
 
-状态：**Approved design，待分阶段实施**  
+状态：**已实施完毕，本文转为设计归档**（V2-0..V2-9、V2-11 均已完成）  
 适用范围：面阵相机、一次返回整图的线扫相机、相机自带采集及采集卡通道。  
-目标：作为后续连接生命周期、Plugin发现、机器配置、Workflow节点和性能优化的统一实施基线。
+目标：保留当初的连接生命周期、Plugin发现、机器配置、Workflow节点和性能优化的设计决策，供追溯"为什么长成这样"。
+
+> **本文是计划，不是现状。** 各阶段的实际落地、提交号、测试证据与偏离记录见
+> [ACQUISITION_CONNECTION_V2_STATUS.md](ACQUISITION_CONNECTION_V2_STATUS.md)。
+> 需要"当前系统长什么样"请看 [ACQUISITION_STATUS.md](ACQUISITION_STATUS.md)。
 
 > 本文采用已经确认的RunScoped语义：根运行结束时释放本Epoch未领取的完整图像。
 > 例如本Epoch收到两张、只领取一张，另一张在`EndEpoch`时释放并计入诊断；不会交给下一根运行。

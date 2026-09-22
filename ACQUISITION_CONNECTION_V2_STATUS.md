@@ -515,13 +515,20 @@ DP.Vision.Algorithms.Tests 67 · DP.Vision.Acquisition.Integration.Tests 4。
 
 ### 记录（相对计划的偏离与待办）
 
-- **`DP.Vision.Algorithms` 的 `ICameraCapture` / `CameraCaptureOptions` 推迟清理**：该接口与选项类型由旧采集路径引入，
+- ~~**`DP.Vision.Algorithms` 的 `ICameraCapture` / `CameraCaptureOptions` 推迟清理**~~：该接口与选项类型由旧采集路径引入，
   现已无实现者，但定义在跨项目契约程序集内（`DP.Vision.Algorithms` 还被 WorkFlow 侧引用），
   删除会波及本阶段之外的仓库，故只删除本Provider内的实现与测试，接口保留并在本记录中标记待清理。
+  → **已于 2026-09-22 清理完毕**：确认生产代码零消费者、零实现者后删除
+  `src/DP.Vision.Algorithms/Acquisition/ICameraCapture.cs`（含 `CameraCaptureOptions`），
+  并新增 `tests/DP.Vision.Algorithms.Tests/Architecture/LegacyCaptureAbstractionTests.cs` 两条独立断言
+  （运行期导出类型不存在 + 生产源码标识符不出现）禁止复发，两条断言在删除前双 TFM 均变红、删除后转绿。
 - **`DP.WorkFlow/docs` 旧 SOP 文档待同步**：`vision-architecture.md`、`vision-acquisition-providers.md`、
   `nodes/new-vision-file-pipeline.md` 仍描述 `HalconCameraCapture` / `ICameraCapture` / "每次采集打开关闭设备"，
   属于跨仓文档同步，需在 WorkFlow 仓库单独提交。本仓 `README.md` 的同类表述已随本次改动更正；
   `UNIFIED_IMAGE_SOURCE.md` 仍把 `ICameraCapture.CaptureAsync` 列为统一入口，属历史迁移记录，未改。
+  → **本仓侧已于 2026-09-22 更正**：`README.md` 与 `UNIFIED_IMAGE_SOURCE.md` 均改为描述当前形态
+  （相机像素只经 `DP.Vision.Acquisition` 中立契约与 Provider 插件进入，旧类型已删除）。
+  **跨仓部分（`DP.WorkFlow/docs`）仍待处理。**
 - **`Software` 触发未经现场验收**：实现依据 MVTec 官方示例与本机 SDK 反射结果，缺少真实相机验证；
   现场若所用采集接口不接受 `[Consumer]trigger`，会以 `VisionParameterNotSupportedException` 明确失败（不静默降级）。
 - **提交状态**：V2-6 与 V2-7 已提交为 `ff2a873`（Basler 迁移）与 `c1a725b`（HALCON 迁移，含本文档）。

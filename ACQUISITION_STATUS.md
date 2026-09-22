@@ -1,0 +1,115 @@
+# DP.Vision 图像采集：当前有效状态
+
+> **本文是"采集现在长什么样"的唯一入口。**
+> 计划与设计文档只作为归档保留，不再与本文平行描述现状；它们回答"当初为什么这样决定"，
+> 本文回答"现在是什么、验收到哪一步、还差什么"。
+>
+> 最后更新：2026-09-22 · 基线 `DP.Vision.sln` 构建 **0 警告 0 错误**、测试 **1252 例 0 失败**（双 TFM）。
+
+## 文档地图
+
+| 文档 | 性质 | 用途 |
+|---|---|---|
+| **本文** | **现状** | 当前形态、不变式、验收状态、待办 |
+| [ACQUISITION_CONNECTION_V2_STATUS.md](ACQUISITION_CONNECTION_V2_STATUS.md) | 阶段记录 | V2-0..V2-9、V2-11 的逐阶段提交号、测试证据与偏离 |
+| [ACQUISITION_RUNTIME_V1.md](ACQUISITION_RUNTIME_V1.md) | 设计 + 阶段记录 | 采集深化 V1（两种采集模式、帧窗口、故障语义） |
+| [ACQUISITION_CONNECTION_V2_PLAN.md](ACQUISITION_CONNECTION_V2_PLAN.md) | **归档计划** | V2 的原始设计决策，已被 STATUS 取代 |
+| `../DP.WorkFlow/docs/vision-acquisition-providers.md` | **归档设计** | 多厂商 Provider 化改造的动机、目标形状与验收矩阵 |
+
+## 1. 当前形态
+
+进程内三层，依赖方向单向：
+
+```text
+DP.Vision                         中立图像、算法、UI
+    ↑
+DP.Vision.Acquisition.Abstractions  中立采集契约（33 个文件，无厂商依赖）
+    ↑
+DP.Vision.Acquisition.Runtime       组合 / 机器配置 / 设备生命周期 / 帧仓
+    ↑
+DP.Vision.Halcon  ·  DP.Vision.Basler   厂商 Provider 插件（各自 plugin.json）
+```
+
+| 工程 | 职责 |
+|---|---|
+| `DP.Vision.Acquisition.Abstractions` | `IVisionAcquisition`、Provider/DriverModule 契约、运行所有者、机器相机定义、中立帧与诊断 |
+| `DP.Vision.Acquisition.Runtime` | 插件目录发现与加载、不可变 Provider 组合、机器配置解析与修订、`VisionAcquisitionTypeCatalog`、`VisionResourceSession`、`VisionFrameInbox` |
+| `DP.Vision.Halcon` | HALCON 采集接口 Provider（面阵/线扫/采集卡通道），编译期 `HALCON_SDK` 开关 |
+| `DP.Vision.Basler` | pylon Provider，原生运行时健康探测 |
+
+**采集只有一条路径**：Workflow 侧只声明 `IVisionAcquisition`；旧 `ICameraCapture` / `CameraCaptureOptions` / `HalconCameraCapture` 已删除，并有架构测试禁止复发。
+
+## 2. 不变式（改动时不要破）
+
+1. **依赖方向**：`DP.Vision` → `Abstractions` → `Runtime`；Provider → Abstractions + 厂商 SDK。
+   **禁止** `Runtime → DP.WorkFlow`、Provider → Workflow、公共契约 → 厂商 SDK。
+   由 `tests/DP.Vision.Acquisition.Tests/Contracts/AssemblyBoundaryTests.cs` 强制。
+2. **设备连接属于软件生命周期，取图属于节点或回调行为**。节点不得打开/关闭/重连/释放物理设备。
+3. **一台物理相机或一个采集卡通道 = 一个 `VisionResourceSession`**，按物理 `ResourceKey` 互斥。
+4. **流式三条契约**（真实 Adapter 必须照做）：
+   - 所有权：`Publish` 一进入即转移，**接收方即使拒绝也必须释放帧**；
+   - 线程：异常**不得抛回 SDK 回调线程**；
+   - 停止：`DisposeAsync` 必须**等待已进入的交付退出**，之后不得再交付。
+5. **厂商差异显式处理而非抹平**：HALCON 缺 SDK 是编译期问题；Basler 缺的是原生运行时。
+6. **插件包必须自包含厂商依赖，但不得包含宿主契约程序集**（否则插件拿到第二份类型，组合必然失败）。
+7. **运行隔离**：根运行 Epoch 只属于 `FrameInbox`；`EndEpoch` 清理本 Epoch 未领取帧并计入诊断，不交给下一根运行。
+8. **Provider 失败不自动切换**到另一个 Provider。
+
+## 3. 验收状态
+
+### 3.1 采集 Provider 化（阶段 A–E）— 已完成
+
+两个真实厂商 Provider 可在同一进程组合并按 `SourceId` 路由；工作流文档只保存逻辑 `SourceId`，
+机器配置绑定 `ProviderId` + `ProviderBindingId` + `ResourceKey`。
+
+**阶段 F（RunScope 与高级共享模式）**：RunScope 部分已由 V1-C 覆盖（见下）。
+共享策略当前只实现 `ExclusiveOperation` 与 `Serialized`；`ExclusiveRun` 只对缓冲源有效，
+`Broadcast` 待真实需求 —— 两者在准备阶段被**显式拒绝**，不做隐式降级。
+
+### 3.2 采集深化 V1 — 软件结构验收已完成，现场验收待做
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| V1-A | 模式与队列策略契约、可控 Fake 流式 Provider | ✅ |
+| V1-B | Runtime 有界 `VisionFrameInbox` | ✅ |
+| V1-C | 根运行 Epoch 接线（`IVisionAcquisitionRunOwner`） | ✅ |
+| V1-D | Basler 真实回调 Adapter（`ImageGrabbed`） | ⚠️ 软件结构验收完成，**真实相机现场验收待做** |
+| V1-E | HALCON 真实流式 Adapter（自建采集线程跑 `grab_image_async`） | ⚠️ 同上 |
+| V1-F | 运行审计与长期验证 | ❌ 未做 |
+
+两种采集模式：`OnDemand`（节点到达后采集）与 `BufferedExternal`（长期布防 + 有界 FIFO 待领取）。
+
+### 3.3 采集连接架构 V2 — 已完成
+
+V2-0..V2-9、V2-11 全部完成，逐阶段证据见 [STATUS](ACQUISITION_CONNECTION_V2_STATUS.md)。
+包含：类型目录与自动 Module 发现、机器相机定义与不可变 Composition、应用级连接生命周期、
+TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider 迁移、首个线扫/采集卡 Adapter、
+采集管理界面与审计。
+
+## 4. 尚未验证 / 待办
+
+- **真实相机现场验收**：V1-D / V1-E 的断线、重连、停流时序只能在现场签署。
+  待现场确认项：HALCON 目标采集接口是否支持 `do_abort_grab`；`grab_image_async` 的实际取流频率上限。
+  **真实 SDK 像素测试不代替相机现场验收。**
+- **V1-F（运行审计与长期验证）** 未实现。
+- **`Software` 触发**（HALCON）依据 MVTec 官方示例与本机 SDK 反射实现，未经现场验收；
+  若所用采集接口不接受 `[Consumer]trigger`，以 `VisionParameterNotSupportedException` 明确失败，不静默降级。
+- 采集侧遗留：`WorkflowVisionAcquisitionSession` 仍兼"文件夹采集会话 + 帧作用域准备"两职责；
+  插件加载器不校验跨插件 `ProviderId` 唯一性（归 Composer）。
+- **跨仓**：`DP.Vision` 与 `DP.WorkFlow` 之间仍是 `ProjectReference` 源码引用、**无版本锁定**，
+  结构性改动前先提交可回退基线。
+
+## 5. 怎么跑
+
+```bash
+export APPDATA="C:\Users\25845\AppData\Roaming"      # 缺它 NuGet 报 path1 为 null
+export ProgramFiles="C:\Program Files"
+export MSBUILDDISABLENODEREUSE=1
+export PROCESSOR_ARCHITECTURE=AMD64                  # net48 下 OpenCV/HALCON 需要
+export HALCONROOT="C:\Program Files\MVTec\HALCON-23.11-Progress"   # 缺它少 4 例、HALCON 工程退化成无 SDK 版本
+cd DP.Vision && dotnet build DP.Vision.sln -c Debug
+cd DP.Vision && dotnet test DP.Vision.sln
+```
+
+- 12 个运行条目（6 工程 × 双 TFM），当前 **1252 例 0 失败**。
+- **"文件已投放"不等于"插件能加载"**：验证部署必须在目标输出目录里真正跑一次加载器。

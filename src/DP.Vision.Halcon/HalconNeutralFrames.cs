@@ -16,8 +16,8 @@ namespace DP.Vision.Halcon;
 /// 避免把公共可见的错误文本在本次改动里一并改掉。
 /// </para>
 /// <para>
-/// 这里用 <c> 而不是 <see cref>：<c>HalconImageSource</c> 只在定义 <c>HALCON_SDK</c> 时存在，
-/// 未装 SDK 的机器上 cref 无法解析，会变成构建警告。
+/// 上面刻意用代码字体而不是 cref 引用：HalconImageSource 整体位于 HALCON_SDK 条件编译内，
+/// 未装 SDK 的机器上该类型不存在，cref 无法解析会退化成构建警告。
 /// </para>
 /// </summary>
 internal static class HalconNeutralFrames
