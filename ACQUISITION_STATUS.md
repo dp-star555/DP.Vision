@@ -5,7 +5,7 @@
 > 本文回答"现在是什么、验收到哪一步、还差什么"。
 >
 > 最后更新：2026-09-22 · 基线 `DP.Vision.sln` 构建 **0 警告 0 错误**、
-> 测试 **1206 例 0 失败**（6 个测试工程 × 双 TFM = 12 运行条目）。
+> 测试 **1208 例 0 失败**（6 个测试工程 × 双 TFM = 12 运行条目）。
 
 ## 文档地图
 
@@ -148,8 +148,9 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
 - `DP.Vision.UI` 因此**去掉了 `Acquisition.Runtime` 引用**，回到纯画布 / ROI / 结果浏览器。
 
 结果：**纯移动**——拆分后全量 `DP.Vision.sln` 仍为 12 运行条目 / **1202 例 0 失败 / 0 警告**，
-与拆分前逐项一致；两个新工程各自产出成功。随后补的两条边界测试再 +4，当前全量为
-**1206 例 0 失败 / 0 警告**。命名空间 `DP.Vision.UI.Acquisition` → `DP.Vision.Acquisition.Management`、
+与拆分前逐项一致；两个新工程各自产出成功。随后补的两条边界测试再 +4（§3.5 末）、Phase E 的三机用例
+再 +2（§3.6），当前全量为 **1208 例 0 失败 / 0 警告**。
+命名空间 `DP.Vision.UI.Acquisition` → `DP.Vision.Acquisition.Management`、
 `DP.Vision.Winform` → `DP.Vision.Acquisition.WinForms`。
 
 **为什么这次拆分是安全的**（动手前逐条确认过）：`DP.Vision.UI/Acquisition/*` 与
@@ -169,6 +170,37 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
 （每处 2 失败 / 0 通过）——M1 把 `Runtime` 引用加回 `DP.Vision.UI`、M2 让 `Management` 引用
 `DP.Vision.UI`、M3 让 `WinForms` 引用 `DP.Vision.UI`（同时证明确实扫到了 WinForms 工程文件）；
 三份工程文件逐字节还原。
+
+### 3.6 优化项 Phase E（相机自治验收）— 自动化项已覆盖
+
+Phase E 的验收项多数早已由既有用例覆盖，本轮只补了**唯一真实缺口**：
+
+| 验收项 | 现状 |
+|---|---|
+| 按 `ResourceKey` 冲突 | 已覆盖：`SharingPolicyTests.SameResourceKey_TwoSources_ShareOneMutex` / `ExclusiveOperation_SecondCaptureFailsWithOccupantDiagnostics`、`AcquisitionModeCompositionTests.TwoBufferedSourcesOnSameResourceKey_AreRejected` / `MixedAcquisitionModeOnSameResourceKey_IsRejected` |
+| 旧窗口帧不进新窗口 | 已覆盖：`BufferedExternalInboxTests.PreviousRunFrames_DoNotEnterNextRun`、`FrameInboxUnitTests.BeginEpoch_DropsPreviousEpochFrames` |
+| 无窗口帧被拒并计数 | 已覆盖：`RunEnd_KeepsStreamRunningAndRejectsFramesWithoutEpoch`、`FrameInboxUnitTests.Enqueue_WithoutActiveEpoch_RejectsAndCounts` / `EndEpoch_DrainsAllEntriesAndCountsUnclaimed` |
+| 每台相机各自的消费方 | 已覆盖：`RoutingTests.BoundSource_OnlyCallsItsOwnProvider` / `ProviderFailure_DoesNotFallBackToOtherProvider` |
+| **三机故障隔离** | **本轮补齐 ↓** |
+| 诊断 / UI / 制品失败不影响采集 | 部分覆盖：`RunArtifactTests.Artifact_WithoutHostIdentity_LeavesOptionalFieldsEmpty`；UI 侧待随 Phase C 的诊断面重做一起补 |
+
+**本轮新增：`Lifecycle/RuntimeConnectionLifecycleTests.MiddleCameraFailure_LeavesOtherCamerasFullyFunctional`**
+
+三台相机（SourceId 排序后 `Camera.B` 居中）由**中间**那台打开失败，断言：
+
+- 运行时状态为 `Degraded`（只有可选相机失败，而不是整体不可用）；
+- 失败相机带故障诊断与原因；
+- 另两台各自 `Connected`、**都能采集**、诊断不被牵连；
+- 两台健康相机各打开一次自己的绑定（`CollectionAssert.AreEquivalent`，不假定顺序）。
+
+> **为什么必须是三台、且失败的在中间**：既有 `OptionalFailure_RuntimeDegradesAndSourceUnavailable`
+> 只有两台、且失败的那台排在**最后**。"遇到失败就提前收手"（打开循环里 `break` / `return`，
+> 或把打开异常直接抛出而不吞掉）这类缺陷在那两种排布下都看不出来——排在失败者**之后**的相机
+> 根本不会被检查到。
+
+**验证**：基线两 TFM 各 1 例全绿；变异 M1（代表 Source 只取第一个 → 后面的相机不会被打开）与
+M2（打开失败重新抛出 → `StartAsync` 直接失败、不再是 `Degraded`）**均咬住**（各 2 失败 / 0 通过），
+源文件逐字节还原。
 
 ## 4. 尚未验证 / 待办
 

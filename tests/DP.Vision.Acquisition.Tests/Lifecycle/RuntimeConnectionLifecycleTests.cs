@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision;
@@ -192,5 +193,65 @@ public sealed class RuntimeConnectionLifecycleTests
             CancellationToken.None);
         Assert.IsNotNull(captured);
         Assert.AreEqual("camera:serial:MAIN", captured.Metadata.ResourceKey);
+    }
+
+    /// <summary>
+    /// §21-8/9 的三机版：三台相机里**中间**那台打开失败，另外两台必须照常可用。
+    /// <para>
+    /// 之所以让失败的那台排在中间（SourceId 排序后 `Camera.B` 居中）：若实现"遇到失败就提前收手"
+    /// （打开循环里 <c>break</c> / <c>return</c>，或把打开异常直接抛出而不吞掉），
+    /// 排在它**后面**的相机就不会被打开。只测两台、且失败的那台排在最后时，这类缺陷看不出来。
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task MiddleCameraFailure_LeavesOtherCamerasFullyFunctional()
+    {
+        var failing = new FakeVisionProvider(
+            "dp.fake.middle",
+            _ => throw new InvalidOperationException("中间相机打开失败。"));
+        var healthy = new RecordingProviderFactory();
+        var composition = _composer.Compose(
+            new[]
+            {
+                new FakeVisionProviderModule(
+                    "m.middle", new VisionAcquisitionProviderRegistration("dp.fake.middle", "1.0.0", () => failing)),
+                new FakeVisionProviderModule("m.healthy", healthy.Registration("dp.fake.healthy"))
+            },
+            new[]
+            {
+                new VisionAcquisitionSourceBinding("Camera.A", "dp.fake.healthy", "cam-a", "camera:serial:A"),
+                new VisionAcquisitionSourceBinding(
+                    "Camera.B", "dp.fake.middle", "cam-b", "camera:serial:B", isRequired: false),
+                new VisionAcquisitionSourceBinding("Camera.C", "dp.fake.healthy", "cam-c", "camera:serial:C")
+            });
+        await using var runtime = new VisionAcquisitionRuntime(composition);
+
+        var state = await runtime.StartAsync(CancellationToken.None);
+        Assert.AreEqual(EVisionRuntimeState.Degraded, state, "只有可选相机失败时应为 Degraded，而不是整体不可用。");
+
+        var failedDiag = runtime.GetDiagnostics("Camera.B")!;
+        Assert.IsTrue(failedDiag.IsFaulted, "失败的相机必须带故障诊断。");
+        StringAssert.Contains(failedDiag.FaultMessage, "中间相机打开失败");
+
+        // 排在失败相机**之后**的那台也必须已经打开并可用。
+        foreach (var sourceId in new[] { "Camera.A", "Camera.C" })
+        {
+            var diag = runtime.GetDiagnostics(sourceId)!;
+            Assert.IsFalse(diag.IsFaulted, sourceId + " 不得被同批其他相机的失败牵连。");
+            Assert.AreEqual(EVisionConnectionState.Connected, diag.ConnectionState, sourceId + " 应处于已连接。");
+
+            using var captured = await runtime.CaptureAsync(
+                new VisionSourceReference(sourceId),
+                new VisionCaptureRequest(TimeSpan.FromSeconds(1)),
+                new VisionAcquisitionOwner("run-1", "node-1"),
+                CancellationToken.None);
+            Assert.IsNotNull(captured, sourceId + " 必须能采集。");
+        }
+
+        // 两台健康相机各打开一次自己的绑定，没有互相顶替、也没有被重复打开。
+        CollectionAssert.AreEquivalent(
+            new[] { "cam-a", "cam-c" },
+            healthy.Last.OpenedBindings.ToArray(),
+            "两台健康相机必须各打开一次自己的绑定。");
     }
 }
