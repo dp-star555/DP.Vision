@@ -40,6 +40,33 @@ public sealed class BaslerAcquisitionBindingTests
         Assert.IsNull(new BaslerAcquisitionBinding("c", serialNumber: "1", triggerSource: "   ").TriggerSource);
     }
 
+    /// <summary>
+    /// 像素格式同样是设备侧事实，必须随绑定一起配置（只进配置摘要的字段不会生效）；
+    /// 空白或未配置表示保持设备当前设置，不猜。
+    /// </summary>
+    [TestMethod]
+    public void PixelFormat_IsOptionalAndTrimmed()
+    {
+        Assert.AreEqual("Mono8", new BaslerAcquisitionBinding("c", serialNumber: "1", pixelFormat: "  Mono8  ").PixelFormat);
+        Assert.IsNull(new BaslerAcquisitionBinding("c", serialNumber: "1", pixelFormat: "   ").PixelFormat);
+        Assert.IsNull(new BaslerAcquisitionBinding("c", serialNumber: "1").PixelFormat);
+    }
+
+    /// <summary>
+    /// 绑定是 <see langword="record"/>，会作为 <c>ProviderState</c> 参与解析结果的相等性比较：
+    /// 只有像素格式不同的两个绑定必须不相等，否则"改了像素格式"在解析结果层面会被看成没变。
+    /// </summary>
+    [TestMethod]
+    public void PixelFormat_ParticipatesInBindingEquality()
+    {
+        Assert.AreNotEqual(
+            new BaslerAcquisitionBinding("c", serialNumber: "1", pixelFormat: "Mono8"),
+            new BaslerAcquisitionBinding("c", serialNumber: "1", pixelFormat: "Mono16"));
+        Assert.AreEqual(
+            new BaslerAcquisitionBinding("c", serialNumber: "1", pixelFormat: "Mono8"),
+            new BaslerAcquisitionBinding("c", serialNumber: "1", pixelFormat: "Mono8"));
+    }
+
     /// <summary>两个选择器都给或都不给都必须拒绝：前者无法判断以哪个为准，后者会匹配到任意一台。</summary>
     /// <param name="serial">序列号参数。</param>
     /// <param name="name">用户自定义名参数。</param>

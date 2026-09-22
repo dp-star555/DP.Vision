@@ -70,6 +70,11 @@ internal static class BaslerCameraParameters
         if (binding is null)
             throw new ArgumentNullException(nameof(binding));
 
+        // 像素格式决定设备实际输出什么，也决定中立帧那侧的转换路径；
+        // 必须在开始取流之前写好，否则相机仍按上一次的格式出图。
+        if (binding.PixelFormat is { } pixelFormat)
+            SetEnum(camera, PLCamera.PixelFormat, pixelFormat, "像素格式");
+
         if (exposureMicroseconds is { } exposure)
         {
             // 先关自动曝光：否则手动值会被自动算法覆盖，操作员看到的是"设置了但不生效"。

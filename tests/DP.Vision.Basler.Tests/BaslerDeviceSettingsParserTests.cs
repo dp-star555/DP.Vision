@@ -105,6 +105,34 @@ public sealed class BaslerDeviceSettingsParserTests
     }
 
     /// <summary>
+    /// 像素格式必须**随绑定**带到设备，而不只是进配置摘要：
+    /// 只进摘要的话，改了 deviceSettings 会让 CompositionId 变化、看上去"生效了"，
+    /// 但设备从头到尾没被写过这个参数——现场表现就是"设置了但不生效"。
+    /// </summary>
+    [TestMethod]
+    public void PixelFormat_ReachesPrivateBinding()
+    {
+        var result = BaslerDeviceSettingsParser.Parse(
+            "{\"serialNumber\":\"40123456\",\"pixelFormat\":\"Mono8\"}");
+
+        var binding = Assert.IsInstanceOfType<BaslerAcquisitionBinding>(result.ProviderState);
+        Assert.AreEqual("Mono8", binding.PixelFormat);
+
+        // 摘要里也要有：它让"改了像素格式"产生新的组合身份。
+        StringAssert.Contains(result.ConfigurationSummary, "pixelFormat=Mono8");
+    }
+
+    /// <summary>未配置像素格式时绑定上必须为空，表示保持设备当前设置，而不是猜一个默认格式。</summary>
+    [TestMethod]
+    public void MissingPixelFormat_LeavesBindingNull()
+    {
+        var result = BaslerDeviceSettingsParser.Parse("{\"serialNumber\":\"40123456\"}");
+
+        var binding = Assert.IsInstanceOfType<BaslerAcquisitionBinding>(result.ProviderState);
+        Assert.IsNull(binding.PixelFormat);
+    }
+
+    /// <summary>
     /// Provider 只凭 deviceSettings 解析出的绑定就能构建设备，全程不需要插件私有配置、也不需要相机。
     /// 这是"deviceSettings 是设备配置唯一来源"在厂商侧的证据。
     /// </summary>

@@ -126,9 +126,13 @@ var captured = await acquisition.CaptureAsync(
 
   未知字段、缺失字段、非法类型和"两个选择器都给了/都没给"一律拒绝，不静默忽略；
   按 `userDefinedName` 选择时无法报告规范资源键。
-  `pixelFormat` 目前**只进入配置摘要、不写回设备**：真正生效的像素格式来自
-  `BaslerNeutralFrames` 对设备上报格式的转换，超出支持范围会明确报错；
-  把它写到 `PLCamera.PixelFormat` 需要 pylon 现场验证，因此留待现场验收一并处理。
+  `pixelFormat` 会**随绑定带到设备并写到 `PLCamera.PixelFormat`**；两个写入点都在开始取流**之前**
+  （布防前、单次采集前），因此不需要在取流中改格式。设备不接受该取值时明确报
+  `VisionParameterNotSupportedException`，而不是静默沿用设备当前格式——"设置了但不生效"更难查。
+  **每个被接受的 deviceSettings 字段都必须在私有绑定上有同名属性**，由
+  `DP.Vision.Acquisition.Integration.Tests/DeviceSettingsFieldsReachBindingTests` 强制：
+  只进配置摘要的字段不会生效，而 CompositionId 变化又会让它看起来"已经生效"。
+  真正出图是否为该格式仍属**现场验收**（需要 pylon + 真机）；本仓保证的是"写到设备、失败明确报错"。
 
 ## 像素边界
 

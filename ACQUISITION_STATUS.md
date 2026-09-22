@@ -5,7 +5,7 @@
 > 本文回答"现在是什么、验收到哪一步、还差什么"。
 >
 > 最后更新：2026-09-22 · 基线 `DP.Vision.sln` 构建 **0 警告 0 错误**、
-> 测试 **1208 例 0 失败**（6 个测试工程 × 双 TFM = 12 运行条目）。
+> 测试 **1218 例 0 失败**（6 个测试工程 × 双 TFM = 12 运行条目）。
 
 ## 文档地图
 
@@ -69,8 +69,11 @@ DP.Vision.Winform  ·  DP.Vision.WPF    宿主外壳（WinForms / WPF 各一）
    结果作为插件私有的 `ProviderState` 随公共绑定一路带到 `IVisionAcquisitionProvider.OpenAsync`；
    公共层只原样转交、不解释。**插件私有配置不再承载设备绑定**（非空即明确拒绝）。
    同一台相机绝不能在两处各写一遍——那会让"改了一处、另一处没改"变成难查的现场问题。
-   由 `tests/DP.Vision.Acquisition.Tests/Contracts/DeviceSettingsBindingFlowTests.cs` 与两家
-   `*DeviceSettingsParserTests` 强制。
+   **每个被解析器接受的字段都必须在私有绑定上有同名属性**（`pixelFormat` → `PixelFormat`）：
+   只进配置摘要（`CompositionId`）的字段不会生效，而 `CompositionId` 变化又会让它看起来"已经生效"。
+   由 `tests/DP.Vision.Acquisition.Tests/Contracts/DeviceSettingsBindingFlowTests.cs`、
+   两家 `*DeviceSettingsParserTests` 与
+   `tests/DP.Vision.Acquisition.Integration.Tests/DeviceSettingsFieldsReachBindingTests.cs` 强制。
 3. **设备连接属于软件生命周期，取图属于节点或回调行为**。节点不得打开/关闭/重连/释放物理设备。
 4. **一台物理相机或一个采集卡通道 = 一个 `VisionResourceSession`**，按物理 `ResourceKey` 互斥。
 5. **流式三条契约**（真实 Adapter 必须照做）：
@@ -275,9 +278,12 @@ C 的计数口径要点已定：`FramesReceived` 定义为**到达会话回调�
 - **真实相机现场验收**：V1-D / V1-E 的断线、重连、停流时序只能在现场签署。
   待现场确认项：HALCON 目标采集接口是否支持 `do_abort_grab`；`grab_image_async` 的实际取流频率上限。
   **真实 SDK 像素测试不代替相机现场验收。**
-- **`deviceSettings.pixelFormat`（Basler）目前只进入配置摘要，没有写到设备上**：
-  真正生效的像素格式来自 `BaslerNeutralFrames` 对设备上报格式的转换，超出支持范围会明确报错。
-  把配置值写到 `PLCamera.PixelFormat` 需要 pylon 现场验证，因此留待现场验收一并处理。
+- **`deviceSettings.pixelFormat`（Basler）原为"只进入配置摘要、没有写到设备"→ 已修（2026-09-22）**：
+  现在随私有绑定带到设备，并写到 `PLCamera.PixelFormat`；两个写入点都在**开始取流之前**
+  （布防前、单次采集前），设备不接受该取值时明确报 `VisionParameterNotSupportedException`，
+  不再静默沿用设备当前格式。**"真实出图是否就是该格式"仍只能现场签署**（需要 pylon + 真机）；
+  另外，**设备写入那一行在本仓没有可观察面**——去掉它没有任何自动化用例变红（变异验证如实记录为"未命中"），
+  因此这条修复的自动化证据只到"字段确实到达了私有绑定"为止。
 - **V1-F（运行审计与长期验证）** 未实现。
 - **组合键与插件身份仍是两个不同的字符串，必须区分**：机器配置路径下，
   组合/绑定里的 `ProviderId` 实际是 `AcquisitionTypeId`（如 `dp.acquisition.halcon.area`），

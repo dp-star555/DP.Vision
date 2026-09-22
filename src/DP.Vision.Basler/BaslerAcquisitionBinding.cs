@@ -17,12 +17,14 @@ public sealed record BaslerAcquisitionBinding
     /// <param name="serialNumber">设备序列号；与 <paramref name="userDefinedName"/> 二选一。</param>
     /// <param name="userDefinedName">设备用户自定义名（pylon 的 UserDefinedName）；与 <paramref name="serialNumber"/> 二选一。</param>
     /// <param name="triggerSource">外部硬件触发使用的触发源，例如 Line1；只有外部触发模式需要。</param>
+    /// <param name="pixelFormat">要求写入设备的像素格式（pylon <c>PixelFormat</c> 枚举成员名，例如 <c>Mono8</c>）；空表示保持设备当前设置。</param>
     /// <exception cref="ArgumentException">绑定身份为空，或两个选择器没有恰好指定一个。</exception>
     public BaslerAcquisitionBinding(
         string bindingId,
         string? serialNumber = null,
         string? userDefinedName = null,
-        string? triggerSource = null)
+        string? triggerSource = null,
+        string? pixelFormat = null)
     {
         if (string.IsNullOrWhiteSpace(bindingId))
             throw new ArgumentException("绑定身份不能为空。", nameof(bindingId));
@@ -41,6 +43,7 @@ public sealed record BaslerAcquisitionBinding
         SerialNumber = hasSerial ? serialNumber!.Trim() : null;
         UserDefinedName = hasName ? userDefinedName!.Trim() : null;
         TriggerSource = string.IsNullOrWhiteSpace(triggerSource) ? null : triggerSource!.Trim();
+        PixelFormat = string.IsNullOrWhiteSpace(pixelFormat) ? null : pixelFormat!.Trim();
     }
 
     /// <summary>Provider私有绑定身份。</summary>
@@ -54,6 +57,16 @@ public sealed record BaslerAcquisitionBinding
 
     /// <summary>外部硬件触发的触发源；未配置时为空。</summary>
     public string? TriggerSource { get; }
+
+    /// <summary>
+    /// 要求写入设备的像素格式（pylon <c>PixelFormat</c> 枚举成员名，例如 <c>Mono8</c>）；
+    /// 未配置时为空，表示保持设备当前设置。
+    /// <para>
+    /// 必须挂在绑定上而不是只进配置摘要：只进摘要的话，改了 <c>deviceSettings</c> 会让
+    /// <c>CompositionId</c> 变化、看上去"生效了"，但设备从头到尾没被写过这个参数。
+    /// </para>
+    /// </summary>
+    public string? PixelFormat { get; }
 
     /// <summary>pylon 相机信息里用于定位设备的键，取值为 <c>Basler.Pylon.CameraInfoKey</c> 中的常量名。</summary>
     public string SelectorKey => SerialNumber is not null ? "SerialNumber" : "UserDefinedName";

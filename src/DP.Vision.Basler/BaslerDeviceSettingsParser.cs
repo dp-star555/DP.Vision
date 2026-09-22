@@ -94,7 +94,9 @@ public static class BaslerDeviceSettingsParser
                 : "camera:name:" + userDefinedName;
             // 设备字段在这里解析一次，就装进 ProviderState 随绑定带走；
             // 打开设备时 Provider 直接用这份绑定，不再需要第二条私有配置重复声明同一台相机。
-            var binding = new BaslerAcquisitionBinding(selector, serialNumber, userDefinedName, triggerSource);
+            // 注意：**每个接受的字段都要装进绑定**——只进摘要（CompositionId）的字段不会生效，
+            // 而 CompositionId 变化又会让它看起来"已经生效"，是最难查的一类现场问题。
+            var binding = new BaslerAcquisitionBinding(selector, serialNumber, userDefinedName, triggerSource, pixelFormat);
             return new VisionDeviceSettingsParseResult(
                 selector,
                 resourceKey,
