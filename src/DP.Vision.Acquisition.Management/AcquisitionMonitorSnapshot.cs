@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using DP.Vision.Acquisition;
 
-namespace DP.Vision.UI.Acquisition;
+namespace DP.Vision.Acquisition.Management;
 
 /// <summary>
 /// 采集监视面板的一次采样：运行时整体状态加每个逻辑源一行诊断。

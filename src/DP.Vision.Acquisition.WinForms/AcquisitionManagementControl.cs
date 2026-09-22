@@ -7,10 +7,10 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using DP.Vision.Acquisition;
-using DP.Vision.UI.Acquisition;
+using DP.Vision.Acquisition.Management;
 using WinFormsTimer = System.Windows.Forms.Timer;
 
-namespace DP.Vision.Winform;
+namespace DP.Vision.Acquisition.WinForms;
 
 /// <summary>
 /// 采集管理控件：把 <see cref="AcquisitionManagementPresenter"/> 的快照绑定到"设备发现 / 配置修订 / 运行监控"三个页签。

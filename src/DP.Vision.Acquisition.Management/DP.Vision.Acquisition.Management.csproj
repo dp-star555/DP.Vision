@@ -4,5 +4,7 @@
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../DP.Vision/DP.Vision.csproj" />
+        <ProjectReference Include="../DP.Vision.Acquisition.Abstractions/DP.Vision.Acquisition.Abstractions.csproj" />
+        <ProjectReference Include="../DP.Vision.Acquisition.Runtime/DP.Vision.Acquisition.Runtime.csproj" />
     </ItemGroup>
 </Project>

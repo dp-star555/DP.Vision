@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision;
 using DP.Vision.Acquisition;
-using DP.Vision.UI.Acquisition;
+using DP.Vision.Acquisition.Management;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace DP.Vision.Acquisition.Tests;

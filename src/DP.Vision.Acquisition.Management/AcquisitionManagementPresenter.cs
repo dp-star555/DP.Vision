@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision.Acquisition;
 
-namespace DP.Vision.UI.Acquisition;
+namespace DP.Vision.Acquisition.Management;
 
 /// <summary>
 /// 采集管理界面的表现层：把设备发现、配置修订、运行监视与试拍编排成宿主可直接绑定的快照。

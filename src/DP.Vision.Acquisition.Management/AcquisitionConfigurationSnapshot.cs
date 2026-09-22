@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using DP.Vision.Acquisition;
 
-namespace DP.Vision.UI.Acquisition;
+namespace DP.Vision.Acquisition.Management;
 
 /// <summary>
 /// 采集配置面板的一次采样：当前生效修订、候选状态、已发布源与历史修订。

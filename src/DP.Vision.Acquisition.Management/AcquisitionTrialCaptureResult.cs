@@ -1,7 +1,7 @@
 using System;
 using DP.Vision;
 
-namespace DP.Vision.UI.Acquisition;
+namespace DP.Vision.Acquisition.Management;
 
 /// <summary>
 /// 一次试拍的结果；成功与失败都用同一个结果类型表达。

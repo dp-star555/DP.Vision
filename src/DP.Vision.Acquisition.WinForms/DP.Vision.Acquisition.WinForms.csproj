@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <ItemGroup>
+        <ProjectReference Include="../DP.Vision.Acquisition.Management/DP.Vision.Acquisition.Management.csproj" />
+    </ItemGroup>
+    <PropertyGroup>
+        <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+        <UseWindowsForms>true</UseWindowsForms>
+    </PropertyGroup>
+</Project>

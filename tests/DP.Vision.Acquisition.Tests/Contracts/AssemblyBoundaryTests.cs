@@ -57,6 +57,30 @@ public sealed class AssemblyBoundaryTests
         Assert.IsFalse(referenced.Any(name => name.StartsWith("DP.WorkFlow", StringComparison.Ordinal)), actual);
     }
 
+    /// <summary>
+    /// 采集管理层同样必须与厂商 SDK、Workflow 解耦：它是采集运行时之上的编排视图。
+    /// <para>
+    /// 这里查的是**实际用到的引用**（<c>AssemblyRef</c>）。"与平台中立 UI 套件解耦"属于**声明方向**，
+    /// 不能在这里查——Roslyn 只为实际用到的引用写 <c>AssemblyRef</c>，"声明了却没用"在清单里看不见。
+    /// 那条已改由 <c>Architecture/SolutionDependencyBoundaryTests.cs</c> 直接读工程文件强制。
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public void ManagementAssembly_DoesNotReferenceVendorSdkOrWorkflow()
+    {
+        var management = typeof(DP.Vision.Acquisition.Management.AcquisitionManagementPresenter).Assembly;
+        var referenced = management.GetReferencedAssemblies()
+            .Select(assembly => assembly.Name ?? string.Empty)
+            .ToArray();
+        var actual = string.Join(",", referenced);
+
+        AssertVendorFreeAssemblyNames(referenced, actual);
+        Assert.IsFalse(referenced.Any(name => name.StartsWith("DP.WorkFlow", StringComparison.Ordinal)), actual);
+
+        // 反例保护：它确实建立在采集契约之上，否则"零违规"可能只是因为什么都没扫到。
+        Assert.IsTrue(referenced.Contains("DP.Vision.Acquisition.Abstractions"), actual);
+    }
+
     private static void AssertVendorFreeAssemblyNames(string[] referenced, string actual)
     {
         foreach (var marker in VendorAssemblyMarkers)

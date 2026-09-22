@@ -5,7 +5,7 @@
 > 本文回答"现在是什么、验收到哪一步、还差什么"。
 >
 > 最后更新：2026-09-22 · 基线 `DP.Vision.sln` 构建 **0 警告 0 错误**、
-> 测试 **1202 例 0 失败**（6 工程 × 双 TFM = 12 运行条目）。
+> 测试 **1206 例 0 失败**（6 个测试工程 × 双 TFM = 12 运行条目）。
 
 ## 文档地图
 
@@ -22,29 +22,49 @@
 进程内三层，依赖方向单向：
 
 ```text
-DP.Vision                         中立图像、算法、UI
+采集链（依赖方向单向向上）：
+DP.Vision                          中立图像、算法
     ↑
 DP.Vision.Acquisition.Abstractions  中立采集契约（33 个文件，无厂商依赖）
     ↑
 DP.Vision.Acquisition.Runtime       组合 / 机器配置 / 设备生命周期 / 帧仓
     ↑
 DP.Vision.Halcon  ·  DP.Vision.Basler   厂商 Driver Module（目录扫描发现，无 Manifest）
+
+采集视图（在 Runtime 之上，与宿主 UI 套件解耦）：
+DP.Vision.Acquisition.Management    采集配置 / 发现 / 监控快照与呈现模型（netstandard2.0）
+    ↑
+DP.Vision.Acquisition.WinForms      采集会话 WinForms 控件（只依赖 Management）
+
+宿主侧（不参与采集依赖链）：
+DP.Vision.UI                        平台中立 UI 套件（画布 / ROI / 结果浏览器）——不依赖采集层
+DP.Vision.Winform  ·  DP.Vision.WPF    宿主外壳（WinForms / WPF 各一）
 ```
 
 | 工程 | 职责 |
 |---|---|
 | `DP.Vision.Acquisition.Abstractions` | `IVisionAcquisition`、DriverModule 契约（含可选健康报告）、运行所有者、机器相机定义、中立帧与诊断 |
 | `DP.Vision.Acquisition.Runtime` | Driver Module 目录扫描与加载、不可变 Provider 组合、机器配置解析与修订、`VisionAcquisitionTypeCatalog`、`VisionResourceSession`、`VisionFrameInbox` |
+| `DP.Vision.Acquisition.Management` | 采集配置 / 发现 / 监控快照与呈现模型（`AcquisitionManagementPresenter` 等），**平台中立、不引用任何 UI 套件** |
+| `DP.Vision.Acquisition.WinForms` | 采集会话视图（`AcquisitionManagementControl`），**只依赖 Management** |
 | `DP.Vision.Halcon` | HALCON 采集接口 Provider（面阵/线扫/采集卡通道），编译期 `HALCON_SDK` 开关 |
 | `DP.Vision.Basler` | pylon Provider，原生运行时健康探测 |
+| `DP.Vision.UI` | 平台中立 UI 套件（画布 / ROI / 结果浏览器）。**不声明任何 `DP.Vision.Acquisition*` 依赖** |
+| `DP.Vision.Winform` / `DP.Vision.WPF` | 宿主外壳。WinForms 侧只通过 `DP.Vision.Acquisition.WinForms` 接触采集 |
 
 **采集只有一条路径**：Workflow 侧只声明 `IVisionAcquisition`；旧 `ICameraCapture` / `CameraCaptureOptions` / `HalconCameraCapture` 已删除，并有架构测试禁止复发。
 
 ## 2. 不变式（改动时不要破）
 
-1. **依赖方向**：`DP.Vision` → `Abstractions` → `Runtime`；Provider → Abstractions + 厂商 SDK。
-   **禁止** `Runtime → DP.WorkFlow`、Provider → Workflow、公共契约 → 厂商 SDK。
-   由 `tests/DP.Vision.Acquisition.Tests/Contracts/AssemblyBoundaryTests.cs` 强制。
+1. **依赖方向**：`DP.Vision` → `Abstractions` → `Runtime`；Provider → Abstractions + 厂商 SDK；
+   `Acquisition.Management` → `Runtime` + `DP.Vision`；`Acquisition.WinForms` → `Management`。
+   **禁止** `Runtime → DP.WorkFlow`、Provider → Workflow、公共契约 → 厂商 SDK、
+   `DP.Vision.UI` → 采集层、`Management` → UI 套件、`WinForms` → UI 套件 / Workflow。
+   **声明方向**由 `tests/DP.Vision.Acquisition.Tests/Architecture/SolutionDependencyBoundaryTests.cs`
+   直接读 `.csproj` **全文**强制——**不能**靠程序集引用清单：Roslyn 只为**实际用到**的引用写
+   `AssemblyRef`，"声明了却没用"在清单里完全看不见，却照样把对方整条依赖链拷进每个消费者的输出目录
+   （实测：把 `Acquisition.Runtime` 的引用加回 `DP.Vision.UI.csproj`，基于程序集引用的断言全绿）。
+   实际用到的类型方向另有 `Contracts/AssemblyBoundaryTests.cs` 兜底。
 2. **`deviceSettings` 是设备配置的唯一来源**。设备字段只由该 AcquisitionType 的解析器解析一次，
    结果作为插件私有的 `ProviderState` 随公共绑定一路带到 `IVisionAcquisitionProvider.OpenAsync`；
    公共层只原样转交、不解释。**插件私有配置不再承载设备绑定**（非空即明确拒绝）。
@@ -116,6 +136,40 @@ TransferPolicy 与 Epoch 解耦、面阵/线扫双节点模型、两家 Provider
 > 注意：本仓另有**一套无关的** `plugin.json` 体系——Workflow 节点插件的
 > `WorkflowPluginLoader.ManifestFileName`。那是节点插件契约，与采集无关，未改动。
 
+### 3.5 采集视图工程拆分（优化项 Phase D 的工程拆分半）— 已完成
+
+把 `DP.Vision.UI` 里的采集区与 `DP.Vision.Winform` 里的采集控件拆成两个独立工程，
+让"平台中立 UI 套件"彻底摆脱采集依赖：
+
+- **`DP.Vision.Acquisition.Management`**（新，`netstandard2.0`）：`AcquisitionManagementPresenter`
+  与 4 个快照 / 结果类型（配置、发现、监控、试采）。依赖 `DP.Vision` + `Abstractions` + `Runtime`。
+- **`DP.Vision.Acquisition.WinForms`**（新，`net48;net8.0-windows`）：`AcquisitionManagementControl`。
+  **只依赖 `Management`**（与既有 `DP.Vision.Winform` 只依赖 `DP.Vision.UI` 同构）。
+- `DP.Vision.UI` 因此**去掉了 `Acquisition.Runtime` 引用**，回到纯画布 / ROI / 结果浏览器。
+
+结果：**纯移动**——拆分后全量 `DP.Vision.sln` 仍为 12 运行条目 / **1202 例 0 失败 / 0 警告**，
+与拆分前逐项一致；两个新工程各自产出成功。随后补的两条边界测试再 +4，当前全量为
+**1206 例 0 失败 / 0 警告**。命名空间 `DP.Vision.UI.Acquisition` → `DP.Vision.Acquisition.Management`、
+`DP.Vision.Winform` → `DP.Vision.Acquisition.WinForms`。
+
+**为什么这次拆分是安全的**（动手前逐条确认过）：`DP.Vision.UI/Acquisition/*` 与
+`AcquisitionManagementControl` 在 DP.WorkFlow 侧**零引用**；`AcquisitionManagementControl` 在本仓
+**没有任何消费方**（连 `DP.Vision.Winform` 都没实例化它）；`DP.Vision.UI` 其余目录（Canvas / Roi / Results）
+不使用任何采集类型；`DP.Vision.Tests` / `WPF` / `Demo` / `Probe` 均不使用采集类型。
+
+> **一个必须记住的教训**：这条边界**不能**用"程序集引用清单"来测。
+> 第一版边界测试断言 `DP.Vision.UI` 的程序集引用里没有 `DP.Vision.Acquisition*`，
+> 变异验证（把 `Runtime` 引用加回 `DP.Vision.UI.csproj`）**未命中**——两个 TFM 各 1206 例 0 失败。
+> 原因：Roslyn 只为**实际用到**的引用写 `AssemblyRef`，"声明了却没用到"在清单里完全看不见，
+> 但它照样把对方整条依赖链拷进每个消费者的输出目录。
+> 现已改为 `Architecture/SolutionDependencyBoundaryTests.cs` 直接读 `.csproj` **全文**
+> （顺带也拦得住 `<Reference HintPath=…>` / `PackageReference` 绕道），并在文件头写明为什么。
+
+**验证**：`SolutionDependencyBoundaryTests` 基线两 TFM 各 1 例全绿；三处变异**全部咬住**
+（每处 2 失败 / 0 通过）——M1 把 `Runtime` 引用加回 `DP.Vision.UI`、M2 让 `Management` 引用
+`DP.Vision.UI`、M3 让 `WinForms` 引用 `DP.Vision.UI`（同时证明确实扫到了 WinForms 工程文件）；
+三份工程文件逐字节还原。
+
 ## 4. 尚未验证 / 待办
 
 ### 4.0 优化项 Phase A（相机自治）— 并行启停**已落地**；契约部分仍被跨仓在途改动阻塞
@@ -172,7 +226,7 @@ C 的计数口径要点已定：`FramesReceived` 定义为**到达会话回调�
 **验证**：`tests/DP.Vision.Acquisition.Tests/Concurrency/ParallelResourceStartStopTests.cs` 两条用例
 在**未修复代码上确认变红**（两个 TFM 各 2 失败 / 0 通过；失败信息分别是
 "第一个资源还卡在打开里时，另一个资源必须已经打开完成"与"另一台必须已经停流完成"），
-修复后本工程 196 例 0 失败（基线 194，+2 即本用例）。
+修复后本工程 196 例 0 失败（该提交时；基线 194，+2 即本用例）。
 变异验证 3/3 咬住，且隔离干净：启动改回串行 → 只有启动用例红；停止改回串行 → 只有停止用例红；
 停止时不释放 Provider → 停止用例 + 既有 `MultipleCaptures_OpenOnceAndNeverCloseUntilStop` 红。
 

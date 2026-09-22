@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using DP.Vision.Acquisition;
 
-namespace DP.Vision.UI.Acquisition;
+namespace DP.Vision.Acquisition.Management;
 
 /// <summary>
 /// 一次设备发现的结果：候选设备加各Provider的失败诊断。
