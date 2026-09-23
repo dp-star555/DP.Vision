@@ -32,7 +32,7 @@ public sealed class OpenCvTextLinePreprocessor : ITextLinePreprocessor
         }
 
         int content = Math.Min(width, (int)Math.Ceiling(48 * ratio));
-        using var raw = CvImages.Mat(frame);
+        using var raw = CvPixels.Mat(frame);
         using var crop = new Mat(raw, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
         using var color = new Mat();
         if (frame.Info.Layout == EPixelLayout.Gray8)

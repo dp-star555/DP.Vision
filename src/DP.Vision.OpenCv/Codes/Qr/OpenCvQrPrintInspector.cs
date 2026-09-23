@@ -157,9 +157,9 @@ public sealed class OpenCvQrPrintInspector : IQrQualityInspector
             return Review("QR检查范围为空。");
         }
 
-        using var raw = CvImages.Mat(frame);
+        using var raw = CvPixels.Mat(frame);
         using var roi = new Mat(raw, new Rect(left, top, right - left, bottom - top));
-        using var gray = CvImages.Gray(roi);
+        using var gray = CvPixels.Gray(roi);
         Cv2.MinMaxLoc(gray, out double minimum, out double maximum);
         if (maximum - minimum < 40)
         {

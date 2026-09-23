@@ -31,8 +31,8 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
         token.ThrowIfCancellationRequested();
         using var image = CvPixels.Gray(frame.Image);
         using var reference = CvPixels.Gray(template.Image);
-        using var roi = new Mat(image, CvImages.Rect(search));
-        using var pattern = new Mat(reference, CvImages.Rect(templateBounds));
+        using var roi = new Mat(image, CvPixels.Rect(search));
+        using var pattern = new Mat(reference, CvPixels.Rect(templateBounds));
         using var scores = new Mat();
         Cv2.MatchTemplate(roi, pattern, scores, TemplateMatchModes.SqDiff);
         token.ThrowIfCancellationRequested();

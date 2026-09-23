@@ -83,9 +83,9 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
         }
 
         token.ThrowIfCancellationRequested();
-        using var raw = CvImages.Mat(frame);
-        using var chip = new Mat(raw, CvImages.Rect(bounds));
-        using var mask = CvImages.Otsu(chip);
+        using var raw = CvPixels.Mat(frame);
+        using var chip = new Mat(raw, CvPixels.Rect(bounds));
+        using var mask = CvPixels.Otsu(chip);
         if (Cv2.CountNonZero(mask) == 0)
         {
             return Stop("Insufficient line contrast or empty ink.");
@@ -396,7 +396,7 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
                     tokens[i].ToString(),
                     i,
                     new PixelRect(bounds.X + x0, bounds.Y + y0, x1 - x0, y1 - y0),
-                    CvImages.Frame(patch),
+                    CvPixels.Buffer(patch),
                     removed
                 )
             );
@@ -439,15 +439,15 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             throw new ArgumentException("Invalid equal cells.");
         }
 
-        using var raw = CvImages.Mat(frame);
+        using var raw = CvPixels.Mat(frame);
         using var chars = new OwnedPatches();
         for (int i = 0; i < expected.Length; i++)
         {
             int left = bounds.X + i * bounds.Width / expected.Length,
                 right = bounds.X + (i + 1) * bounds.Width / expected.Length;
             var box = new PixelRect(left, bounds.Y, right - left, bounds.Height);
-            using var crop = new Mat(raw, CvImages.Rect(box));
-            chars.Add(new CharacterPatch(expected[i].ToString(), i, box, CvImages.Frame(crop)));
+            using var crop = new Mat(raw, CvPixels.Rect(box));
+            chars.Add(new CharacterPatch(expected[i].ToString(), i, box, CvPixels.Buffer(crop)));
         }
 
         return new CharacterSegmentation(
