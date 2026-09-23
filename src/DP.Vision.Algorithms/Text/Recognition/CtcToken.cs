@@ -1,13 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Linq;
-using System.Threading;
 
 namespace DP.Vision.Algorithms;
-
-using PixelRect = DP.Vision.Algorithms.PixelBounds;
-
 /// <summary>解码后的CTC连续激活区间，不是物理字符边界。</summary>
 public sealed class CtcToken
 {

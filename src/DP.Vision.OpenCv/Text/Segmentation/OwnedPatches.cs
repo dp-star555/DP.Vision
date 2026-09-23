@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using DP.Vision.Algorithms;
-using OpenCvSharp;
 
 namespace DP.Vision.OpenCv;
 

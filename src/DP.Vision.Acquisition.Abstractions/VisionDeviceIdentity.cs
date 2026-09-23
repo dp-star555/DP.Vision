@@ -1,5 +1,3 @@
-using System;
-
 namespace DP.Vision.Acquisition;
 
 /// <summary>已打开设备报告的规范身份；用于校验机器配置声明的ResourceKey是否指向同一物理硬件。</summary>

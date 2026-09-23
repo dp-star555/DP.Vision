@@ -1,5 +1,3 @@
-using System;
-
 namespace DP.Vision.Acquisition;
 
 /// <summary>

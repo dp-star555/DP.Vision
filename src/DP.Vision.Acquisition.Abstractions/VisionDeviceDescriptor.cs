@@ -1,5 +1,3 @@
-using System;
-
 namespace DP.Vision.Acquisition;
 
 /// <summary>设备发现结果；只描述可枚举的候选设备，不代表设备已打开或已占用。</summary>

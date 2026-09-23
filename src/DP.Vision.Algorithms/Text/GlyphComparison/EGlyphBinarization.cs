@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-
 namespace DP.Vision.Algorithms;
 
 /// <summary>由参考配置确定的二值化模式，不使用隐式的实现专用字符串。</summary>
