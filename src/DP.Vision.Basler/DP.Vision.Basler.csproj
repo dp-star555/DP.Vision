@@ -36,4 +36,8 @@
          测试用可控假相机驱动回调边界，从而在没有相机与 pylon 运行时的机器上验证流式纪律。 -->
     <InternalsVisibleTo Include="DP.Vision.Basler.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 相机驱动共用的设备生命周期规则，以源码链接编入本程序集（internal），不扩大公共契约。 -->
+    <Compile Include="../Shared/Acquisition/*.cs" Link="Shared/Acquisition/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
