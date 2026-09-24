@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 
 namespace DP.Vision.Algorithms;
@@ -53,23 +52,7 @@ public sealed class RegionAnalysisResult
     public static RegionGeometry Intersect(RegionGeometry a, RegionGeometry b, CancellationToken token = default)
     {
         if (a == null || b == null) throw new ArgumentNullException(nameof(a));
-        var runs = new List<RegionRun>(); int i = 0, j = 0;
-        while (i < a.Runs.Count && j < b.Runs.Count)
-        {
-            token.ThrowIfCancellationRequested();
-            var x = a.Runs[i]; var y = b.Runs[j];
-            if (x.Row < y.Row) { i++; continue; }
-            if (y.Row < x.Row) { j++; continue; }
-            int left = Math.Max(x.Start, y.Start), right = Math.Min(x.EndExclusive, y.EndExclusive);
-            if (right > left)
-            {
-                if (runs.Count >= 2000000) throw new InvalidOperationException("Region run budget exceeded.");
-                runs.Add(new RegionRun(x.Row, left, right));
-            }
-            if (x.EndExclusive <= y.EndExclusive) i++; else j++;
-        }
-        token.ThrowIfCancellationRequested();
-        return new RegionGeometry(runs);
+        return a.Intersect(b, token);
     }
 }
 

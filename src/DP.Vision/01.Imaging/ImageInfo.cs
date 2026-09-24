@@ -5,18 +5,21 @@ namespace DP.Vision;
 /// <summary>图像布局；显示分块不会改变原图尺寸。宽、高与像素布局都相同的两个实例相等。</summary>
 public sealed class ImageInfo : IEquatable<ImageInfo>
 {
+    /// <summary>原图宽、高的上限（像素）；Region游程等原图坐标也以此为界。</summary>
+    public const int MaxDimension = 1048576;
+
     /// <summary>创建图像布局；超过单个托管数组容量时拒绝创建，调用方应改用分块图像源。</summary>
     /// <param name = "width">原图宽度，范围1–1048576，单位为像素。</param>
     /// <param name = "height">原图高度，范围1–1048576，单位为像素。</param>
     /// <param name = "layout">像素通道顺序和位深；宽乘高乘每像素字节数不得超过int最大值。</param>
     public ImageInfo(int width, int height, EPixelLayout layout)
     {
-        if (width < 1 || width > 1048576)
+        if (width < 1 || width > MaxDimension)
         {
             throw new ArgumentOutOfRangeException(nameof(width));
         }
 
-        if (height < 1 || height > 1048576)
+        if (height < 1 || height > MaxDimension)
         {
             throw new ArgumentOutOfRangeException(nameof(height));
         }

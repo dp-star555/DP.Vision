@@ -34,11 +34,7 @@ public sealed class GeometryOverlay
         }
 
         long size = copy.SelectMany(l => l.Visuals)
-            .Sum(v =>
-                v.Geometry is ContourGeometry c ? (long)c.Points.Count
-                : v.Geometry is RegionGeometry r ? r.Runs.Count
-                : 4
-            );
+            .Sum(v => v.Geometry.ElementCount);
         if (size > 2000000)
         {
             throw new ArgumentException("Overlay exceeds geometry budget.");

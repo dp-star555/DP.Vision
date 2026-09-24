@@ -295,12 +295,18 @@ public sealed class RoiEditorTests
         var editor = new RoiEditor();
         editor.Load(
             new RoiDocument(
-                new[] { new RoiDefinition("r", new RegionGeometry(new[] { new RegionRun(1000000, 0, 10) })) }
+                new[]
+                {
+                    new RoiDefinition(
+                        "r",
+                        new RegionGeometry(new[] { new RegionRun(ImageInfo.MaxDimension, 0, 10) })
+                    ),
+                }
             )
         );
         var before = editor.Document;
-        editor.PointerDown(new PointD(5, 1000000.5), .1);
-        editor.PointerUp(new PointD(5, 1000002.5));
+        editor.PointerDown(new PointD(5, ImageInfo.MaxDimension + .5), .1);
+        editor.PointerUp(new PointD(5, ImageInfo.MaxDimension + 2.5));
         Assert.AreSame(before, editor.Document);
         Assert.IsNotNull(editor.ValidationError);
         Assert.IsFalse(editor.IsEditing);

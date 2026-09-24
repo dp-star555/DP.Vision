@@ -259,10 +259,7 @@ public sealed partial class ResultBrowserSession : IViewDisplaySink, IDisposable
         );
     }
 
-    private static long GeometryCost(Visual visual) =>
-        visual.Geometry is ContourGeometry c ? Math.Max(1, c.Points.Count)
-        : visual.Geometry is RegionGeometry r ? Math.Max(1, r.Runs.Count)
-        : 4;
+    private static long GeometryCost(Visual visual) => Math.Max(1, visual.Geometry.ElementCount);
 
     private ViewSlot? SelectedView() => _views.FirstOrDefault(v => v.Id == _selectedView);
 

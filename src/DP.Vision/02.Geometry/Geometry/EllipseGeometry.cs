@@ -5,6 +5,9 @@ namespace DP.Vision;
 /// <summary>圆或旋转椭圆几何。</summary>
 public sealed class EllipseGeometry : Geometry
 {
+    private readonly double _cos;
+    private readonly double _sin;
+
     /// <summary>用正半径创建椭圆；两个半径相等时为圆。</summary>
     /// <param name = "center">中心的原图坐标。</param>
     /// <param name = "radiusX">旋转前的水平半径，必须大于0，单位为原图像素。</param>
@@ -12,23 +15,29 @@ public sealed class EllipseGeometry : Geometry
     /// <param name = "angle">顺时针旋转角，单位为弧度。</param>
     public EllipseGeometry(PointD center, double radiusX, double radiusY, double angle = 0)
     {
-        if (
-            !PointD.Valid(radiusX)
-            || !PointD.Valid(radiusY)
-            || radiusX <= 0
-            || radiusY <= 0
-            || !PointD.Valid(angle)
-        )
+        if (!PointD.Valid(radiusX) || radiusX <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(radiusX));
+        }
+
+        if (!PointD.Valid(radiusY) || radiusY <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(radiusY));
+        }
+
+        if (!PointD.Valid(angle))
+        {
+            throw new ArgumentOutOfRangeException(nameof(angle));
         }
 
         Center = center;
         RadiusX = radiusX;
         RadiusY = radiusY;
         Angle = angle;
-        double c = Math.Cos(angle),
-            s = Math.Sin(angle),
+        _cos = Math.Cos(angle);
+        _sin = Math.Sin(angle);
+        double c = _cos,
+            s = _sin,
             x = Math.Sqrt(radiusX * radiusX * c * c + radiusY * radiusY * s * s),
             y = Math.Sqrt(radiusX * radiusX * s * s + radiusY * radiusY * c * c);
         Bounds = new RectD(center.X - x, center.Y - y, 2 * x, 2 * y);
@@ -55,8 +64,17 @@ public sealed class EllipseGeometry : Geometry
         GeometryMath.ValidateTolerance(tolerance);
         double x = p.X - Center.X,
             y = p.Y - Center.Y,
-            u = (x * Math.Cos(Angle) + y * Math.Sin(Angle)) / (RadiusX + tolerance),
-            v = (-x * Math.Sin(Angle) + y * Math.Cos(Angle)) / (RadiusY + tolerance);
+            u = (x * _cos + y * _sin) / (RadiusX + tolerance),
+            v = (-x * _sin + y * _cos) / (RadiusY + tolerance);
         return u * u + v * v <= 1;
+    }
+
+    /// <inheritdoc/>
+    public override long ElementCount => 4;
+
+    /// <inheritdoc/>
+    public override Geometry Translate(double dx, double dy)
+    {
+        return new EllipseGeometry(new PointD(Center.X + dx, Center.Y + dy), RadiusX, RadiusY, Angle);
     }
 }
