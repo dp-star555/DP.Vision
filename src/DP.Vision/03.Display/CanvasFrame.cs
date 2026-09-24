@@ -15,18 +15,24 @@ public sealed class CanvasFrame : IDisposable
     /// <param name = "overlay">同帧证据快照；null表示不带检测叠加。</param>
     public CanvasFrame(string frameId, long sequence, IImageSource image, GeometryOverlay? overlay = null)
     {
-        if (
-            !Identity.IsValid(frameId)
-            || sequence < 0
-            || overlay != null && overlay.FrameId != frameId
-        )
+        if (!Identity.IsValid(frameId))
         {
-            throw new ArgumentException("Mismatched frame/overlay identity.");
+            throw new ArgumentException("帧标识不能为空白，且不得超过256个字符。", nameof(frameId));
+        }
+
+        if (sequence < 0)
+        {
+            throw new ArgumentException("预览序号不能为负数。", nameof(sequence));
+        }
+
+        if (overlay != null && overlay.FrameId != frameId)
+        {
+            throw new ArgumentException("叠加证据的帧标识与图像帧标识不一致。", nameof(overlay));
         }
 
         if (image == null)
         {
-            throw new ArgumentNullException(nameof(image));
+            throw new ArgumentNullException(nameof(image), "预览图像源不能为空。");
         }
 
         FrameId = frameId;
@@ -71,9 +77,14 @@ public sealed class CanvasFrame : IDisposable
     /// <returns>由调用方释放的图块租约。</returns>
     public IImageSource ReadTile(int level, int x, int y, int size)
     {
-        if (level < 0 || level > 20 || x < 0 || y < 0 || size < 16 || size > 1024)
+        if (level < 0 || level > DisplayLimits.MaxLevel)
         {
-            throw new ArgumentOutOfRangeException(nameof(level));
+            throw new ArgumentOutOfRangeException(nameof(level), "采样级别必须在0～20之间。");
+        }
+
+        if (size < DisplayLimits.MinTileEdge || size > DisplayLimits.MaxTileEdge)
+        {
+            throw new ArgumentOutOfRangeException(nameof(size), "图块边长必须在16～1024之间。");
         }
 
         long factor = 1L << level,
@@ -81,9 +92,14 @@ public sealed class CanvasFrame : IDisposable
             levelHeight = (Info.Height + factor - 1) / factor,
             left = (long)x * size,
             top = (long)y * size;
-        if (left >= levelWidth || top >= levelHeight)
+        if (x < 0 || left >= levelWidth)
         {
-            throw new ArgumentOutOfRangeException(nameof(x));
+            throw new ArgumentOutOfRangeException(nameof(x), "图块列索引超出当前级别的图像范围。");
+        }
+
+        if (y < 0 || top >= levelHeight)
+        {
+            throw new ArgumentOutOfRangeException(nameof(y), "图块行索引超出当前级别的图像范围。");
         }
 
         lock (_gate)
@@ -94,7 +110,7 @@ public sealed class CanvasFrame : IDisposable
                     x,
                     y,
                     size
-                ) ?? throw new InvalidOperationException("Source returned no tile.");
+                ) ?? throw new InvalidOperationException("图像源没有返回图块。");
             if (
                 tile.Info.Width != Math.Min(size, levelWidth - left)
                 || tile.Info.Height != Math.Min(size, levelHeight - top)
@@ -102,9 +118,7 @@ public sealed class CanvasFrame : IDisposable
             )
             {
                 tile.Dispose();
-                throw new InvalidOperationException(
-                    "Source tile dimensions/layout violate the frame contract."
-                );
+                throw new InvalidOperationException("图像源返回的图块尺寸或像素布局与帧信息不符。");
             }
 
             return tile;

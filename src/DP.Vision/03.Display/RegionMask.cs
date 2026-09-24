@@ -30,12 +30,22 @@ public static class RegionMask
     {
         if (region == null)
         {
-            throw new ArgumentNullException(nameof(region));
+            throw new ArgumentNullException(nameof(region), "Region不能为空。");
         }
 
-        if (width < 1 || height < 1 || width > 1024 || height > 1024 || level < 0 || level > 20)
+        if (width < 1 || width > DisplayLimits.MaxTileEdge)
         {
-            throw new ArgumentOutOfRangeException(nameof(width));
+            throw new ArgumentOutOfRangeException(nameof(width), "图块宽度必须在1～1024之间。");
+        }
+
+        if (height < 1 || height > DisplayLimits.MaxTileEdge)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height), "图块高度必须在1～1024之间。");
+        }
+
+        if (level < 0 || level > DisplayLimits.MaxLevel)
+        {
+            throw new ArgumentOutOfRangeException(nameof(level), "采样级别必须在0～20之间。");
         }
 
         var mask = new byte[width * height];

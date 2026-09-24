@@ -23,12 +23,8 @@ public sealed class LatestFrameMailbox : IDisposable
         CanvasFrame? old;
         lock (_gate)
         {
-            if (_disposed)
-            {
-                throw new ObjectDisposedException(nameof(LatestFrameMailbox));
-            }
-
-            if (frame.Sequence <= _last)
+            // 画布关闭后生产者线程可能仍在提交：按文档返回false，不向生产者抛出异常。
+            if (_disposed || frame.Sequence <= _last)
             {
                 return false;
             }

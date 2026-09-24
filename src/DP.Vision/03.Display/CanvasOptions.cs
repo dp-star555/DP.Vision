@@ -23,19 +23,24 @@ public sealed class CanvasOptions
         bool showImage = true
     )
     {
-        if (
-            !PointD.Valid(maximumScreenError)
-            || maximumScreenError <= 0
-            || maximumScreenError > 2
-            || tileCacheBytes < 4 * 1024 * 1024
-            || tileCacheBytes > 512L * 1024 * 1024
-            || tileSize < 64
-            || tileSize > 512
-            || (tileSize & (tileSize - 1)) != 0
-            || gray16High <= gray16Low
-        )
+        if (!PointD.Valid(maximumScreenError) || maximumScreenError <= 0 || maximumScreenError > 2)
         {
-            throw new ArgumentOutOfRangeException(nameof(maximumScreenError));
+            throw new ArgumentOutOfRangeException(nameof(maximumScreenError), "显示误差必须大于0且不超过2。");
+        }
+
+        if (tileCacheBytes < 4 * 1024 * 1024 || tileCacheBytes > 512L * 1024 * 1024)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tileCacheBytes), "图块缓存预算必须在4～512MiB之间。");
+        }
+
+        if (tileSize < 64 || tileSize > 512 || (tileSize & (tileSize - 1)) != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tileSize), "图块边长必须是64～512之间的2次幂。");
+        }
+
+        if (gray16High <= gray16Low)
+        {
+            throw new ArgumentOutOfRangeException(nameof(gray16High), "Gray16显示白点必须大于黑点。");
         }
 
         ContourLod = contourLod;

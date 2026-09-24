@@ -21,6 +21,7 @@ public sealed class DisplayPixels
         Height = height;
         Layout = layout;
         Bytes = bytes;
+        Stride = new ImageInfo(width, height, layout).Stride;
     }
 
     /// <summary>
@@ -46,13 +47,7 @@ public sealed class DisplayPixels
     /// <summary>
     /// 每行紧密排列的字节数，不包含额外行填充。
     /// </summary>
-    public int Stride =>
-        Width
-        * (
-            Layout == EPixelLayout.Gray8 ? 1
-            : Layout == EPixelLayout.Bgr24 ? 3
-            : 4
-        );
+    public int Stride { get; }
 
     /// <summary>
     /// 复制原始像素并转换为显示布局，不修改源图的像素值或布局元数据。
@@ -63,9 +58,14 @@ public sealed class DisplayPixels
     /// <exception cref = "ArgumentNullException">源图或显示设置为空。</exception>
     public static DisplayPixels From(IImageSource source, CanvasOptions options)
     {
-        if (source == null || options == null)
+        if (source == null)
         {
-            throw new ArgumentNullException(nameof(source));
+            throw new ArgumentNullException(nameof(source), "原始图像源不能为空。");
+        }
+
+        if (options == null)
+        {
+            throw new ArgumentNullException(nameof(options), "显示设置不能为空。");
         }
 
         var info = source.Info;
@@ -86,7 +86,13 @@ public sealed class DisplayPixels
             return new DisplayPixels(info.Width, info.Height, EPixelLayout.Gray8, mapped);
         }
 
-        if (info.Layout == EPixelLayout.Rgb24 || info.Layout == EPixelLayout.Rgba32)
+        EPixelLayout displayLayout = info.Layout switch
+        {
+            EPixelLayout.Rgb24 => EPixelLayout.Bgr24,
+            EPixelLayout.Rgba32 => EPixelLayout.Bgra32,
+            _ => info.Layout,
+        };
+        if (displayLayout != info.Layout)
         {
             // GDI/WPF显示适配使用BGR顺序；只交换红、蓝通道，Alpha保持不变。
             for (int i = 0; i < raw.Length; i += info.BytesPerPixel)
@@ -95,16 +101,6 @@ public sealed class DisplayPixels
                 raw[i] = raw[i + 2];
                 raw[i + 2] = red;
             }
-        }
-
-        EPixelLayout displayLayout = info.Layout;
-        if (displayLayout == EPixelLayout.Rgb24)
-        {
-            displayLayout = EPixelLayout.Bgr24;
-        }
-        else if (displayLayout == EPixelLayout.Rgba32)
-        {
-            displayLayout = EPixelLayout.Bgra32;
         }
 
         return new DisplayPixels(info.Width, info.Height, displayLayout, raw);

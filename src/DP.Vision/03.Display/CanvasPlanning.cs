@@ -21,27 +21,35 @@ public static class CanvasPlanning
         int tileSize
     )
     {
-        if (image == null || view == null)
+        if (image == null)
         {
-            throw new ArgumentNullException(nameof(image), "原图信息和视口均不能为空。");
+            throw new ArgumentNullException(nameof(image), "原图信息不能为空。");
         }
 
-        if (
-            tileSize < 16
-            || tileSize > 1024
-            || !PointD.Valid(width)
-            || !PointD.Valid(height)
-            || width < 0
-            || height < 0
-        )
+        if (view == null)
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(tileSize),
-                "图块边长必须在16～1024之间，客户区宽高必须为0～10000000之间的有限值。"
-            );
+            throw new ArgumentNullException(nameof(view), "视口不能为空。");
         }
 
-        int level = Math.Max(0, Math.Min(20, (int)Math.Floor(Math.Log(1 / view.Scale, 2))));
+        if (!PointD.Valid(width) || width < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "客户区宽度必须为0～10000000之间的有限值。");
+        }
+
+        if (!PointD.Valid(height) || height < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height), "客户区高度必须为0～10000000之间的有限值。");
+        }
+
+        if (tileSize < DisplayLimits.MinTileEdge || tileSize > DisplayLimits.MaxTileEdge)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tileSize), "图块边长必须在16～1024之间。");
+        }
+
+        int level = Math.Max(
+            0,
+            Math.Min(DisplayLimits.MaxLevel, (int)Math.Floor(Math.Log(1 / view.Scale, 2)))
+        );
         int factor = 1 << level;
         double edge = (double)tileSize * factor;
         var visible = view.Visible(width, height);
