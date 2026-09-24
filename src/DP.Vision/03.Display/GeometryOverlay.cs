@@ -12,7 +12,7 @@ public sealed class GeometryOverlay
     /// <param name = "layers">图层快照集合；图层标识必须唯一。</param>
     public GeometryOverlay(string frameId, IEnumerable<CanvasLayer> layers)
     {
-        if (string.IsNullOrWhiteSpace(frameId) || frameId.Length > 256)
+        if (!Identity.IsValid(frameId))
         {
             throw new ArgumentException("Frame identity required.");
         }

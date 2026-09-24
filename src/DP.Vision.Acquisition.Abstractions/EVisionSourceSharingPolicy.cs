@@ -1,5 +1,3 @@
-using System;
-
 namespace DP.Vision.Acquisition;
 
 /// <summary>同一物理资源键上并发采集的协调策略。</summary>

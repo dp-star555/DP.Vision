@@ -48,7 +48,7 @@ public sealed class VisionView
 
     private static void ValidateText(string text, string parameter)
     {
-        if (string.IsNullOrWhiteSpace(text) || text.Length > 256)
+        if (!Identity.IsValid(text))
             throw new ArgumentException("标识或名称不能为空，且不得超过256个字符。", parameter);
     }
 }

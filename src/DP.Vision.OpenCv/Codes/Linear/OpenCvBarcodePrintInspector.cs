@@ -111,9 +111,9 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
             return Review("当前打印缺陷检查支持一维条码与QR Code；DataMatrix及其他码制外观未检查。");
         }
 
-        using var raw = CvImages.Mat(frame);
-        using var roi = new Mat(raw, CvImages.Rect(bounds));
-        using var gray = CvImages.Gray(roi);
+        using var raw = CvPixels.Mat(frame);
+        using var roi = new Mat(raw, CvPixels.Rect(bounds));
+        using var gray = CvPixels.Gray(roi);
         Cv2.MinMaxLoc(gray, out double min, out double max);
         if (max - min < 40)
         {

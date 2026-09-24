@@ -22,4 +22,8 @@
          测试用可控假设备驱动"自建采集线程 + 停止等待"，从而在没有相机、没有 HALCON 许可的机器上验证流式纪律。 -->
     <InternalsVisibleTo Include="DP.Vision.Halcon.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 相机驱动共用的设备生命周期规则，以源码链接编入本程序集（internal），不扩大公共契约。 -->
+    <Compile Include="../Shared/Acquisition/*.cs" Link="Shared/Acquisition/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

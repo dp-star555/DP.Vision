@@ -1,13 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Linq;
-using System.Threading;
 
 namespace DP.Vision.Algorithms;
-
-using PixelRect = DP.Vision.Algorithms.PixelBounds;
-
 /// <summary>一个CTC时间步的原始最大概率类别观测，包含空白和重复字符。</summary>
 public sealed class CtcStep
 {

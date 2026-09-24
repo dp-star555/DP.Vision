@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-
 namespace DP.Vision.UI;
 
 /// <summary>使用原图坐标表示的一个编辑控制点。</summary>

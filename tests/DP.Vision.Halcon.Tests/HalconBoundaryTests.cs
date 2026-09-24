@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using DP.Vision.Acquisition;
 using DP.Vision.Algorithms;
 using DP.Vision.Halcon;
 using Microsoft.VisualStudio.TestTools.UnitTesting;

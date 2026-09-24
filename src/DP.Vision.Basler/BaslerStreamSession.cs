@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision.Acquisition;
+using DP.Vision.Acquisition.Drivers;
 
 namespace DP.Vision.Basler;
 
@@ -16,7 +17,7 @@ namespace DP.Vision.Basler;
 /// <item>停止：<see cref="DisposeAsync"/> 先停流，再等待已进入的回调退出，之后不再交付任何帧。</item>
 /// </list>
 /// </summary>
-internal sealed class BaslerStreamSession : IVisionAcquisitionStream
+internal sealed class BaslerStreamSession : IStreamingDeviceSession
 {
     private readonly IBaslerStreamCamera _camera;
     private readonly IVisionProviderFrameSink _sink;

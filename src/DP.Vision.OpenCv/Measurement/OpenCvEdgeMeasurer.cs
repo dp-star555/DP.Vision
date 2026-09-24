@@ -22,7 +22,7 @@ public sealed class OpenCvEdgeMeasurer : IEdgeMeasurer
         using var gray = CvPixels.Gray(frame.Image);
         using var allEdges = new Mat();
         Cv2.Canny(gray, allEdges, options.LowThreshold, options.HighThreshold);
-        using var edges = new Mat(allEdges, CvImages.Rect(bounds));
+        using var edges = new Mat(allEdges, CvPixels.Rect(bounds));
         var points = new List<Coordinate2D>();
         for (int y = 0; y < edges.Rows; y++)
         {

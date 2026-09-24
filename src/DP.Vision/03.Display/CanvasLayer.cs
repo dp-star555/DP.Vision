@@ -34,7 +34,7 @@ public sealed class CanvasLayer
             throw new ArgumentException("Invalid visuals.");
         }
 
-        if (name != null && (string.IsNullOrWhiteSpace(name) || name.Length > 256))
+        if (name != null && !Identity.IsValid(name))
             throw new ArgumentException("图层显示名称不能为空白，且不得超过256个字符。", nameof(name));
         Id = id;
         Name = name ?? id;

@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 
 namespace DP.Vision;
 
@@ -14,7 +12,7 @@ public sealed class Visual
     /// <param name = "caption">可选标题，最长4096字符。</param>
     public Visual(string id, Geometry geometry, uint argb = VisionColors.Rose, string? caption = null)
     {
-        if (string.IsNullOrWhiteSpace(id) || id.Length > 256 || caption?.Length > 4096)
+        if (!Identity.IsValid(id) || caption?.Length > 4096)
         {
             throw new ArgumentException("Invalid visual identity/caption.");
         }

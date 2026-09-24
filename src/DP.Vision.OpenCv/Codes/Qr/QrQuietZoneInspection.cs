@@ -87,9 +87,9 @@ internal static class QrQuietZoneInspection
             top = Math.Max(bounds.Y, (int)Math.Floor(outer.Min(p => p.Y))),
             right = Math.Min(bounds.X + bounds.Width, (int)Math.Ceiling(outer.Max(p => p.X))),
             bottom = Math.Min(bounds.Y + bounds.Height, (int)Math.Ceiling(outer.Max(p => p.Y)));
-        using var raw = CvImages.Mat(frame);
+        using var raw = CvPixels.Mat(frame);
         using var roi = new Mat(raw, new Rect(left, top, right - left, bottom - top));
-        using var gray = CvImages.Gray(roi);
+        using var gray = CvPixels.Gray(roi);
         using var difference = new Mat();
         Cv2.Threshold(gray, difference, threshold, 255, ThresholdTypes.BinaryInv);
         var h = new double[9];

@@ -20,7 +20,7 @@ public sealed class OpenCvBlobAnalyzer : IBlobAnalyzer
         token.ThrowIfCancellationRequested();
         InspectionMask.Validate(regionMask, frame.Image);
         using var gray = CvPixels.Gray(frame.Image);
-        using var roi = new Mat(gray, CvImages.Rect(bounds));
+        using var roi = new Mat(gray, CvPixels.Rect(bounds));
         using var mask = new Mat();
         Cv2.InRange(roi, new Scalar(options.MinimumGray), new Scalar(options.MaximumGray), mask);
         if (regionMask != null)

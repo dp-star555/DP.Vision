@@ -26,6 +26,8 @@ dotnet_diagnostic.IDE0021.severity = warning
 dotnet_diagnostic.IDE0022.severity = warning
 dotnet_diagnostic.IDE0023.severity = warning
 dotnet_diagnostic.IDE0061.severity = warning
+# 拆分文件时复制过来的多余using由此报告。
+dotnet_diagnostic.IDE0005.severity = warning
 
 # 文件夹按功能分类，既有命名空间不随物理目录改变。
 dotnet_style_namespace_match_folder = false

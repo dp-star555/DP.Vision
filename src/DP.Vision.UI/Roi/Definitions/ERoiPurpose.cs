@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-
 namespace DP.Vision.UI;
 
 /// <summary>编辑器中的区域意图，由宿主映射到后台检查或排除配置。</summary>

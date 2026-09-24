@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using DP.Vision.Acquisition;
 
 namespace DP.Vision.Acquisition.Management;
 

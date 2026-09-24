@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using DP.Vision.Acquisition;
+using DP.Vision.Acquisition.Drivers;
 
 namespace DP.Vision.Halcon;
 
@@ -22,7 +23,7 @@ namespace DP.Vision.Halcon;
 /// 停流后不得再交付"这三件事在这里是**自建**的，不依赖 SDK 的任何保证。
 /// </para>
 /// </summary>
-internal sealed class HalconStreamSession : IVisionAcquisitionStream
+internal sealed class HalconStreamSession : IStreamingDeviceSession
 {
     private readonly IHalconStreamCamera _camera;
     private readonly IVisionProviderFrameSink _sink;

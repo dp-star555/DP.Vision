@@ -1,13 +1,7 @@
 using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
-using System.Threading;
 
 namespace DP.Vision.Algorithms;
-
-using PixelRect = DP.Vision.Algorithms.PixelBounds;
-
 /// <summary>拥有数据的归一化BGR/NCHW单行输入，已包含零填充。</summary>
 public sealed class TextLineInput
 {

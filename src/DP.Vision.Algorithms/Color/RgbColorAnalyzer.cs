@@ -21,7 +21,7 @@ public sealed class RgbColorAnalyzer : IColorAnalyzer
         for (int y = bounds.Y; y < bounds.Y + bounds.Height; y++)
         {
             token.ThrowIfCancellationRequested();
-            frame.Image.CopyTo(y * info.Stride + bounds.X * info.BytesPerPixel, row, 0, row.Length);
+            frame.Image.CopyRegion(bounds.X, y, bounds.Width, 1, row);
             for (int i = 0; i < row.Length; i += info.BytesPerPixel)
             {
                 if (regionMask != null && !regionMask.Contains(new PointD(bounds.X + i / info.BytesPerPixel + .5, y + .5))) continue;

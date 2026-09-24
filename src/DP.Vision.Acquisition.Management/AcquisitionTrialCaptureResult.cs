@@ -1,5 +1,4 @@
 using System;
-using DP.Vision;
 
 namespace DP.Vision.Acquisition.Management;
 
