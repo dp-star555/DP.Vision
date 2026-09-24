@@ -13,9 +13,10 @@ public sealed partial class ResultBrowserSession : IViewDisplaySink, IDisposable
     private readonly object _gate = new object();
     private readonly ResultBrowserOptions _options;
     private List<ViewSlot> _views = new List<ViewSlot>();
-    private readonly Dictionary<Tuple<string, string>, bool> _visibility =
-        new Dictionary<Tuple<string, string>, bool>();
-    private readonly Queue<Tuple<string, string>> _preferenceOrder = new Queue<Tuple<string, string>>();
+    private readonly Dictionary<(string View, string Layer), bool> _visibility =
+        new Dictionary<(string View, string Layer), bool>();
+    private readonly Queue<(string View, string Layer)> _preferenceOrder =
+        new Queue<(string View, string Layer)>();
     private string? _selectedView;
     private long _version,
         _sequence,
@@ -263,7 +264,7 @@ public sealed partial class ResultBrowserSession : IViewDisplaySink, IDisposable
 
     private ViewSlot? SelectedView() => _views.FirstOrDefault(v => v.Id == _selectedView);
 
-    private static Tuple<string, string> Key(ViewSlot view, string layer) => Tuple.Create(view.Id, layer);
+    private static (string View, string Layer) Key(ViewSlot view, string layer) => (view.Id, layer);
 
     private bool IsVisible(ViewSlot view, CanvasLayer layer) =>
         _visibility.TryGetValue(Key(view, layer.Id), out bool value) ? value : layer.Visible;
@@ -355,5 +356,18 @@ public sealed partial class ResultBrowserSession : IViewDisplaySink, IDisposable
             _preferenceOrder.Clear();
         }
         ReleaseSources(release);
+    }
+
+    /// <summary>预览像素可淘汰，名称及图层元数据保留，以明确显示未保留状态。</summary>
+    private sealed class ViewSlot
+    {
+        internal string Id = "";
+        internal string Name = "";
+        internal string FrameId = "";
+        internal GeometryOverlay Overlay = null!;
+        internal IImageSource? Source;
+        internal long Bytes;
+        internal long LastUse;
+        internal long ContentVersion;
     }
 }

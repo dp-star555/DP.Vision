@@ -19,7 +19,7 @@ public static class RoiDocumentXml
     {
         if (document == null)
         {
-            throw new ArgumentNullException(nameof(document));
+            throw new ArgumentNullException(nameof(document), "ROI文档不能为空。");
         }
 
         var root = new XElement(
@@ -51,12 +51,12 @@ public static class RoiDocumentXml
     {
         if (xml == null)
         {
-            throw new ArgumentNullException(nameof(xml));
+            throw new ArgumentNullException(nameof(xml), "XML文本不能为空。");
         }
 
         if (xml.Length > 16 * 1024 * 1024)
         {
-            throw new ArgumentException("ROI XML exceeds size limit.");
+            throw new ArgumentException("ROI XML超过16Mi字符的长度上限。", nameof(xml));
         }
 
         using var reader = new StringReader(xml);
@@ -65,12 +65,14 @@ public static class RoiDocumentXml
 
     /// <summary>从文本读取器加载配置，使用XML字符预算限制内存，不关闭调用方读取器。</summary>
     /// <param name = "input">调用方拥有的读取器，只在调用期间借用。</param>
-    /// <returns>经过完整校验的ROI文档；格式或预算不符时抛出异常。</returns>
+    /// <returns>经过完整校验的ROI文档。</returns>
+    /// <exception cref="XmlException">文本不是合法XML，或包含DTD/外部实体。</exception>
+    /// <exception cref="FormatException">XML合法但版本、结构、数值或ROI定义无效；原始原因保存在InnerException。</exception>
     public static RoiDocument Deserialize(TextReader input)
     {
         if (input == null)
         {
-            throw new ArgumentNullException(nameof(input));
+            throw new ArgumentNullException(nameof(input), "文本读取器不能为空。");
         }
 
         var settings = new XmlReaderSettings
@@ -84,25 +86,43 @@ public static class RoiDocumentXml
         };
         using var reader = XmlReader.Create(input, settings);
         var document = XDocument.Load(reader);
-        var root = document.Root ?? throw new FormatException("Missing ROI root.");
+        var root = document.Root ?? throw new FormatException("缺少ROI根元素。");
         Check(root, "roi-document", "version", "coordinates");
         if (Text(root, "version") != "1" || Text(root, "coordinates") != "image-edges")
         {
-            throw new FormatException("Unsupported ROI schema or coordinates.");
+            throw new FormatException("不支持的ROI配置版本或坐标系。");
         }
 
+        // 数值或定义无效时几何/文档构造会抛ArgumentException，超大整数抛OverflowException；
+        // 统一转为FormatException，调用方只需区分"不是XML"与"配置内容无效"。
+        try
+        {
+            return ReadDocument(root);
+        }
+        catch (ArgumentException error)
+        {
+            throw new FormatException("ROI配置内容无效：" + error.Message, error);
+        }
+        catch (OverflowException error)
+        {
+            throw new FormatException("ROI配置中的数值超出范围。", error);
+        }
+    }
+
+    private static RoiDocument ReadDocument(XElement root)
+    {
         var rois = root.Elements()
             .Select(element =>
             {
                 Check(element, "roi", "id", "purpose", "enabled", "constraint");
                 if (element.Elements().Count() != 1)
                 {
-                    throw new FormatException("Expected one geometry per ROI.");
+                    throw new FormatException("每个ROI必须恰好包含一个几何元素。");
                 }
 
                 if (!bool.TryParse(Text(element, "enabled"), out bool enabled))
                 {
-                    throw new FormatException("Invalid enabled flag.");
+                    throw new FormatException("enabled属性不是有效的布尔值。");
                 }
 
                 return new RoiDefinition(
@@ -166,7 +186,7 @@ public static class RoiDocumentXml
             );
         }
 
-        throw new NotSupportedException("Unsupported ROI geometry.");
+        throw new NotSupportedException("不支持保存此类ROI几何。");
     }
 
     private static Geometry ReadShape(XElement shape)
@@ -198,7 +218,7 @@ public static class RoiDocumentXml
                     || !bool.TryParse(Text(shape, "filled"), out bool filled)
                 )
                 {
-                    throw new FormatException("Invalid contour flag.");
+                    throw new FormatException("轮廓的closed或filled属性不是有效的布尔值。");
                 }
 
                 return new ContourGeometry(
@@ -230,7 +250,7 @@ public static class RoiDocumentXml
                         })
                 );
             default:
-                throw new FormatException("Unsupported ROI geometry: " + shape.Name);
+                throw new FormatException("不支持的ROI几何元素：" + shape.Name);
         }
     }
 
@@ -241,7 +261,7 @@ public static class RoiDocumentXml
 
     private static string Text(XElement e, string name)
     {
-        return e.Attribute(name)?.Value ?? throw new FormatException("Missing attribute: " + name);
+        return e.Attribute(name)?.Value ?? throw new FormatException("缺少属性：" + name);
     }
 
     private static double Number(XElement e, string name)
@@ -259,7 +279,7 @@ public static class RoiDocumentXml
     {
         if (!Enum.TryParse(value, out T result) || !Enum.IsDefined(typeof(T), result))
         {
-            throw new FormatException("Unsupported enum value.");
+            throw new FormatException("不支持的枚举值：" + value);
         }
 
         return result;
@@ -269,7 +289,7 @@ public static class RoiDocumentXml
     {
         if (element.Elements().Any())
         {
-            throw new FormatException("Unexpected geometry children.");
+            throw new FormatException("几何元素不应包含子元素。");
         }
     }
 
@@ -282,7 +302,7 @@ public static class RoiDocumentXml
             || element.Nodes().OfType<XText>().Any(t => !string.IsNullOrWhiteSpace(t.Value))
         )
         {
-            throw new FormatException("Unsupported ROI element structure: " + element.Name);
+            throw new FormatException("不支持的ROI元素结构：" + element.Name);
         }
     }
 }

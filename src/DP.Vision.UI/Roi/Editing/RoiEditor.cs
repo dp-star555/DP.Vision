@@ -7,11 +7,18 @@ namespace DP.Vision.UI;
 /// <summary>只在UI线程使用、与厂商无关的ROI编辑器；一次拖动对应一次撤销事务，编辑预览与检测证据分离。</summary>
 public sealed class RoiEditor
 {
-    private static void ValidateTolerance(double value)
+    // 选中/预览/草稿的显示颜色，只影响编辑层外观。
+    private const uint SelectedColor = VisionColors.Cyan;
+    private const uint DisabledColor = 0xFF888888;
+    private const uint ExcludeColor = 0xFFFFAA33;
+    private const uint IncludeColor = 0xFF3399FF;
+    private const uint DraftColor = VisionColors.Yellow;
+
+    private static void ValidateTolerance(double value, string parameter)
     {
         if (double.IsNaN(value) || double.IsInfinity(value) || value < 0 || value > 10000000)
         {
-            throw new ArgumentOutOfRangeException(nameof(value));
+            throw new ArgumentOutOfRangeException(parameter, "容差必须是0～10000000之间的有限值。");
         }
     }
 
@@ -35,7 +42,7 @@ public sealed class RoiEditor
     {
         if (historyLimit < 1 || historyLimit > 100)
         {
-            throw new ArgumentOutOfRangeException(nameof(historyLimit));
+            throw new ArgumentOutOfRangeException(nameof(historyLimit), "撤销步数必须在1～100之间。");
         }
 
         _historyLimit = historyLimit;
@@ -52,7 +59,7 @@ public sealed class RoiEditor
         {
             if (!Enum.IsDefined(typeof(ERoiTool), value))
             {
-                throw new ArgumentOutOfRangeException(nameof(value));
+                throw new ArgumentOutOfRangeException(nameof(value), "未定义的ROI工具。");
             }
 
             Cancel();
@@ -93,7 +100,7 @@ public sealed class RoiEditor
     {
         if (document == null)
         {
-            throw new ArgumentNullException(nameof(document));
+            throw new ArgumentNullException(nameof(document), "ROI文档不能为空。");
         }
 
         var before = Document;
@@ -111,7 +118,7 @@ public sealed class RoiEditor
     {
         if (id != null && !Document.Rois.Any(r => r.Id == id))
         {
-            throw new ArgumentException("Unknown ROI ID.");
+            throw new ArgumentException("ROI文档中不存在此标识。", nameof(id));
         }
 
         Cancel();
@@ -204,7 +211,7 @@ public sealed class RoiEditor
 
     private bool EditVertex(PointD point, double tolerance, bool insert)
     {
-        ValidateTolerance(tolerance);
+        ValidateTolerance(tolerance, nameof(tolerance));
         Cancel();
         var selected = Selected;
         if (!(selected?.Shape is ContourGeometry contour))
@@ -229,7 +236,7 @@ public sealed class RoiEditor
             {
                 var a = points[i];
                 var b = points[(i + 1) % points.Count];
-                double length = Distance(a, b);
+                double length = DistanceSquared(a, b);
                 if (length == 0)
                 {
                     continue;
@@ -243,7 +250,7 @@ public sealed class RoiEditor
                     t == 0 ? a
                     : t == 1 ? b
                     : new PointD(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
-                double distance = Distance(point, candidate);
+                double distance = DistanceSquared(point, candidate);
                 if (distance <= best && (index < 0 || distance < best))
                 {
                     best = distance;
@@ -267,7 +274,7 @@ public sealed class RoiEditor
         {
             for (int i = 0; i < points.Count; i++)
             {
-                double distance = Distance(point, points[i]);
+                double distance = DistanceSquared(point, points[i]);
                 if (distance <= best && (index < 0 || distance < best))
                 {
                     best = distance;
@@ -282,7 +289,7 @@ public sealed class RoiEditor
 
             if (points.Count <= (contour.Closed ? 3 : 2))
             {
-                ValidationError = "Cannot remove a vertex below the contour minimum (open: 2; closed: 3).";
+                ValidationError = "顶点数已达下限，不能继续删除（开放折线至少2点，闭合轮廓至少3点）。";
                 Notify();
                 return false;
             }
@@ -352,43 +359,34 @@ public sealed class RoiEditor
     /// <summary>撤销一次已提交事务。</summary>
     public void Undo()
     {
-        Cancel();
-        if (_undo.Count == 0)
-        {
-            return;
-        }
-
-        var before = Document;
-        _redo.Add(before);
-        Document = _undo[_undo.Count - 1];
-        _undo.RemoveAt(_undo.Count - 1);
-        if (!Document.Rois.Any(r => r.Id == _selected))
-        {
-            _selected = null;
-        }
-
-        Publish(before, "undo");
+        Step(_undo, _redo, "undo");
     }
 
     /// <summary>重做一次被撤销的事务。</summary>
     public void Redo()
     {
+        Step(_redo, _undo, "redo");
+    }
+
+    // 从from栈顶取出文档替换当前文档，当前文档压入to栈；撤销与重做互为镜像。
+    private void Step(List<RoiDocument> from, List<RoiDocument> to, string operation)
+    {
         Cancel();
-        if (_redo.Count == 0)
+        if (from.Count == 0)
         {
             return;
         }
 
         var before = Document;
-        _undo.Add(before);
-        Document = _redo[_redo.Count - 1];
-        _redo.RemoveAt(_redo.Count - 1);
+        to.Add(before);
+        Document = from[from.Count - 1];
+        from.RemoveAt(from.Count - 1);
         if (!Document.Rois.Any(r => r.Id == _selected))
         {
             _selected = null;
         }
 
-        Publish(before, "redo");
+        Publish(before, operation);
     }
 
     /// <summary>开始或延续一次编辑手势；旋转控制点位于形状外5倍容差处。</summary>
@@ -397,7 +395,7 @@ public sealed class RoiEditor
     /// <returns>本次输入是否被编辑器处理。</returns>
     public bool PointerDown(PointD point, double tolerance)
     {
-        ValidateTolerance(tolerance);
+        ValidateTolerance(tolerance, nameof(tolerance));
         if (Tool == ERoiTool.InsertVertex)
         {
             return InsertVertex(point, tolerance);
@@ -445,7 +443,7 @@ public sealed class RoiEditor
             var handles = Handles(tolerance * 5);
             foreach (var handle in handles)
             {
-                if (Distance(point, handle.Position) <= tolerance * tolerance)
+                if (DistanceSquared(point, handle.Position) <= tolerance * tolerance)
                 {
                     _start = point;
                     _original = selected;
@@ -630,7 +628,7 @@ public sealed class RoiEditor
             height = Math.Abs(b.Y - a.Y);
         if (Tool == ERoiTool.Circle)
         {
-            double radius = Math.Sqrt(Distance(a, b));
+            double radius = Math.Sqrt(DistanceSquared(a, b));
             return radius < .01 ? null : new EllipseGeometry(a, radius, radius);
         }
 
@@ -653,16 +651,16 @@ public sealed class RoiEditor
             .Rois.Select(r => new Visual(
                 r.Id,
                 r.Id == _original?.Id && _preview != null ? _preview : r.Shape,
-                r.Id == _selected ? 0xFF00FFFF
-                    : !r.Enabled ? 0xFF888888
-                    : r.Purpose == ERoiPurpose.Exclude ? 0xFFFFAA33
-                    : 0xFF3399FF,
+                r.Id == _selected ? SelectedColor
+                    : !r.Enabled ? DisabledColor
+                    : r.Purpose == ERoiPurpose.Exclude ? ExcludeColor
+                    : IncludeColor,
                 r.Id
             ))
             .ToList();
         if (_original == null && _preview != null)
         {
-            visuals.Add(new Visual("draft", _preview, 0xFFFFFF00));
+            visuals.Add(new Visual("draft", _preview, DraftColor));
         }
 
         if (_vertices.Count > 0)
@@ -673,7 +671,7 @@ public sealed class RoiEditor
                 points.Add(_cursor.Value);
             }
 
-            visuals.Add(new Visual("draft", new ContourGeometry(points), 0xFFFFFF00));
+            visuals.Add(new Visual("draft", new ContourGeometry(points), DraftColor));
         }
 
         return new CanvasLayer("__roi_editor", ELayerKind.Interaction, visuals, int.MaxValue);
@@ -684,7 +682,7 @@ public sealed class RoiEditor
     /// <returns>当前选中几何的控制点集合；没有选择时为空。</returns>
     public IReadOnlyList<RoiHandle> Handles(double spacing)
     {
-        ValidateTolerance(spacing);
+        ValidateTolerance(spacing, nameof(spacing));
         var selected = Selected;
         if (selected == null)
         {
@@ -699,34 +697,17 @@ public sealed class RoiEditor
             );
         }
 
-        PointD center;
-        double width,
-            height,
-            angle;
-        if (shape is RectangleGeometry rectangle)
-        {
-            center = rectangle.Center;
-            width = rectangle.Width;
-            height = rectangle.Height;
-            angle = rectangle.Angle;
-        }
-        else if (shape is EllipseGeometry ellipse)
-        {
-            center = ellipse.Center;
-            width = ellipse.RadiusX * 2;
-            height = ellipse.RadiusY * 2;
-            angle = ellipse.Angle;
-            if (selected.Constraint == ERoiConstraint.Circle)
-            {
-                return new[]
-                {
-                    new RoiHandle(new PointD(center.X + ellipse.RadiusX, center.Y), ERoiHandleKind.Radius, 0),
-                };
-            }
-        }
-        else
+        if (!TryFrame(shape, out var center, out double width, out double height, out double angle))
         {
             return Array.Empty<RoiHandle>();
+        }
+
+        if (shape is EllipseGeometry && selected.Constraint == ERoiConstraint.Circle)
+        {
+            return new[]
+            {
+                new RoiHandle(new PointD(center.X + width / 2, center.Y), ERoiHandleKind.Radius, 0),
+            };
         }
 
         var offsets = new[]
@@ -759,41 +740,37 @@ public sealed class RoiEditor
         {
             var points = contour.Points.ToArray();
             points[handle.Index] = point;
+            // 显式重复首点的闭合轮廓：首尾是同一个顶点，拖动任一端都同步移动另一端，保持闭合表示。
+            if (contour.RepeatsFirstPoint)
+            {
+                int last = points.Length - 1;
+                if (handle.Index == 0)
+                {
+                    points[last] = point;
+                }
+                else if (handle.Index == last)
+                {
+                    points[0] = point;
+                }
+            }
+
             return new ContourGeometry(points, contour.Closed, contour.Filled);
         }
 
-        PointD center;
-        double width,
-            height,
-            angle;
-        if (roi.Shape is RectangleGeometry rectangle)
-        {
-            center = rectangle.Center;
-            width = rectangle.Width;
-            height = rectangle.Height;
-            angle = rectangle.Angle;
-        }
-        else if (roi.Shape is EllipseGeometry ellipse)
-        {
-            center = ellipse.Center;
-            width = ellipse.RadiusX * 2;
-            height = ellipse.RadiusY * 2;
-            angle = ellipse.Angle;
-        }
-        else
+        if (!TryFrame(roi.Shape, out var center, out double width, out double height, out double angle))
         {
             return roi.Shape;
         }
 
         if (handle.Kind == ERoiHandleKind.Radius)
         {
-            double radius = Math.Max(.01, Math.Sqrt(Distance(center, point)));
+            double radius = Math.Max(.01, Math.Sqrt(DistanceSquared(center, point)));
             return new EllipseGeometry(center, radius, radius);
         }
 
         if (handle.Kind == ERoiHandleKind.Rotation)
         {
-            if (Distance(center, point) < 1e-12)
+            if (DistanceSquared(center, point) < 1e-12)
             {
                 return roi.Shape;
             }
@@ -841,6 +818,38 @@ public sealed class RoiEditor
             : new EllipseGeometry(center, width / 2, height / 2, angle);
     }
 
+    // 把矩形/椭圆统一成中心、宽、高（椭圆为直径）与角度，供控制点计算和拖动共用。
+    private static bool TryFrame(
+        Geometry shape,
+        out PointD center,
+        out double width,
+        out double height,
+        out double angle
+    )
+    {
+        if (shape is RectangleGeometry rectangle)
+        {
+            center = rectangle.Center;
+            width = rectangle.Width;
+            height = rectangle.Height;
+            angle = rectangle.Angle;
+            return true;
+        }
+
+        if (shape is EllipseGeometry ellipse)
+        {
+            center = ellipse.Center;
+            width = ellipse.RadiusX * 2;
+            height = ellipse.RadiusY * 2;
+            angle = ellipse.Angle;
+            return true;
+        }
+
+        center = default;
+        width = height = angle = 0;
+        return false;
+    }
+
     private static PointD World(PointD center, double angle, double x, double y)
     {
         return new PointD(
@@ -851,10 +860,10 @@ public sealed class RoiEditor
 
     private static bool Same(PointD a, PointD b)
     {
-        return Distance(a, b) < 1e-20;
+        return DistanceSquared(a, b) < 1e-20;
     }
 
-    private static double Distance(PointD a, PointD b)
+    private static double DistanceSquared(PointD a, PointD b)
     {
         double x = a.X - b.X,
             y = a.Y - b.Y;
