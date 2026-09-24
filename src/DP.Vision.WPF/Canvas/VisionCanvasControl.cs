@@ -29,6 +29,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
     private readonly Dictionary<string, bool> _visibility = new Dictionary<string, bool>();
     private CanvasOptions _options = new CanvasOptions();
     private Point? _pan;
+    private Point? _rightDown;
     private bool _fit = true;
     private RoiEditor? _editor;
     private CanvasLayer? _editLayer;
@@ -364,6 +365,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         }
 
         var visible = Viewport.Visible(ActualWidth, ActualHeight);
+        var captions = new CaptionLayout();
         foreach (var layer in ActiveLayers().Where(Visible))
         {
             foreach (var visual in layer.Visuals)
@@ -435,7 +437,14 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
                         new SolidColorBrush(ColorOf(visual.Argb)),
                         VisualTreeHelper.GetDpi(this).PixelsPerDip
                     );
-                    drawing.DrawText(text, new Point(box.X, box.Y));
+                    // 深色底衬保证文字在任意底色（包括同色Region）上可读；重叠标注依次下移。
+                    double top = captions.Place(box.X, box.Y, text.Width, text.Height);
+                    drawing.DrawRectangle(
+                        new SolidColorBrush(Color.FromArgb(160, 0, 0, 0)),
+                        null,
+                        new Rect(box.X, top, text.Width, text.Height)
+                    );
+                    drawing.DrawText(text, new Point(box.X, top));
                 }
             }
         }
@@ -565,10 +574,13 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
             height,
             request.Level
         );
+        // 与填充轮廓一致使用1/3不透明度，底图仍可见；成员像素仍按原始游程逐像素绘制。
+        var color = ColorOf(visual.Argb);
+        var fill = Color.FromArgb((byte)(color.A / 3), color.R, color.G, color.B);
         var palette = new BitmapPalette(
             Enumerable
                 .Range(0, 256)
-                .Select(i => i == 255 ? ColorOf(visual.Argb) : Colors.Transparent)
+                .Select(i => i == 255 ? fill : Colors.Transparent)
                 .ToList()
         );
         var bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Indexed8, palette, mask, width);
@@ -667,7 +679,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
-        _editor?.Cancel();
+        _editor?.CancelDrag();
         _fit = false;
         var p = e.GetPosition(this);
         Viewport.Zoom(Math.Pow(1.2, e.Delta / 120.0), new PointD(p.X, p.Y));
@@ -682,9 +694,10 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         Focus();
         if (e.ChangedButton == MouseButton.Middle || e.ChangedButton == MouseButton.Right)
         {
-            _editor?.Cancel();
+            _editor?.CancelDrag();
             _fit = false;
             _pan = e.GetPosition(this);
+            _rightDown = e.ChangedButton == MouseButton.Right ? _pan : null;
             CaptureMouse();
             return;
         }
@@ -739,6 +752,21 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
             ProcessRoiPointer(ERoiPointerAction.Up, new PointD(p.X, p.Y));
         }
 
+        // 右键单击（未拖动平移）结束正在逐点绘制的多边形/折线，闭合到首点；没有待定顶点时Finish不做任何事。
+        if (e.ChangedButton == MouseButton.Right && _rightDown.HasValue && _editor != null)
+        {
+            var up = e.GetPosition(this);
+            if (
+                Math.Abs(up.X - _rightDown.Value.X) <= SystemParameters.MinimumHorizontalDragDistance
+                && Math.Abs(up.Y - _rightDown.Value.Y) <= SystemParameters.MinimumVerticalDragDistance
+            )
+            {
+                _editor.Finish();
+                e.Handled = true;
+            }
+        }
+
+        _rightDown = null;
         _pan = null;
         ReleaseMouseCapture();
     }
