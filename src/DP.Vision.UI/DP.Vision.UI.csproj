@@ -5,4 +5,9 @@
     <ItemGroup>
         <ProjectReference Include="../DP.Vision/DP.Vision.csproj" />
     </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="DP.Vision.Winform" />
+        <InternalsVisibleTo Include="DP.Vision.WPF" />
+        <InternalsVisibleTo Include="DP.Vision.Tests" />
+    </ItemGroup>
 </Project>

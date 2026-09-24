@@ -7,136 +7,19 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DP.Vision.UI;
+using MaskKey = (long Region, uint Argb, int Width, int Height, int Level, int X, int Y);
+using TileKey = (int Level, int X, int Y);
 
 namespace DP.Vision.WPF;
 
 /// <summary>原生WPF分块画布，不使用WindowsFormsHost、GDI位图或厂商运行时；宿主显式释放保留的源。</summary>
-public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanvas, IDisposable
+public sealed class VisionCanvasControl : FrameworkElement, IVisionCanvas, IDisposable
 {
-    private CanvasFrame? _frame;
-    private long _revision;
-    private bool _disposed;
-    private readonly LatestFrameMailbox _mailbox = new LatestFrameMailbox();
+    private readonly CanvasCore<System.Windows.Media.Geometry> _core;
     private readonly DispatcherTimer _timer;
-    private RenderCache<Tile> _tiles;
-    private RenderCache<Tile> _masks;
-    private readonly Dictionary<DP.Vision.Geometry, PathItem> _paths =
-        new Dictionary<DP.Vision.Geometry, PathItem>();
-    private readonly Dictionary<DP.Vision.Geometry, long> _identities =
-        new Dictionary<DP.Vision.Geometry, long>();
-    private long _nextId;
-    private int _lodChecks = 4000000;
-    private readonly Dictionary<string, bool> _visibility = new Dictionary<string, bool>();
-    private CanvasOptions _options = new CanvasOptions();
-    private Point? _pan;
-    private Point? _rightDown;
-    private bool _fit = true;
-    private RoiEditor? _editor;
-    private CanvasLayer? _editLayer;
-    private bool _roiDrag;
-    private readonly HashSet<DP.Vision.Geometry> _editableGeometry = new HashSet<DP.Vision.Geometry>();
-
-    /// <inheritdoc/>
-    public RoiEditor? Editor
-    {
-        get => _editor;
-        set
-        {
-            Ui();
-            if (ReferenceEquals(_editor, value))
-            {
-                return;
-            }
-
-            if (_editor != null)
-            {
-                _editor.Cancel();
-                _editor.Changed -= EditorChanged;
-            }
-
-            _editor = value;
-            if (_editor != null)
-            {
-                _editor.Changed += EditorChanged;
-            }
-
-            EditorChanged(this, EventArgs.Empty);
-        }
-    }
-
-    /// <inheritdoc/>
-    public void ProcessRoiPointer(ERoiPointerAction action, PointD clientPoint)
-    {
-        Ui();
-        if (!Enum.IsDefined(typeof(ERoiPointerAction), action))
-        {
-            throw new ArgumentOutOfRangeException(nameof(action));
-        }
-
-        if (_frame == null || _editor == null)
-        {
-            return;
-        }
-
-        var point = Viewport.ToImage(clientPoint);
-        switch (action)
-        {
-            case ERoiPointerAction.Down:
-                _editor.PointerDown(point, 5 / Viewport.Scale);
-                break;
-            case ERoiPointerAction.Move:
-                _editor.PointerMove(point);
-                break;
-            case ERoiPointerAction.Up:
-                _editor.PointerUp(point);
-                break;
-        }
-    }
-
-    private void EditorChanged(object? sender, EventArgs e)
-    {
-        _editLayer = _editor?.DisplayLayer();
-        _editableGeometry.Clear();
-        if (_editLayer != null)
-        {
-            foreach (var v in _editLayer.Visuals)
-            {
-                _editableGeometry.Add(v.Geometry);
-            }
-        }
-
-        if (_roiDrag && _editor?.IsEditing != true)
-        {
-            _roiDrag = false;
-            ReleaseMouseCapture();
-        }
-
-        PrunePaths();
-        InvalidateVisual();
-    }
-
-    private IEnumerable<CanvasLayer> ActiveLayers()
-    {
-        return (_frame?.Overlay?.Layers ?? Array.Empty<CanvasLayer>()).Concat(
-            _editLayer == null ? Enumerable.Empty<CanvasLayer>() : new[] { _editLayer }
-        );
-    }
-
-    private void PrunePaths()
-    {
-        var live = new HashSet<DP.Vision.Geometry>(
-            ActiveLayers().SelectMany(l => l.Visuals).Select(v => v.Geometry)
-        );
-        foreach (var key in _paths.Keys.Where(k => !live.Contains(k)).ToArray())
-        {
-            _paths.Remove(key);
-        }
-
-        foreach (var key in _identities.Keys.Where(k => !live.Contains(k)).ToArray())
-        {
-            _identities.Remove(key);
-        }
-    }
+    private RenderCache<TileKey, Tile> _tiles;
+    private RenderCache<MaskKey, Tile> _masks;
+    private bool _disposed;
 
     /// <summary>创建与厂商无关的原生控件，渲染坐标单位为WPF DIP。</summary>
     public VisionCanvasControl()
@@ -144,8 +27,14 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         Focusable = true;
         ClipToBounds = true;
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
-        _tiles = NewCache();
-        _masks = NewCache();
+        _core = new CanvasCore<System.Windows.Media.Geometry>(
+            InvalidateVisual,
+            ReleaseMouseCapture,
+            () => (ActualWidth, ActualHeight),
+            _ => { }
+        );
+        _tiles = new RenderCache<TileKey, Tile>(_core.Options.TileCacheBytes / 2, _ => { });
+        _masks = NewMaskCache();
         _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(16) };
         _timer.Tick += Tick;
         Loaded += (_, __) =>
@@ -158,23 +47,54 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         Unloaded += (_, __) => _timer.Stop();
     }
 
-    private void Tick(object? sender, EventArgs e)
+    /// <inheritdoc/>
+    public RoiEditor? Editor
     {
-        if (_editor?.IsEditing == true)
+        get => _core.Editor;
+        set
         {
-            return;
-        }
-
-        using var frame = _mailbox.Take();
-        if (frame != null)
-        {
-            Present(frame);
+            Ui();
+            _core.Editor = value;
         }
     }
 
-    private RenderCache<Tile> NewCache()
+    /// <inheritdoc/>
+    public CanvasOptions Options
     {
-        return new RenderCache<Tile>(_options.TileCacheBytes / 2, _ => { });
+        get => _core.Options;
+        set
+        {
+            Ui();
+            _core.Options = value ?? throw new ArgumentNullException(nameof(value), "显示设置不能为空。");
+            _tiles.Dispose();
+            _masks.Dispose();
+            _tiles = new RenderCache<TileKey, Tile>(_core.Options.TileCacheBytes / 2, _ => { });
+            _masks = NewMaskCache();
+            _core.ClearPaths();
+            InvalidateVisual();
+        }
+    }
+
+    /// <inheritdoc/>
+    public CanvasViewport Viewport => _core.Viewport;
+
+    /// <inheritdoc/>
+    public string? DisplayedFrameId => _core.Frame?.FrameId;
+
+    /// <summary>计入缓存的像素载荷，不含WPF合成器副本和源存储。</summary>
+    public long CachedPixelBytes => _tiles.Bytes + _masks.Bytes;
+
+    private RenderCache<MaskKey, Tile> NewMaskCache()
+    {
+        return new RenderCache<MaskKey, Tile>(
+            _core.Options.TileCacheBytes / 2,
+            _ => { }
+        );
+    }
+
+    private void Tick(object? sender, EventArgs e)
+    {
+        _core.Tick();
     }
 
     private void Ui()
@@ -182,106 +102,37 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         VerifyAccess();
         if (_disposed)
         {
-            throw new ObjectDisposedException(nameof(VisionCanvasControl));
+            throw new ObjectDisposedException(nameof(VisionCanvasControl), "画布已释放。");
         }
     }
 
     /// <inheritdoc/>
-    public CanvasOptions Options
+    public void ProcessRoiPointer(ERoiPointerAction action, PointD clientPoint)
     {
-        get => _options;
-        set
-        {
-            Ui();
-            _options = value ?? throw new ArgumentNullException(nameof(value));
-            _tiles.Dispose();
-            _masks.Dispose();
-            _tiles = NewCache();
-            _masks = NewCache();
-            _paths.Clear();
-            InvalidateVisual();
-        }
+        Ui();
+        _core.ProcessRoiPointer(action, clientPoint);
     }
-
-    /// <inheritdoc/>
-    public CanvasViewport Viewport { get; } = new CanvasViewport();
-
-    /// <inheritdoc/>
-    public string? DisplayedFrameId => _frame?.FrameId;
-
-    /// <summary>计入缓存的像素载荷，不含WPF合成器副本和源存储。</summary>
-    public long CachedPixelBytes => _tiles.Bytes + _masks.Bytes;
 
     /// <inheritdoc/>
     public bool PostFrame(CanvasFrame frame)
     {
-        return _mailbox.Post(frame);
+        return _core.PostFrame(frame);
     }
 
     /// <inheritdoc/>
     public void Present(CanvasFrame frame)
     {
         Ui();
-        if (frame == null)
-        {
-            throw new ArgumentNullException(nameof(frame));
-        }
-
-        if (_frame != null && frame.Sequence <= _frame.Sequence)
-        {
-            return;
-        }
-
-        var next = frame.Retain();
-        bool fit =
-            _frame == null || _frame.Info.Width != next.Info.Width || _frame.Info.Height != next.Info.Height;
-        var old = _frame;
-        if (old != null && old.FrameId != next.FrameId)
-        {
-            _editor?.Cancel();
-        }
-
-        _frame = next;
-        if (old == null || old.FrameId != next.FrameId || old.Info.Layout != next.Info.Layout || fit)
-        {
-            _revision++;
-        }
-
-        _mailbox.AdvanceTo(next.Sequence);
-        old?.Dispose();
-        _lodChecks = Math.Max(
-            1,
-            4000000
-                / Math.Max(
-                    1,
-                    next.Overlay?.Layers.Sum(l => l.Visuals.Count(v => v.Geometry is ContourGeometry)) ?? 0
-                )
-        );
-        PrunePaths();
-        if (fit)
-        {
-            FitToWindow();
-        }
-        else
-        {
-            InvalidateVisual();
-        }
+        _core.Present(frame);
     }
 
     /// <inheritdoc/>
     public void ClearImage()
     {
         Ui();
-        _editor?.Cancel();
-        using var pending = _mailbox.Take();
-        var old = _frame;
-        _frame = null;
-        old?.Dispose();
-        _revision++;
+        _core.ClearImage();
         _tiles.Dispose();
         _masks.Dispose();
-        PrunePaths();
-        InvalidateVisual();
     }
 
     /// <summary>改变单个图层的可见性，不修改源几何。</summary>
@@ -290,49 +141,21 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
     public void SetLayerVisible(string id, bool visible)
     {
         Ui();
-        if (string.IsNullOrWhiteSpace(id))
-        {
-            throw new ArgumentException("Layer ID required.");
-        }
-
-        _visibility[id] = visible;
-        InvalidateVisual();
+        _core.SetLayerVisible(id, visible);
     }
 
     /// <inheritdoc/>
     public void FitToWindow()
     {
         Ui();
-        _editor?.Cancel();
-        _fit = true;
-        if (_frame != null)
-        {
-            Viewport.Fit(_frame.Info.Width, _frame.Info.Height, ActualWidth, ActualHeight);
-        }
-
-        InvalidateVisual();
+        _core.FitToWindow();
     }
 
     /// <summary>独立于显示LOD的精确源几何命中测试。</summary>
     /// <param name = "client">WPF客户区坐标，单位为DIP，不是原图坐标。</param>
     public Visual? Pick(Point client)
     {
-        if (_frame?.Overlay == null)
-        {
-            return null;
-        }
-
-        var p = Viewport.ToImage(new PointD(client.X, client.Y));
-        return _frame
-            .Overlay.Layers.Reverse()
-            .Where(Visible)
-            .SelectMany(l => l.Visuals.Reverse())
-            .FirstOrDefault(v => v.Geometry.Contains(p, 3 / Viewport.Scale));
-    }
-
-    private bool Visible(CanvasLayer l)
-    {
-        return _visibility.TryGetValue(l.Id, out bool v) ? v : l.Visible;
+        return _core.HitTest(new PointD(client.X, client.Y));
     }
 
     /// <inheritdoc/>
@@ -344,13 +167,14 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
             null,
             new Rect(0, 0, ActualWidth, ActualHeight)
         );
-        if (_frame == null)
+        var frame = _core.Frame;
+        if (frame == null)
         {
             return;
         }
 
         var requests = CanvasPlanning.Tiles(
-            _frame.Info,
+            frame.Info,
             Viewport,
             ActualWidth,
             ActualHeight,
@@ -366,7 +190,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
 
         var visible = Viewport.Visible(ActualWidth, ActualHeight);
         var captions = new CaptionLayout();
-        foreach (var layer in ActiveLayers().Where(Visible))
+        foreach (var layer in _core.ActiveLayers().Where(_core.IsLayerVisible))
         {
             foreach (var visual in layer.Visuals)
             {
@@ -449,9 +273,9 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
             }
         }
 
-        if (_editor != null)
+        if (_core.Editor != null)
         {
-            foreach (var handle in _editor.Handles(25 / Viewport.Scale))
+            foreach (var handle in _core.Editor.Handles(25 / Viewport.Scale))
             {
                 var p = Screen(new RectD(handle.Position.X, handle.Position.Y, 0, 0));
                 drawing.DrawRectangle(
@@ -496,13 +320,14 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
 
     private Tile ImageTile(TileRequest request)
     {
-        _tiles.TryGet(request.Key, out var entry);
-        if (entry != null && entry.Revision == _revision)
+        var key = (request.Level, request.X, request.Y);
+        _tiles.TryGet(key, out var entry);
+        if (entry != null && entry.Revision == _core.Revision)
         {
             return entry;
         }
 
-        using var source = _frame!.ReadTile(request.Level, request.X, request.Y, Options.TileSize);
+        using var source = _core.Frame!.ReadTile(request.Level, request.X, request.Y, Options.TileSize);
         var pixels = DisplayPixels.From(source, Options);
         var format =
             pixels.Layout == EPixelLayout.Gray8 ? PixelFormats.Gray8
@@ -517,10 +342,10 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
                 pixels.Stride,
                 0
             );
-            entry = new Tile { Bitmap = bitmap, Revision = _revision };
-            if (!_tiles.Add(request.Key, entry, (long)Options.TileSize * Options.TileSize * 4))
+            entry = new Tile { Bitmap = bitmap, Revision = _core.Revision };
+            if (!_tiles.Add(key, entry, (long)Options.TileSize * Options.TileSize * 4))
             {
-                throw new InvalidOperationException("Tile exceeds cache budget.");
+                throw new InvalidOperationException("图块超出缓存预算。");
             }
         }
         else
@@ -542,7 +367,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
                 0
             );
             entry.Bitmap = bitmap;
-            entry.Revision = _revision;
+            entry.Revision = _core.Revision;
         }
 
         return entry;
@@ -550,22 +375,14 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
 
     private Tile MaskTile(Visual visual, RegionGeometry region, TileRequest request)
     {
-        if (!_identities.TryGetValue(region, out long id))
-        {
-            id = ++_nextId;
-            _identities.Add(region, id);
-        }
-
-        string key =
-            id + ":" + visual.Argb + ":" + _frame!.Info.Width + ":" + _frame.Info.Height + ":" + request.Key;
+        var key = _core.MaskKey(visual, region, request);
         if (_masks.TryGet(key, out var existing))
         {
             return existing!;
         }
 
-        int factor = 1 << request.Level,
-            width = (int)Math.Ceiling(request.Bounds.Width / factor),
-            height = (int)Math.Ceiling(request.Bounds.Height / factor);
+        int width = request.PixelWidth,
+            height = request.PixelHeight;
         var mask = RegionMask.Tile(
             region,
             (int)request.Bounds.X,
@@ -588,7 +405,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         var tile = new Tile { Bitmap = bitmap };
         if (!_masks.Add(key, tile, (long)Options.TileSize * Options.TileSize * 4))
         {
-            throw new InvalidOperationException("Mask exceeds cache budget.");
+            throw new InvalidOperationException("Region掩码超出缓存预算。");
         }
 
         return tile;
@@ -597,18 +414,11 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
     private System.Windows.Media.Geometry Path(DP.Vision.Geometry geometry)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
-        double tolerance =
-            geometry is ContourGeometry && !_editableGeometry.Contains(geometry)
-                ? CanvasPlanning.LodTolerance(
-                    Options,
-                    Viewport.Scale * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY)
-                )
-                : 0;
-        if (_paths.TryGetValue(geometry, out var cached) && cached.Tolerance == tolerance)
-        {
-            return cached.Path;
-        }
+        return _core.GetPath(geometry, Viewport.Scale * Math.Max(dpi.DpiScaleX, dpi.DpiScaleY), BuildPath);
+    }
 
+    private System.Windows.Media.Geometry BuildPath(DP.Vision.Geometry geometry, double tolerance)
+    {
         System.Windows.Media.Geometry path;
         if (geometry is DP.Vision.EllipseGeometry ellipse)
         {
@@ -631,7 +441,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
                 filled;
             if (geometry is ContourGeometry contour)
             {
-                points = ContourLod.Simplify(contour, tolerance, _lodChecks);
+                points = ContourLod.Simplify(contour, tolerance, _core.LodChecks);
                 closed = contour.Closed;
                 filled = contour.Filled;
             }
@@ -643,7 +453,7 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
             }
             else
             {
-                throw new NotSupportedException("Unknown geometry renderer.");
+                throw new NotSupportedException("画布不支持绘制此类几何。");
             }
 
             if (points.Count == 1)
@@ -671,19 +481,31 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         }
 
         path.Freeze();
-        _paths[geometry] = new PathItem { Path = path, Tolerance = tolerance };
         return path;
+    }
+
+    private PointD At(MouseEventArgs e)
+    {
+        var p = e.GetPosition(this);
+        return new PointD(p.X, p.Y);
+    }
+
+    private static ECanvasButton? ButtonOf(MouseButton button)
+    {
+        return button switch
+        {
+            MouseButton.Left => ECanvasButton.Left,
+            MouseButton.Middle => ECanvasButton.Middle,
+            MouseButton.Right => ECanvasButton.Right,
+            _ => null,
+        };
     }
 
     /// <inheritdoc/>
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
-        _editor?.CancelDrag();
-        _fit = false;
-        var p = e.GetPosition(this);
-        Viewport.Zoom(Math.Pow(1.2, e.Delta / 120.0), new PointD(p.X, p.Y));
-        InvalidateVisual();
+        _core.Wheel(e.Delta, At(e));
         e.Handled = true;
     }
 
@@ -692,34 +514,20 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
     {
         base.OnMouseDown(e);
         Focus();
-        if (e.ChangedButton == MouseButton.Middle || e.ChangedButton == MouseButton.Right)
+        var button = ButtonOf(e.ChangedButton);
+        if (button == null)
         {
-            _editor?.CancelDrag();
-            _fit = false;
-            _pan = e.GetPosition(this);
-            _rightDown = e.ChangedButton == MouseButton.Right ? _pan : null;
-            CaptureMouse();
             return;
         }
 
-        if (e.ChangedButton == MouseButton.Left && _frame != null && _editor != null)
+        var (capture, handled) = _core.MouseDown(button.Value, At(e), e.ClickCount);
+        if (capture)
         {
-            if (e.ClickCount > 1 && (_editor.Tool == ERoiTool.Polygon || _editor.Tool == ERoiTool.Polyline))
-            {
-                _editor.Finish();
-                e.Handled = true;
-                return;
-            }
+            CaptureMouse();
+        }
 
-            var p = e.GetPosition(this);
-            ProcessRoiPointer(ERoiPointerAction.Down, new PointD(p.X, p.Y));
-            _roiDrag =
-                _editor.IsEditing && _editor.Tool != ERoiTool.Polygon && _editor.Tool != ERoiTool.Polyline;
-            if (_roiDrag)
-            {
-                CaptureMouse();
-            }
-
+        if (handled)
+        {
             e.Handled = true;
         }
     }
@@ -728,46 +536,27 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        var p = e.GetPosition(this);
-        if (_pan.HasValue)
-        {
-            Viewport.Pan(p.X - _pan.Value.X, p.Y - _pan.Value.Y);
-            _pan = p;
-            InvalidateVisual();
-        }
-        else if (_frame != null)
-        {
-            ProcessRoiPointer(ERoiPointerAction.Move, new PointD(p.X, p.Y));
-        }
+        _core.MouseMove(At(e));
     }
 
     /// <inheritdoc/>
     protected override void OnMouseUp(MouseButtonEventArgs e)
     {
         base.OnMouseUp(e);
-        if (e.ChangedButton == MouseButton.Left && _roiDrag)
-        {
-            _roiDrag = false;
-            var p = e.GetPosition(this);
-            ProcessRoiPointer(ERoiPointerAction.Up, new PointD(p.X, p.Y));
-        }
-
-        // 右键单击（未拖动平移）结束正在逐点绘制的多边形/折线，闭合到首点；没有待定顶点时Finish不做任何事。
-        if (e.ChangedButton == MouseButton.Right && _rightDown.HasValue && _editor != null)
-        {
-            var up = e.GetPosition(this);
-            if (
-                Math.Abs(up.X - _rightDown.Value.X) <= SystemParameters.MinimumHorizontalDragDistance
-                && Math.Abs(up.Y - _rightDown.Value.Y) <= SystemParameters.MinimumVerticalDragDistance
+        var button = ButtonOf(e.ChangedButton);
+        if (
+            button != null
+            && _core.MouseUp(
+                button.Value,
+                At(e),
+                SystemParameters.MinimumHorizontalDragDistance,
+                SystemParameters.MinimumVerticalDragDistance
             )
-            {
-                _editor.Finish();
-                e.Handled = true;
-            }
+        )
+        {
+            e.Handled = true;
         }
 
-        _rightDown = null;
-        _pan = null;
         ReleaseMouseCapture();
     }
 
@@ -775,76 +564,40 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
     protected override void OnLostMouseCapture(MouseEventArgs e)
     {
         base.OnLostMouseCapture(e);
-        _pan = null;
-        if (_roiDrag)
-        {
-            _roiDrag = false;
-            _editor?.Cancel();
-        }
+        _core.CaptureLost();
     }
 
     /// <inheritdoc/>
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.Home)
+        var key = e.Key switch
         {
-            FitToWindow();
+            Key.Home => ECanvasKey.Home,
+            Key.Z => ECanvasKey.Z,
+            Key.Y => ECanvasKey.Y,
+            Key.Delete => ECanvasKey.Delete,
+            Key.Escape => ECanvasKey.Escape,
+            Key.Enter => ECanvasKey.Enter,
+            Key.Back => ECanvasKey.Backspace,
+            _ => ECanvasKey.Other,
+        };
+        var modifiers = Keyboard.Modifiers;
+        bool control = (modifiers & ModifierKeys.Control) != 0,
+            shift = (modifiers & ModifierKeys.Shift) != 0;
+        if (_core.KeyDown(key, control, shift))
+        {
             e.Handled = true;
         }
-
-        if (_editor == null)
-        {
-            return;
-        }
-
-        bool control = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-        if (control && e.Key == Key.Z)
-        {
-            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
-            {
-                _editor.Redo();
-            }
-            else
-            {
-                _editor.Undo();
-            }
-        }
-        else if (control && e.Key == Key.Y)
-        {
-            _editor.Redo();
-        }
-        else if (e.Key == Key.Delete)
-        {
-            _editor.DeleteSelected();
-        }
-        else if (e.Key == Key.Escape)
-        {
-            _editor.Cancel();
-        }
-        else if (e.Key == Key.Enter)
-        {
-            _editor.Finish();
-        }
-        else if (e.Key == Key.Back)
-        {
-            _editor.Backspace();
-        }
-        else
-        {
-            return;
-        }
-
-        e.Handled = true;
     }
 
     /// <inheritdoc/>
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
     {
         base.OnRenderSizeChanged(sizeInfo);
-        if (_fit && _frame != null && !_disposed)
+        if (!_disposed)
         {
-            FitToWindow();
+            _core.Resized();
         }
     }
 
@@ -858,24 +611,17 @@ public sealed partial class VisionCanvasControl : FrameworkElement, IVisionCanva
         }
 
         _disposed = true;
-        if (_editor != null)
-        {
-            _editor.Changed -= EditorChanged;
-            _editor.Cancel();
-            _editor = null;
-        }
-
-        _editLayer = null;
-        _editableGeometry.Clear();
         _timer.Stop();
         _timer.Tick -= Tick;
-        _mailbox.Dispose();
-        _frame?.Dispose();
-        _frame = null;
+        _core.Dispose();
         _tiles.Dispose();
         _masks.Dispose();
-        _paths.Clear();
-        _identities.Clear();
         InvalidateVisual();
+    }
+
+    private sealed class Tile
+    {
+        internal BitmapSource Bitmap = null!;
+        internal long Revision = -1;
     }
 }

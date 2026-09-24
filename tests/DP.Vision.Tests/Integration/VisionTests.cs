@@ -335,7 +335,7 @@ public sealed class VisionTests
     public void CacheNeverExceedsBudget()
     {
         int released = 0;
-        using var cache = new RenderCache<object>(10, _ => released++);
+        using var cache = new RenderCache<string, object>(10, _ => released++);
         cache.Add("a", new object(), 6);
         cache.Add("b", new object(), 6);
         Assert.AreEqual(1, released);

@@ -1,3 +1,5 @@
+using System;
+
 namespace DP.Vision;
 
 /// <summary>一个可见图块请求及其原图坐标位置。</summary>
@@ -28,6 +30,9 @@ public readonly struct TileRequest
     /// <summary>已限制在原图内的源坐标范围。</summary>
     public RectD Bounds { get; }
 
-    /// <summary>同一图像源版本内的缓存键。</summary>
-    public string Key => Level + ":" + X + ":" + Y;
+    /// <summary>本级别下图块的像素宽度（边缘图块可能小于图块边长）。</summary>
+    public int PixelWidth => (int)Math.Ceiling(Bounds.Width / (1 << Level));
+
+    /// <summary>本级别下图块的像素高度（边缘图块可能小于图块边长）。</summary>
+    public int PixelHeight => (int)Math.Ceiling(Bounds.Height / (1 << Level));
 }

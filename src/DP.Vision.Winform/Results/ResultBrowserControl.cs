@@ -150,8 +150,8 @@ public sealed class ResultBrowserControl : UserControl, IViewDisplaySink
             var oldLayers = _layers.Items.Cast<BrowserLayerChoice>().ToArray();
             if (
                 !oldLayers
-                    .Select(l => Tuple.Create(l.Id, l.Name))
-                    .SequenceEqual(snapshot.Layers.Select(l => Tuple.Create(l.Id, l.Name)))
+                    .Select(l => (l.Id, l.Name))
+                    .SequenceEqual(snapshot.Layers.Select(l => (l.Id, l.Name)))
             )
             {
                 _layers.Items.Clear();
@@ -177,8 +177,8 @@ public sealed class ResultBrowserControl : UserControl, IViewDisplaySink
         // 名称和键未变化时不重建下拉列表，减少集合更新对正在选择的用户的干扰。
         var old = combo.Items.Cast<BrowserChoice>().ToArray();
         if (
-            !old.Select(c => Tuple.Create(c.Id, c.Name))
-                .SequenceEqual(choices.Select(c => Tuple.Create(c.Id, c.Name)))
+            !old.Select(c => (c.Id, c.Name))
+                .SequenceEqual(choices.Select(c => (c.Id, c.Name)))
         )
         {
             combo.Items.Clear();

@@ -191,8 +191,8 @@ public sealed class ResultBrowserControl : UserControl, IViewDisplaySink, IDispo
     {
         var old = combo.Items.Cast<BrowserChoice>().ToArray();
         if (
-            !old.Select(c => Tuple.Create(c.Id, c.Name))
-                .SequenceEqual(choices.Select(c => Tuple.Create(c.Id, c.Name)))
+            !old.Select(c => (c.Id, c.Name))
+                .SequenceEqual(choices.Select(c => (c.Id, c.Name)))
         )
             combo.ItemsSource = choices;
         combo.SelectedItem = combo.Items.Cast<BrowserChoice>().FirstOrDefault(c => c.Id == selected);
@@ -201,8 +201,8 @@ public sealed class ResultBrowserControl : UserControl, IViewDisplaySink, IDispo
     private void FillLayers(ResultBrowserSnapshot snapshot)
     {
         var old = _layers.Children.Cast<CheckBox>().ToArray();
-        bool same = old.Select(c => Tuple.Create((string)c.Tag, (string)c.Content))
-            .SequenceEqual(snapshot.Layers.Select(l => Tuple.Create(l.Id, l.Name)));
+        bool same = old.Select(c => ((string)c.Tag, (string)c.Content))
+            .SequenceEqual(snapshot.Layers.Select(l => (l.Id, l.Name)));
         if (!same)
         {
             _layers.Children.Clear();

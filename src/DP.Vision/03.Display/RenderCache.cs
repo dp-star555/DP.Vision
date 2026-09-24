@@ -4,11 +4,14 @@ using System.Collections.Generic;
 namespace DP.Vision;
 
 /// <summary>原生画布适配器使用的显式字节预算LRU缓存，逐出条目时释放资源。</summary>
-public sealed class RenderCache<T> : IDisposable
+/// <typeparam name="TKey">缓存键；建议使用值元组等值类型，避免每次重绘拼接字符串。</typeparam>
+/// <typeparam name="T">缓存的资源类型。</typeparam>
+public sealed class RenderCache<TKey, T> : IDisposable
+    where TKey : notnull
     where T : class
 {
-    private readonly Dictionary<string, LinkedListNode<Entry>> _entries =
-        new Dictionary<string, LinkedListNode<Entry>>();
+    private readonly Dictionary<TKey, LinkedListNode<Entry>> _entries =
+        new Dictionary<TKey, LinkedListNode<Entry>>();
     private readonly LinkedList<Entry> _lru = new LinkedList<Entry>();
     private readonly Action<T> _dispose;
     private readonly long _budget;
@@ -34,7 +37,7 @@ public sealed class RenderCache<T> : IDisposable
     /// <param name = "key">当前图像版本内的缓存键。</param>
     /// <param name = "value">命中时返回借用值；未命中为null，不移交资源所有权。</param>
     /// <returns>缓存是否命中。</returns>
-    public bool TryGet(string key, out T? value)
+    public bool TryGet(TKey key, out T? value)
     {
         if (_entries.TryGetValue(key, out var node))
         {
@@ -53,9 +56,9 @@ public sealed class RenderCache<T> : IDisposable
     /// <param name = "value">准备移交的非空资源。</param>
     /// <param name = "bytes">本条目计入缓存的非负载荷字节数。</param>
     /// <returns>是否成功接管；单条目超过预算时返回false。</returns>
-    public bool Add(string key, T value, long bytes)
+    public bool Add(TKey key, T value, long bytes)
     {
-        if (string.IsNullOrEmpty(key))
+        if (key == null)
         {
             throw new ArgumentException("缓存键不能为空。", nameof(key));
         }
@@ -118,7 +121,7 @@ public sealed class RenderCache<T> : IDisposable
 
     private sealed class Entry
     {
-        internal string Key = "";
+        internal TKey Key = default!;
         internal T Value = null!;
         internal long Bytes;
     }
