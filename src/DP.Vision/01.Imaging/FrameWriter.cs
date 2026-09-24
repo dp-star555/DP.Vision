@@ -7,6 +7,7 @@ public sealed class FrameWriter : IDisposable
 {
     private readonly object _gate = new object();
     private byte[]? _bytes;
+    private bool _published;
     private readonly Action<byte[]> _release;
     private readonly ImageInfo _info;
 
@@ -45,7 +46,7 @@ public sealed class FrameWriter : IDisposable
             Buffer.BlockCopy(
                 source,
                 sourceOffset,
-                _bytes ?? throw new ObjectDisposedException(nameof(FrameWriter)),
+                Writable(),
                 offset,
                 count
             );
@@ -58,10 +59,11 @@ public sealed class FrameWriter : IDisposable
     {
         lock (_gate)
         {
-            var bytes = _bytes ?? throw new ObjectDisposedException(nameof(FrameWriter));
+            var bytes = Writable();
             // 先完成只读源的创建，再交出写句柄；创建失败时仍能由writer.Dispose归还槽位。
-            var source = new MemoryImageSource(new ImageBuffer(_info, new Storage(bytes, _release)));
+            var source = new MemoryImageSource(_info, new Storage(bytes, _release));
             _bytes = null;
+            _published = true;
             return source;
         }
     }
@@ -80,5 +82,16 @@ public sealed class FrameWriter : IDisposable
         {
             _release(old);
         }
+    }
+
+    /// <summary>在锁内取得仍可写的槽位；已发布与已释放分别报告，避免把"已移交"误报为"已释放"。</summary>
+    private byte[] Writable()
+    {
+        if (_published)
+        {
+            throw new InvalidOperationException("帧已发布为只读图像，不能再写入或重复发布。");
+        }
+
+        return _bytes ?? throw new ObjectDisposedException(nameof(FrameWriter));
     }
 }

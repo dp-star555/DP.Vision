@@ -43,7 +43,7 @@ public sealed class VisionTests
         writer!.Write(0, new byte[] { 5, 6 }, 0, 2);
         var image = writer.Publish();
         using var other = image.Retain();
-        Assert.ThrowsExactly<ObjectDisposedException>(() => writer.Write(0, new byte[] { 0 }, 0, 1));
+        Assert.ThrowsExactly<InvalidOperationException>(() => writer.Write(0, new byte[] { 0 }, 0, 1));
         image.Dispose();
         Assert.IsFalse(pool.TryRent(out _));
         other.Dispose();

@@ -10,7 +10,7 @@ public sealed class ImageFrame : IDisposable
     /// <param name="image">借用的只读图像。</param>
     public ImageFrame(string frameId, IImageSource image)
     {
-        if (string.IsNullOrWhiteSpace(frameId) || frameId.Length > 256)
+        if (!Identity.IsValid(frameId))
             throw new ArgumentException("Invalid frame identity.", nameof(frameId));
         FrameId = frameId;
         Image = (image ?? throw new ArgumentNullException(nameof(image))).Retain();

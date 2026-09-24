@@ -96,12 +96,7 @@ public sealed partial class ResultBrowserSession : IViewDisplaySink, IDisposable
                         var previous = _views.FirstOrDefault(v =>
                             v.Id == input.Id && v.FrameId == input.FrameId
                         );
-                        var previousInfo = previous?.Source?.Info;
-                        bool samePixels =
-                            previousInfo != null
-                            && previousInfo.Width == info.Width
-                            && previousInfo.Height == info.Height
-                            && previousInfo.Layout == info.Layout;
+                        bool samePixels = previous?.Source?.Info == info;
                         var view = new ViewSlot
                         {
                             Id = input.Id,

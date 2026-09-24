@@ -151,4 +151,91 @@ public sealed class ImageSourceTests
         CollectionAssert.DoesNotContain(names, "ImageBuffer");
         CollectionAssert.DoesNotContain(names, "MemoryImageSource");
     }
+
+    /// <summary>区域复制只取指定矩形并按行紧密排列，多字节布局保留全部通道字节。</summary>
+    [TestMethod]
+    public void CopyRegionReadsOnlyTheRequestedRectangle()
+    {
+        // 4×3 的 Bgr24 图：像素(列c, 行r)的第b个字节为 40r+10c+b，每个字节都可辨认。
+        var pixels = new byte[4 * 3 * 3];
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            int pixel = i / 3,
+                r = pixel / 4,
+                c = pixel % 4;
+            pixels[i] = (byte)(r * 40 + c * 10 + i % 3);
+        }
+        using var source = VisionImage.CopyFrom(new ImageInfo(4, 3, EPixelLayout.Bgr24), pixels);
+
+        var region = new byte[1 + 2 * 2 * 3];
+        source.CopyRegion(1, 1, 2, 2, region, destinationOffset: 1);
+
+        byte[] expected =
+        {
+            0,
+            50, 51, 52, 60, 61, 62,
+            90, 91, 92, 100, 101, 102,
+        };
+        CollectionAssert.AreEqual(expected, region);
+    }
+
+    /// <summary>越界区域或放不下区域的目标数组明确拒绝，不做静默裁剪。</summary>
+    [TestMethod]
+    public void CopyRegionRejectsOutOfRangeRequests()
+    {
+        using var source = VisionImage.CopyFrom(new ImageInfo(4, 3, EPixelLayout.Gray8), new byte[12]);
+        var buffer = new byte[12];
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => source.CopyRegion(3, 0, 2, 1, buffer));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => source.CopyRegion(0, 2, 1, 2, buffer));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => source.CopyRegion(0, 0, 0, 1, buffer));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => source.CopyRegion(0, 0, 4, 3, buffer, 1));
+        Assert.ThrowsExactly<ArgumentNullException>(() => source.CopyRegion(0, 0, 1, 1, null!));
+        source.Dispose();
+        Assert.ThrowsExactly<ObjectDisposedException>(() => source.CopyRegion(0, 0, 1, 1, buffer));
+    }
+
+    /// <summary>尺寸与布局都相同的布局描述相等，可直接比较，不必逐字段判断。</summary>
+    [TestMethod]
+    public void ImageInfoHasValueEquality()
+    {
+        var a = new ImageInfo(8, 4, EPixelLayout.Gray16);
+        var b = new ImageInfo(8, 4, EPixelLayout.Gray16);
+        Assert.IsTrue(a == b);
+        Assert.IsTrue(a.Equals((object)b));
+        Assert.AreEqual(a.GetHashCode(), b.GetHashCode());
+        Assert.IsTrue(a != new ImageInfo(8, 4, EPixelLayout.Gray8));
+        Assert.IsTrue(a != new ImageInfo(4, 8, EPixelLayout.Gray16));
+        Assert.IsFalse(a == null);
+        Assert.IsTrue((ImageInfo?)null == null);
+        Assert.AreEqual(2, a.BytesPerPixel);
+    }
+
+    /// <summary>非法宽、高、布局分别报告对应参数名。</summary>
+    [TestMethod]
+    public void ImageInfoReportsTheInvalidParameter()
+    {
+        Assert.AreEqual("width", ParamName(() => new ImageInfo(0, 1, EPixelLayout.Gray8)));
+        Assert.AreEqual("height", ParamName(() => new ImageInfo(1, 0, EPixelLayout.Gray8)));
+        Assert.AreEqual("layout", ParamName(() => new ImageInfo(1, 1, (EPixelLayout)99)));
+
+        static string? ParamName(Func<ImageInfo> create)
+        {
+            return Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => create()).ParamName;
+        }
+    }
+
+    /// <summary>发布后再写或再次发布报告"已发布"，不再误报为"已释放"；释放后仍报告已释放。</summary>
+    [TestMethod]
+    public void FrameWriterDistinguishesPublishedFromDisposed()
+    {
+        using var pool = new FrameBufferPool(new ImageInfo(1, 1, EPixelLayout.Gray8), 2, 2);
+        Assert.IsTrue(pool.TryRent(out var published));
+        using var image = published!.Publish();
+        Assert.ThrowsExactly<InvalidOperationException>(() => published.Write(0, new byte[] { 1 }, 0, 1));
+        Assert.ThrowsExactly<InvalidOperationException>(() => published.Publish());
+
+        Assert.IsTrue(pool.TryRent(out var disposed));
+        disposed!.Dispose();
+        Assert.ThrowsExactly<ObjectDisposedException>(() => disposed.Write(0, new byte[] { 1 }, 0, 1));
+    }
 }

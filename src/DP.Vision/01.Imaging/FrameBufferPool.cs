@@ -35,6 +35,7 @@ public sealed class FrameBufferPool : IDisposable
     /// <returns>是否取得可写槽位。</returns>
     public bool TryRent(out FrameWriter? writer)
     {
+        byte[]? bytes = null;
         lock (_gate)
         {
             if (_disposed)
@@ -42,28 +43,47 @@ public sealed class FrameBufferPool : IDisposable
                 throw new ObjectDisposedException(nameof(FrameBufferPool));
             }
 
-            byte[] bytes;
             if (_free.Count > 0)
             {
                 bytes = _free.Pop();
-                Array.Clear(bytes, 0, bytes.Length);
+            }
+            else if (_allocated == _capacity)
+            {
+                // 所有槽位都被写入方或读者占用：报告背压，不新建超出容量的缓冲区。
+                writer = null;
+                return false;
             }
             else
             {
-                //满了不允许新建了
-                if (_allocated == _capacity)
-                {
-                    writer = null;
-                    return false;
-                }
-
-                bytes = new byte[Info.ByteLength];
+                // 先在锁内占下名额，大数组在锁外分配，避免归还槽位的线程被长时间阻塞。
                 _allocated++;
             }
-
-            writer = new FrameWriter(Info, bytes, Return);
-            return true;
         }
+
+        if (bytes == null)
+        {
+            try
+            {
+                bytes = new byte[Info.ByteLength];
+            }
+            catch
+            {
+                lock (_gate)
+                {
+                    _allocated--;
+                }
+
+                throw;
+            }
+        }
+        else
+        {
+            // 复用的槽位在锁外清零：此时它只属于本次租用，不会被其他线程看到。
+            Array.Clear(bytes, 0, bytes.Length);
+        }
+
+        writer = new FrameWriter(Info, bytes, Return);
+        return true;
     }
 
     private void Return(byte[] bytes)

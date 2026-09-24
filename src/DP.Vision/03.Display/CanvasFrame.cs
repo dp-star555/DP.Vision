@@ -16,8 +16,7 @@ public sealed class CanvasFrame : IDisposable
     public CanvasFrame(string frameId, long sequence, IImageSource image, GeometryOverlay? overlay = null)
     {
         if (
-            string.IsNullOrWhiteSpace(frameId)
-            || frameId.Length > 256
+            !Identity.IsValid(frameId)
             || sequence < 0
             || overlay != null && overlay.FrameId != frameId
         )

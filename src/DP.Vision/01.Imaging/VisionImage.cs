@@ -9,6 +9,6 @@ public static class VisionImage
     /// <returns>由调用方释放的图像源；检测、显示可以各自在内部保留独立租约。</returns>
     public static IImageSource CopyFrom(ImageInfo info, byte[] pixels)
     {
-        return new MemoryImageSource(ImageBuffer.CopyFrom(info, pixels));
+        return MemoryImageSource.CopyFrom(info, pixels);
     }
 }
