@@ -20,12 +20,17 @@ public static class ContourLod
     {
         if (contour == null)
         {
-            throw new ArgumentNullException(nameof(contour));
+            throw new ArgumentNullException(nameof(contour), "轮廓不能为空。");
         }
 
-        if (!PointD.Valid(tolerance) || tolerance < 0 || maximumDistanceChecks < 1)
+        if (!PointD.Valid(tolerance) || tolerance < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(tolerance));
+            throw new ArgumentOutOfRangeException(nameof(tolerance), "简化容差必须是非负有限值。");
+        }
+
+        if (maximumDistanceChecks < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumDistanceChecks), "距离计算次数上限必须大于0。");
         }
 
         var p = contour.Points;
@@ -36,22 +41,22 @@ public static class ContourLod
 
         var keep = new bool[p.Count];
         keep[0] = keep[p.Count - 1] = true;
-        var stack = new Stack<Tuple<int, int>>();
-        stack.Push(Tuple.Create(0, p.Count - 1));
+        var stack = new Stack<(int First, int Last)>();
+        stack.Push((0, p.Count - 1));
         int checks = 0;
         while (stack.Count > 0)
         {
             var range = stack.Pop();
             double max = tolerance * tolerance;
             int index = -1;
-            for (int i = range.Item1 + 1; i < range.Item2; i++)
+            for (int i = range.First + 1; i < range.Last; i++)
             {
                 if (++checks > maximumDistanceChecks)
                 {
                     return p;
                 }
 
-                double d = GeometryMath.DistanceSquared(p[i], p[range.Item1], p[range.Item2]);
+                double d = GeometryMath.DistanceSquared(p[i], p[range.First], p[range.Last]);
                 if (d > max)
                 {
                     max = d;
@@ -62,8 +67,8 @@ public static class ContourLod
             if (index >= 0)
             {
                 keep[index] = true;
-                stack.Push(Tuple.Create(range.Item1, index));
-                stack.Push(Tuple.Create(index, range.Item2));
+                stack.Push((range.First, index));
+                stack.Push((index, range.Last));
             }
         }
 

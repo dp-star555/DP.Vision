@@ -14,30 +14,35 @@ public sealed class GeometryOverlay
     {
         if (!Identity.IsValid(frameId))
         {
-            throw new ArgumentException("Frame identity required.");
+            throw new ArgumentException("帧标识不能为空白，且不得超过256个字符。", nameof(frameId));
         }
 
-        var input = layers?.ToArray() ?? throw new ArgumentNullException(nameof(layers));
+        var input = layers?.ToArray() ?? throw new ArgumentNullException(nameof(layers), "图层集合不能为空。");
         if (input.Any(l => l == null))
         {
-            throw new ArgumentException("Null layer.");
+            throw new ArgumentException("图层集合不能包含空项。", nameof(layers));
         }
 
         var copy = input.OrderBy(l => l.Order).ToArray();
-        if (
-            copy.Length > 128
-            || copy.Select(l => l.Id).Distinct(StringComparer.Ordinal).Count() != copy.Length
-            || copy.Sum(l => (long)l.Visuals.Count) > 10000
-        )
+        if (copy.Length > DisplayLimits.MaxLayers)
         {
-            throw new ArgumentException("Invalid layers.");
+            throw new ArgumentException("叠加图层不得超过128个。", nameof(layers));
         }
 
-        long size = copy.SelectMany(l => l.Visuals)
-            .Sum(v => v.Geometry.ElementCount);
-        if (size > 2000000)
+        if (copy.Select(l => l.Id).Distinct(StringComparer.Ordinal).Count() != copy.Length)
         {
-            throw new ArgumentException("Overlay exceeds geometry budget.");
+            throw new ArgumentException("图层标识必须唯一。", nameof(layers));
+        }
+
+        if (copy.Sum(l => (long)l.Visuals.Count) > DisplayLimits.MaxVisuals)
+        {
+            throw new ArgumentException("叠加显示项总数不得超过10000个。", nameof(layers));
+        }
+
+        long size = copy.SelectMany(l => l.Visuals).Sum(v => v.Geometry.ElementCount);
+        if (size > DisplayLimits.MaxOverlayElements)
+        {
+            throw new ArgumentException("叠加几何元素总数超过2000000的预算。", nameof(layers));
         }
 
         FrameId = frameId;

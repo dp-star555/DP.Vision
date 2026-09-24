@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace DP.Vision;
 
 /// <summary>原生画布适配器使用的显式字节预算LRU缓存，逐出条目时释放资源。</summary>
-public sealed partial class RenderCache<T> : IDisposable
+public sealed class RenderCache<T> : IDisposable
     where T : class
 {
     private readonly Dictionary<string, LinkedListNode<Entry>> _entries =
@@ -20,11 +20,11 @@ public sealed partial class RenderCache<T> : IDisposable
     {
         if (budget < 1)
         {
-            throw new ArgumentOutOfRangeException(nameof(budget));
+            throw new ArgumentOutOfRangeException(nameof(budget), "缓存预算必须大于0。");
         }
 
         _budget = budget;
-        _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose));
+        _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose), "资源释放函数不能为空。");
     }
 
     /// <summary>当前计入缓存的载荷字节数。</summary>
@@ -55,9 +55,19 @@ public sealed partial class RenderCache<T> : IDisposable
     /// <returns>是否成功接管；单条目超过预算时返回false。</returns>
     public bool Add(string key, T value, long bytes)
     {
-        if (string.IsNullOrEmpty(key) || value == null || bytes < 0)
+        if (string.IsNullOrEmpty(key))
         {
-            throw new ArgumentException("Invalid cache item.");
+            throw new ArgumentException("缓存键不能为空。", nameof(key));
+        }
+
+        if (value == null)
+        {
+            throw new ArgumentException("缓存资源不能为空。", nameof(value));
+        }
+
+        if (bytes < 0)
+        {
+            throw new ArgumentException("缓存字节数不能为负数。", nameof(bytes));
         }
 
         if (bytes > _budget)
@@ -67,7 +77,7 @@ public sealed partial class RenderCache<T> : IDisposable
 
         if (_entries.ContainsKey(key))
         {
-            throw new ArgumentException("Duplicate cache key.");
+            throw new ArgumentException("缓存键已存在。", nameof(key));
         }
 
         while (Bytes + bytes > _budget && _lru.Last != null)

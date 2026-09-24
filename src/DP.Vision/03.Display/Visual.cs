@@ -12,13 +12,18 @@ public sealed class Visual
     /// <param name = "caption">可选标题，最长4096字符。</param>
     public Visual(string id, Geometry geometry, uint argb = VisionColors.Rose, string? caption = null)
     {
-        if (!Identity.IsValid(id) || caption?.Length > 4096)
+        if (!Identity.IsValid(id))
         {
-            throw new ArgumentException("Invalid visual identity/caption.");
+            throw new ArgumentException("显示项标识不能为空白，且不得超过256个字符。", nameof(id));
+        }
+
+        if (caption?.Length > 4096)
+        {
+            throw new ArgumentException("显示标题不得超过4096个字符。", nameof(caption));
         }
 
         Id = id;
-        Geometry = geometry ?? throw new ArgumentNullException(nameof(geometry));
+        Geometry = geometry ?? throw new ArgumentNullException(nameof(geometry), "显示几何不能为空。");
         Argb = argb;
         Caption = caption;
     }

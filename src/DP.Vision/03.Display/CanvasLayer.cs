@@ -23,19 +23,32 @@ public sealed class CanvasLayer
         string? name = null
     )
     {
-        if (string.IsNullOrWhiteSpace(id) || !Enum.IsDefined(typeof(ELayerKind), kind))
+        if (!Identity.IsValid(id))
         {
-            throw new ArgumentException("Invalid layer.");
+            throw new ArgumentException("图层标识不能为空白，且不得超过256个字符。", nameof(id));
         }
 
-        var copy = visuals?.ToArray() ?? throw new ArgumentNullException(nameof(visuals));
-        if (copy.Length > 10000 || copy.Any(v => v == null))
+        if (!Enum.IsDefined(typeof(ELayerKind), kind))
         {
-            throw new ArgumentException("Invalid visuals.");
+            throw new ArgumentException("未定义的图层类别。", nameof(kind));
+        }
+
+        var copy = visuals?.ToArray() ?? throw new ArgumentNullException(nameof(visuals), "显示项集合不能为空。");
+        if (copy.Length > DisplayLimits.MaxVisuals)
+        {
+            throw new ArgumentException("单个图层的显示项不得超过10000个。", nameof(visuals));
+        }
+
+        if (copy.Any(v => v == null))
+        {
+            throw new ArgumentException("显示项集合不能包含空项。", nameof(visuals));
         }
 
         if (name != null && !Identity.IsValid(name))
+        {
             throw new ArgumentException("图层显示名称不能为空白，且不得超过256个字符。", nameof(name));
+        }
+
         Id = id;
         Name = name ?? id;
         Kind = kind;

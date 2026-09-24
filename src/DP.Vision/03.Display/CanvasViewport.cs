@@ -18,8 +18,7 @@ public sealed class CanvasViewport
     /// <param name = "clientHeight">客户区高度，单位为控件像素或DIP。</param>
     public void Fit(int width, int height, double clientWidth, double clientHeight)
     {
-        Scale = Math.Max(
-            1.0 / 1024,
+        Scale = Clamp(
             Math.Min(Math.Max(1, clientWidth - 24) / width, Math.Max(1, clientHeight - 24) / height)
         );
         Origin = new PointD((clientWidth - width * Scale) / 2, (clientHeight - height * Scale) / 2);
@@ -35,7 +34,7 @@ public sealed class CanvasViewport
             throw new ArgumentOutOfRangeException(nameof(factor));
         }
 
-        double next = Math.Max(1.0 / 1024, Math.Min(128, Scale * factor)),
+        double next = Clamp(Scale * factor),
             ratio = next / Scale;
         Origin = new PointD(
             anchor.X - (anchor.X - Origin.X) * ratio,
@@ -58,6 +57,12 @@ public sealed class CanvasViewport
     public PointD ToImage(PointD point)
     {
         return new PointD((point.X - Origin.X) / Scale, (point.Y - Origin.Y) / Scale);
+    }
+
+    // 适配与缩放共用同一范围，避免适配后的比例超出缩放上限。
+    private static double Clamp(double scale)
+    {
+        return Math.Max(DisplayLimits.MinScale, Math.Min(DisplayLimits.MaxScale, scale));
     }
 
     /// <summary>计算客户区对应的可见原图范围。</summary>
