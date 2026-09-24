@@ -213,11 +213,7 @@ public sealed class RoiEditor
         }
 
         var points = contour.Points.ToList();
-        bool repeated =
-            contour.Closed
-            && points.Count > 1
-            && points[0].X == points[points.Count - 1].X
-            && points[0].Y == points[points.Count - 1].Y;
+        bool repeated = contour.RepeatsFirstPoint;
         if (repeated)
         {
             points.RemoveAt(points.Count - 1);
@@ -482,7 +478,7 @@ public sealed class RoiEditor
             {
                 _preview = _handle.HasValue
                     ? ChangeHandle(_original, _handle.Value, point)
-                    : Translate(_original.Shape, point.X - _start.Value.X, point.Y - _start.Value.Y);
+                    : _original.Shape.Translate(point.X - _start.Value.X, point.Y - _start.Value.Y);
                 _changedGesture = !Same(_start.Value, point);
             }
             else
@@ -831,53 +827,6 @@ public sealed class RoiEditor
         return roi.Shape is RectangleGeometry
             ? (Geometry)new RectangleGeometry(center, width, height, angle)
             : new EllipseGeometry(center, width / 2, height / 2, angle);
-    }
-
-    private static Geometry Translate(Geometry shape, double dx, double dy)
-    {
-        if (shape is RectangleGeometry r)
-        {
-            return new RectangleGeometry(
-                new PointD(r.Center.X + dx, r.Center.Y + dy),
-                r.Width,
-                r.Height,
-                r.Angle
-            );
-        }
-
-        if (shape is EllipseGeometry e)
-        {
-            return new EllipseGeometry(
-                new PointD(e.Center.X + dx, e.Center.Y + dy),
-                e.RadiusX,
-                e.RadiusY,
-                e.Angle
-            );
-        }
-
-        if (shape is ContourGeometry c)
-        {
-            return new ContourGeometry(
-                c.Points.Select(p => new PointD(p.X + dx, p.Y + dy)),
-                c.Closed,
-                c.Filled
-            );
-        }
-
-        if (shape is RegionGeometry region)
-        {
-            int x = (int)Math.Round(dx),
-                y = (int)Math.Round(dy);
-            return new RegionGeometry(
-                region.Runs.Select(run => new RegionRun(
-                    checked(run.Row + y),
-                    checked(run.Start + x),
-                    checked(run.EndExclusive + x)
-                ))
-            );
-        }
-
-        throw new NotSupportedException();
     }
 
     private static PointD World(PointD center, double angle, double x, double y)

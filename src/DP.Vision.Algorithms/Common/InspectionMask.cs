@@ -21,32 +21,35 @@ public static class InspectionMask
         if ((long)width * height > 16777216) throw new InvalidOperationException("Inspection mask exceeds 16M pixel budget.");
         var included = include.ToArray(); var excluded = exclude.ToArray();
         if (included.Length + excluded.Length > 512) throw new ArgumentException("Too many inspection shapes.");
-        var pixels = new byte[width * height];
-        if (included.Length == 0) for (int i = 0; i < pixels.Length; i++) pixels[i] = 1;
-        foreach (var item in included.Select(g => new { Shape = g, Value = (byte)1 }).Concat(excluded.Select(g => new { Shape = g, Value = (byte)0 })))
+        // 先求全部包含形状的并集（没有包含形状时以整幅图为基底），再逐个扣除排除形状；
+        // 直接在游程上运算，不分配整幅图大小的临时掩码。
+        RegionGeometry? result = null;
+        if (included.Length == 0)
         {
-            var region = RegionRasterizer.Rasterize(item.Shape, width, height, 16777216, token);
-            foreach (var run in region.Runs)
-            {
-                token.ThrowIfCancellationRequested();
-                for (int x = run.Start; x < run.EndExclusive; x++) pixels[run.Row * width + x] = item.Value;
-            }
+            result = new RegionGeometry(FullRows(width, height));
         }
-        var runs = new List<RegionRun>();
+
+        foreach (var shape in included)
+        {
+            var region = RegionRasterizer.Rasterize(shape, width, height, 16777216, token);
+            result = result == null ? region : result.Union(region, token);
+        }
+
+        foreach (var shape in excluded)
+        {
+            var hole = RegionRasterizer.Rasterize(shape, width, height, 16777216, token);
+            result = result!.Subtract(hole, token);
+        }
+
+        return result!;
+    }
+
+    private static IEnumerable<RegionRun> FullRows(int width, int height)
+    {
         for (int y = 0; y < height; y++)
         {
-            token.ThrowIfCancellationRequested();
-            int x = 0;
-            while (x < width)
-            {
-                if (pixels[y * width + x] == 0) { x++; continue; }
-                int start = x++;
-                while (x < width && pixels[y * width + x] != 0) x++;
-                if (runs.Count == 2000000) throw new InvalidOperationException("Inspection mask exceeds run budget.");
-                runs.Add(new RegionRun(y, start, x));
-            }
+            yield return new RegionRun(y, 0, width);
         }
-        return new RegionGeometry(runs);
     }
 
     /// <summary>验证外部Region的每条游程都在原图内，不静默裁剪。</summary>

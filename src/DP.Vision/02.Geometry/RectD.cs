@@ -3,7 +3,7 @@ using System;
 namespace DP.Vision;
 
 /// <summary>连续的半开矩形范围；允许零宽或零高，以表示点、线的外接范围。</summary>
-public readonly struct RectD
+public readonly struct RectD : IEquatable<RectD>
 {
     /// <summary>创建有限的原图范围；坐标、尺寸和右下端点均不得超出支持范围。</summary>
     /// <param name = "x">左边界原图坐标。</param>
@@ -12,18 +12,24 @@ public readonly struct RectD
     /// <param name = "height">非负高度，单位为原图像素。</param>
     public RectD(double x, double y, double width, double height)
     {
-        if (
-            !PointD.Valid(x)
-            || !PointD.Valid(y)
-            || !PointD.Valid(width)
-            || !PointD.Valid(height)
-            || width < 0
-            || height < 0
-            || !PointD.Valid(x + width)
-            || !PointD.Valid(y + height)
-        )
+        if (!PointD.Valid(x))
+        {
+            throw new ArgumentOutOfRangeException(nameof(x));
+        }
+
+        if (!PointD.Valid(y))
+        {
+            throw new ArgumentOutOfRangeException(nameof(y));
+        }
+
+        if (!PointD.Valid(width) || width < 0 || !PointD.Valid(x + width))
         {
             throw new ArgumentOutOfRangeException(nameof(width));
+        }
+
+        if (!PointD.Valid(height) || height < 0 || !PointD.Valid(y + height))
+        {
+            throw new ArgumentOutOfRangeException(nameof(height));
         }
 
         X = x;
@@ -68,5 +74,50 @@ public readonly struct RectD
     public bool Contains(PointD p)
     {
         return p.X >= X && p.X < Right && p.Y >= Y && p.Y < Bottom;
+    }
+
+    /// <summary>位置与尺寸都相等时相等。</summary>
+    /// <param name="other">另一个值。</param>
+    /// <returns>是否相等。</returns>
+    public bool Equals(RectD other)
+    {
+        return X == other.X && Y == other.Y && Width == other.Width && Height == other.Height;
+    }
+
+    /// <inheritdoc/>
+    public override bool Equals(object? obj)
+    {
+        return obj is RectD other && Equals(other);
+    }
+
+    /// <inheritdoc/>
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = X.GetHashCode();
+            hash = (hash * 397) ^ Y.GetHashCode();
+            hash = (hash * 397) ^ Width.GetHashCode();
+            hash = (hash * 397) ^ Height.GetHashCode();
+            return hash;
+        }
+    }
+
+    /// <summary>值相等比较。</summary>
+    /// <param name="left">左值。</param>
+    /// <param name="right">右值。</param>
+    /// <returns>是否相等。</returns>
+    public static bool operator ==(RectD left, RectD right)
+    {
+        return left.Equals(right);
+    }
+
+    /// <summary>值不等比较。</summary>
+    /// <param name="left">左值。</param>
+    /// <param name="right">右值。</param>
+    /// <returns>是否不等。</returns>
+    public static bool operator !=(RectD left, RectD right)
+    {
+        return !left.Equals(right);
     }
 }

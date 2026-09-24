@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace DP.Vision;
 
@@ -16,9 +15,20 @@ internal static class GeometryMath
 
     internal static RectD Bounds(IReadOnlyList<PointD> points)
     {
-        double x = points.Min(p => p.X),
-            y = points.Min(p => p.Y);
-        return new RectD(x, y, points.Max(p => p.X) - x, points.Max(p => p.Y) - y);
+        double left = double.PositiveInfinity,
+            top = double.PositiveInfinity,
+            right = double.NegativeInfinity,
+            bottom = double.NegativeInfinity;
+        for (int i = 0; i < points.Count; i++)
+        {
+            var p = points[i];
+            left = Math.Min(left, p.X);
+            top = Math.Min(top, p.Y);
+            right = Math.Max(right, p.X);
+            bottom = Math.Max(bottom, p.Y);
+        }
+
+        return new RectD(left, top, right - left, bottom - top);
     }
 
     internal static double DistanceSquared(PointD p, PointD a, PointD b)

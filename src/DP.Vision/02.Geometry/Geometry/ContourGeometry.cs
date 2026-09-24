@@ -62,4 +62,20 @@ public sealed class ContourGeometry : Geometry
 
         return Filled && inside;
     }
+
+    /// <summary>闭合轮廓是否在末尾重复了首点。两种写法都合法，编辑顶点时需要保持原写法。</summary>
+    public bool RepeatsFirstPoint =>
+        Closed
+        && Points.Count > 1
+        && Points[0].X == Points[Points.Count - 1].X
+        && Points[0].Y == Points[Points.Count - 1].Y;
+
+    /// <inheritdoc/>
+    public override long ElementCount => Points.Count;
+
+    /// <inheritdoc/>
+    public override Geometry Translate(double dx, double dy)
+    {
+        return new ContourGeometry(Points.Select(p => new PointD(p.X + dx, p.Y + dy)), Closed, Filled);
+    }
 }
