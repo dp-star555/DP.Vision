@@ -68,6 +68,8 @@
 | `OpenCvCharacterSegmenter` | [src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs](src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs) |
 | `OwnedPatches` | [src/DP.Vision.OpenCv/Text/Segmentation/OwnedPatches.cs](src/DP.Vision.OpenCv/Text/Segmentation/OwnedPatches.cs) |
 | `ThinBridgeCandidates` | [src/DP.Vision.OpenCv/Text/Segmentation/ThinBridgeCandidates.cs](src/DP.Vision.OpenCv/Text/Segmentation/ThinBridgeCandidates.cs) |
+| `CanvasCore` | [src/DP.Vision.UI/Canvas/CanvasCore.cs](src/DP.Vision.UI/Canvas/CanvasCore.cs) |
+| `CaptionLayout` | [src/DP.Vision.UI/Canvas/CaptionLayout.cs](src/DP.Vision.UI/Canvas/CaptionLayout.cs) |
 | `IVisionCanvas` | [src/DP.Vision.UI/Canvas/IVisionCanvas.cs](src/DP.Vision.UI/Canvas/IVisionCanvas.cs) |
 | `ERoiConstraint` | [src/DP.Vision.UI/Roi/Definitions/ERoiConstraint.cs](src/DP.Vision.UI/Roi/Definitions/ERoiConstraint.cs) |
 | `ERoiPurpose` | [src/DP.Vision.UI/Roi/Definitions/ERoiPurpose.cs](src/DP.Vision.UI/Roi/Definitions/ERoiPurpose.cs) |
@@ -80,11 +82,9 @@
 | `RoiEditor` | [src/DP.Vision.UI/Roi/Editing/RoiEditor.cs](src/DP.Vision.UI/Roi/Editing/RoiEditor.cs) |
 | `RoiHandle` | [src/DP.Vision.UI/Roi/Editing/RoiHandle.cs](src/DP.Vision.UI/Roi/Editing/RoiHandle.cs) |
 | `RoiDocumentXml` | [src/DP.Vision.UI/Roi/Persistence/RoiDocumentXml.cs](src/DP.Vision.UI/Roi/Persistence/RoiDocumentXml.cs) |
-| `VisionCanvasControl.PathItem` | [src/DP.Vision.Winform/Canvas/Internal/VisionCanvasControl/PathItem.cs](src/DP.Vision.Winform/Canvas/Internal/VisionCanvasControl/PathItem.cs) |
-| `VisionCanvasControl.Tile` | [src/DP.Vision.Winform/Canvas/Internal/VisionCanvasControl/Tile.cs](src/DP.Vision.Winform/Canvas/Internal/VisionCanvasControl/Tile.cs) |
+| `VisionCanvasControl.Tile` | [src/DP.Vision.Winform/Canvas/VisionCanvasControl.cs](src/DP.Vision.Winform/Canvas/VisionCanvasControl.cs) |
 | `VisionCanvasControl` | [src/DP.Vision.Winform/Canvas/VisionCanvasControl.cs](src/DP.Vision.Winform/Canvas/VisionCanvasControl.cs) |
-| `VisionCanvasControl.PathItem` | [src/DP.Vision.WPF/Canvas/Internal/VisionCanvasControl/PathItem.cs](src/DP.Vision.WPF/Canvas/Internal/VisionCanvasControl/PathItem.cs) |
-| `VisionCanvasControl.Tile` | [src/DP.Vision.WPF/Canvas/Internal/VisionCanvasControl/Tile.cs](src/DP.Vision.WPF/Canvas/Internal/VisionCanvasControl/Tile.cs) |
+| `VisionCanvasControl.Tile` | [src/DP.Vision.WPF/Canvas/VisionCanvasControl.cs](src/DP.Vision.WPF/Canvas/VisionCanvasControl.cs) |
 | `VisionCanvasControl` | [src/DP.Vision.WPF/Canvas/VisionCanvasControl.cs](src/DP.Vision.WPF/Canvas/VisionCanvasControl.cs) |
 | `ZxingBarcodeDecoder` | [src/DP.Vision.Zxing/Codes/ZxingBarcodeDecoder.cs](src/DP.Vision.Zxing/Codes/ZxingBarcodeDecoder.cs) |
 | `CanvasFrame` | [src/DP.Vision/Display/CanvasFrame.cs](src/DP.Vision/Display/CanvasFrame.cs) |

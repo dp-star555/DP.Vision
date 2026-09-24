@@ -7,6 +7,9 @@ namespace DP.Vision;
 /// <summary>具有工作量上限的显示专用轮廓简化；闭合、填充轮廓保持原始点，避免拓扑变化。</summary>
 public static class ContourLod
 {
+    /// <summary>默认的距离计算次数上限；画布按每帧轮廓数均分这一预算。</summary>
+    public const int DefaultMaximumDistanceChecks = 4000000;
+
     /// <summary>生成保留端点的显示点序列；达到工作预算时返回原始点，不输出未经保证的简化结果。</summary>
     /// <param name = "contour">不可变原始轮廓，不会被修改。</param>
     /// <param name = "tolerance">允许的顶点到简化线段距离，单位为原图像素；0禁用简化。</param>
@@ -15,7 +18,7 @@ public static class ContourLod
     public static IReadOnlyList<PointD> Simplify(
         ContourGeometry contour,
         double tolerance,
-        int maximumDistanceChecks = 4000000
+        int maximumDistanceChecks = DefaultMaximumDistanceChecks
     )
     {
         if (contour == null)
