@@ -326,6 +326,18 @@ public sealed class RoiEditor
         Notify();
     }
 
+    /// <summary>
+    /// 视口平移或缩放前调用：只取消进行中的拖动手势（移动、缩放、旋转或拖框创建）。
+    /// 逐点绘制中的多边形/折线顶点使用原图坐标，不受视口变化影响，予以保留。
+    /// </summary>
+    public void CancelDrag()
+    {
+        if (_start.HasValue)
+        {
+            Cancel();
+        }
+    }
+
     private void ResetGesture()
     {
         _start = null;

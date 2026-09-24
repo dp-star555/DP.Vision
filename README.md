@@ -166,7 +166,7 @@ dotnet build DP.Vision.sln -c Release
 dotnet samples/DP.Vision.Demo/bin/Release/net8.0-windows/DP.Vision.Demo.dll --wpf
 ```
 
-示例提供分层开关、LOD开关、滚轮缩放、中键/右键平移、Home/适应、1:1、原始几何拾取，以及ROI工具选择、控制点、列表、启用/排除、撤销重做和XML保存/加载。详见[ROI_EDITOR.md](ROI_EDITOR.md)。已完成轮廓支持顶点插入/删除及独立撤销；复杂Region拓扑编辑、多选等高级功能仍未交付。
+示例提供分层开关、LOD开关、滚轮缩放、中键/右键拖动平移、Home/适应、1:1、原始几何拾取，以及ROI工具选择、控制点、列表、启用/排除、撤销重做和XML保存/加载。详见[ROI_EDITOR.md](ROI_EDITOR.md)。已完成轮廓支持顶点插入/删除及独立撤销；复杂Region拓扑编辑、多选等高级功能仍未交付。
 
 ## 与标签检测的关系
 

@@ -28,6 +28,7 @@ public sealed partial class VisionCanvasControl : Control, IVisionCanvas
     private readonly Dictionary<string, bool> _visibility = new Dictionary<string, bool>();
     private CanvasOptions _options = new CanvasOptions();
     private Point? _pan;
+    private Point? _rightDown;
     private bool _fit = true;
     private readonly int _thread = Environment.CurrentManagedThreadId;
     private RoiEditor? _editor;
@@ -372,6 +373,7 @@ public sealed partial class VisionCanvasControl : Control, IVisionCanvas
         }
 
         var visible = Viewport.Visible(Width, Height);
+        var captions = new CaptionLayout();
         foreach (var layer in ActiveLayers().Where(LayerVisible))
         {
             foreach (var visual in layer.Visuals)
@@ -429,9 +431,14 @@ public sealed partial class VisionCanvasControl : Control, IVisionCanvas
 
                 if (!string.IsNullOrEmpty(visual.Caption))
                 {
+                    // 深色底衬保证文字在任意底色（包括同色Region）上可读；重叠标注依次下移。
                     var box = Screen(visual.Geometry.Bounds);
+                    var size = g.MeasureString(visual.Caption, Font);
+                    float top = (float)captions.Place(box.X, box.Y, size.Width, size.Height);
+                    using var back = new SolidBrush(Color.FromArgb(160, 0, 0, 0));
+                    g.FillRectangle(back, box.X, top, size.Width, size.Height);
                     using var brush = new SolidBrush(Color.FromArgb(unchecked((int)visual.Argb)));
-                    g.DrawString(visual.Caption, Font, brush, box.X, box.Y);
+                    g.DrawString(visual.Caption, Font, brush, box.X, top);
                 }
             }
         }
@@ -542,9 +549,12 @@ public sealed partial class VisionCanvasControl : Control, IVisionCanvas
         );
         var bitmap = CreateBitmap(width, height, PixelFormat.Format8bppIndexed);
         var palette = bitmap.Palette;
+        // 与填充轮廓一致使用1/3不透明度，底图仍可见；成员像素仍按原始游程逐像素绘制。
+        var color = Color.FromArgb(unchecked((int)visual.Argb));
+        var fill = Color.FromArgb(color.A / 3, color);
         for (int i = 0; i < 256; i++)
         {
-            palette.Entries[i] = i == 255 ? Color.FromArgb(unchecked((int)visual.Argb)) : Color.Transparent;
+            palette.Entries[i] = i == 255 ? fill : Color.Transparent;
         }
 
         bitmap.Palette = palette;
@@ -680,7 +690,7 @@ public sealed partial class VisionCanvasControl : Control, IVisionCanvas
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
-        _editor?.Cancel();
+        _editor?.CancelDrag();
         _fit = false;
         Viewport.Zoom(Math.Pow(1.2, e.Delta / 120.0), new PointD(e.X, e.Y));
         Invalidate();
@@ -693,9 +703,10 @@ public sealed partial class VisionCanvasControl : Control, IVisionCanvas
         Focus();
         if (e.Button == MouseButtons.Middle || e.Button == MouseButtons.Right)
         {
-            _editor?.Cancel();
+            _editor?.CancelDrag();
             _fit = false;
             _pan = e.Location;
+            _rightDown = e.Button == MouseButtons.Right ? e.Location : (Point?)null;
             Capture = true;
             return;
         }
@@ -744,6 +755,20 @@ public sealed partial class VisionCanvasControl : Control, IVisionCanvas
             ProcessRoiPointer(ERoiPointerAction.Up, new PointD(e.X, e.Y));
         }
 
+        // 右键单击（未拖动平移）结束正在逐点绘制的多边形/折线，闭合到首点；没有待定顶点时Finish不做任何事。
+        if (e.Button == MouseButtons.Right && _rightDown.HasValue && _editor != null)
+        {
+            var drag = SystemInformation.DragSize;
+            if (
+                Math.Abs(e.X - _rightDown.Value.X) <= drag.Width
+                && Math.Abs(e.Y - _rightDown.Value.Y) <= drag.Height
+            )
+            {
+                _editor.Finish();
+            }
+        }
+
+        _rightDown = null;
         _pan = null;
         Capture = false;
     }
