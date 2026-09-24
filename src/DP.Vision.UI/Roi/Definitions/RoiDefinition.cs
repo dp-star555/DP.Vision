@@ -40,23 +40,28 @@ public sealed class RoiDefinition
         ERoiConstraint constraint
     )
     {
-        if (
-            string.IsNullOrWhiteSpace(id)
-            || id.Length > 256
-            || !Enum.IsDefined(typeof(ERoiPurpose), purpose)
-            || !Enum.IsDefined(typeof(ERoiConstraint), constraint)
-        )
+        if (string.IsNullOrWhiteSpace(id) || id.Length > 256)
         {
-            throw new ArgumentException("Invalid ROI.");
+            throw new ArgumentException("ROI标识不能为空白，且不得超过256个字符。", nameof(id));
         }
 
-        Shape = shape ?? throw new ArgumentNullException(nameof(shape));
+        if (!Enum.IsDefined(typeof(ERoiPurpose), purpose))
+        {
+            throw new ArgumentException("未定义的ROI用途。", nameof(purpose));
+        }
+
+        if (!Enum.IsDefined(typeof(ERoiConstraint), constraint))
+        {
+            throw new ArgumentException("未定义的ROI编辑约束。", nameof(constraint));
+        }
+
+        Shape = shape ?? throw new ArgumentNullException(nameof(shape), "ROI几何不能为空。");
         if (
             constraint == ERoiConstraint.Circle
             && (!(shape is EllipseGeometry circle) || circle.RadiusX != circle.RadiusY)
         )
         {
-            throw new ArgumentException("Circle constraint requires equal ellipse radii.");
+            throw new ArgumentException("圆形约束要求几何为两半径相等的椭圆。", nameof(constraint));
         }
 
         if (
@@ -65,7 +70,7 @@ public sealed class RoiDefinition
             && !(shape is EllipseGeometry ellipse && ellipse.Angle == 0)
         )
         {
-            throw new ArgumentException("Axis-aligned constraint requires a zero-angle rectangle/ellipse.");
+            throw new ArgumentException("轴对齐约束要求几何为角度为0的矩形或椭圆。", nameof(constraint));
         }
 
         Id = id;
@@ -89,7 +94,7 @@ public sealed class RoiDefinition
     {
         if (!Enabled)
         {
-            throw new InvalidOperationException("A disabled ROI cannot be submitted for inspection.");
+            throw new InvalidOperationException("已禁用的ROI不能提交检测。");
         }
 
         return RegionRasterizer.Rasterize(Shape, imageWidth, imageHeight, maximumWork, token);
