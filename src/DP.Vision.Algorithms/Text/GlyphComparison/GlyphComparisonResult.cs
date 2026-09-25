@@ -13,7 +13,7 @@ public sealed class GlyphComparisonResult : IDisposable
     /// <param name = "extra">多墨的归一化像素数，非负。</param>
     /// <param name = "actual">已对齐的实际字证据；构造时Retain。</param>
     /// <param name = "reference">归一化参考字证据；构造时Retain。</param>
-    /// <param name = "delta">容差过滤后的差异证据图；构造时Retain。</param>
+    /// <param name = "delta">差异证据图：深色为计入的缺墨/多墨，浅色为已忽略的边缘波动；构造时Retain。</param>
     public GlyphComparisonResult(
         EAlgorithmStatus status,
         string reasonCode,
