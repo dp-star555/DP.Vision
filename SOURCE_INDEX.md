@@ -66,6 +66,7 @@
 | `OpenCvGlyphComparer` | [src/DP.Vision.OpenCv/Text/GlyphComparison/OpenCvGlyphComparer.cs](src/DP.Vision.OpenCv/Text/GlyphComparison/OpenCvGlyphComparer.cs) |
 | `OpenCvTextLinePreprocessor` | [src/DP.Vision.OpenCv/Text/Recognition/OpenCvTextLinePreprocessor.cs](src/DP.Vision.OpenCv/Text/Recognition/OpenCvTextLinePreprocessor.cs) |
 | `OpenCvCharacterSegmenter` | [src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs](src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs) |
+| `CountGuidedCuts` | [src/DP.Vision.OpenCv/Text/Segmentation/CountGuidedCuts.cs](src/DP.Vision.OpenCv/Text/Segmentation/CountGuidedCuts.cs) |
 | `OwnedPatches` | [src/DP.Vision.OpenCv/Text/Segmentation/OwnedPatches.cs](src/DP.Vision.OpenCv/Text/Segmentation/OwnedPatches.cs) |
 | `ThinBridgeCandidates` | [src/DP.Vision.OpenCv/Text/Segmentation/ThinBridgeCandidates.cs](src/DP.Vision.OpenCv/Text/Segmentation/ThinBridgeCandidates.cs) |
 | `CanvasCore` | [src/DP.Vision.UI/Canvas/CanvasCore.cs](src/DP.Vision.UI/Canvas/CanvasCore.cs) |

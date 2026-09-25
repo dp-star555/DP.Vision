@@ -8,7 +8,7 @@ using PixelRect = DP.Vision.Algorithms.PixelBounds;
 
 namespace DP.Vision.OpenCv;
 
-/// <summary>通过空白和连通域归属进行测量，不按CTC峰值切字；只支持水平单行输入。</summary>
+/// <summary>通过空白和连通域归属进行测量；数量与字符数不一致时按字符数与字宽先验求最优切割（粘连处在最薄处切开、断字整体保留），不按CTC峰值切字；只支持水平单行输入。</summary>
 public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandidateSegmenter
 {
     /// <summary>不为凑齐OCR数量强行分割粘连墨迹；图块保留尚不能归属的内部噪点。</summary>
@@ -245,17 +245,72 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             }
         }
 
+        CountGuidedCuts.Result? guided = null;
+        int projectionGroups = runs.Count;
         if (count != tokens.Length)
         {
-            return Stop(
-                $"投影分组 {runs.Count}，连通域分组 {groups.Count}，文字字符 {tokens.Length}；未找到可靠的完整切割。可缩小ROI逐字裁取；不会强行等分凑数。",
-                count
-            );
+            // 数量对不上（粘连、断字、标点、噪点）时，按已知字符数求整行最优切割；
+            // 只接受切线不穿过半个字高以上墨迹、各字宽度未严重偏离的结果。
+            using var inkMask = new Mat(bounds.Height, bounds.Width, MatType.CV_8UC1, Scalar.All(0));
+            for (int y = 0; y < bounds.Height; y++)
+            {
+                for (int x = 0; x < bounds.Width; x++)
+                {
+                    if (keep[labels.At<int>(y, x)])
+                    {
+                        inkMask.Set(y, x, (byte)255);
+                    }
+                }
+            }
+
+            guided = CountGuidedCuts.Cut(inkMask, tokens, token);
+            if (
+                guided == null
+                || guided.WorstCrossing > MaximumGuidedCrossing
+                || guided.WorstWidth > MaximumGuidedWidth
+            )
+            {
+                return Stop(
+                    $"投影分组 {runs.Count}，连通域分组 {groups.Count}，文字字符 {tokens.Length}；"
+                        + (
+                            guided == null
+                                ? "按字符数求最优切割也没有得到每字都有墨迹的结果。"
+                                : $"按字符数求最优切割的结果不可靠（最大穿墨{guided.WorstCrossing:P0}字高、字宽最大偏离{guided.WorstWidth:P0}）。"
+                        )
+                        + "可缩小ROI逐字裁取；不会强行等分凑数。",
+                    count
+                );
+            }
+
+            // 转为各字墨迹范围：相邻字共用的切线仍是左右边界，空白处取空白中点。
+            runs = guided
+                .Pieces.Select(
+                    (p, i) =>
+                    {
+                        int a = p.Item1,
+                            b = p.Item2;
+                        while (a < b && !ColumnHasInk(inkMask, a))
+                        {
+                            a++;
+                        }
+
+                        while (b > a && !ColumnHasInk(inkMask, b - 1))
+                        {
+                            b--;
+                        }
+
+                        return Tuple.Create(a, b);
+                    }
+                )
+                .ToList();
+            count = runs.Count;
+            useComponents = false;
         }
 
         using var patches = new OwnedPatches();
         string basis =
-            reviewedSplit ? "thin_bridge_vertical_candidates"
+            guided != null ? "count_guided_cuts"
+            : reviewedSplit ? "thin_bridge_vertical_candidates"
             : useComponents ? "connected_component_ownership"
             : "vertical_white_gaps";
         using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(3, 3));
@@ -402,6 +457,21 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             );
         }
 
+        if (guided != null)
+        {
+            string detail =
+                $"原图投影{projectionGroups}组/连通域{groups.Count}组与{tokens.Length}个字符不一致，已按字符数与字宽先验求最优切割："
+                + $"{guided.BridgedCuts}处切过粘连墨迹（最多{guided.WorstCrossing:P0}字高），字宽最大偏离{guided.WorstWidth:P0}。"
+                + "断开的字按整体保留；切过粘连处的边缘差异属于切割而非印刷缺陷。";
+            return new CharacterSegmentation(
+                candidates ? "review_required" : "provisional",
+                candidates ? detail + "制作参考时须逐字复核。" : detail + "OCR身份不是业务真值。",
+                basis,
+                measuredCount,
+                patches.Detach()
+            );
+        }
+
         return reviewedSplit
             ? new CharacterSegmentation(
                 "review_required",
@@ -417,6 +487,25 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
                 count,
                 patches.Detach()
             );
+    }
+
+    /// <summary>按字符数最优切割时，单条切线允许穿过的最大墨迹比例（相对字高）。</summary>
+    private const double MaximumGuidedCrossing = .5;
+
+    /// <summary>按字符数最优切割时，单字墨迹宽度允许偏离预期宽度的最大比例。</summary>
+    private const double MaximumGuidedWidth = 1.2;
+
+    private static bool ColumnHasInk(Mat mask, int x)
+    {
+        for (int y = 0; y < mask.Rows; y++)
+        {
+            if (mask.At<byte>(y, x) != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>只切割明确声明的等格单元，不用于解决有歧义的物理分割。</summary>
