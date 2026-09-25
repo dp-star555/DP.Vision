@@ -92,6 +92,30 @@ public sealed class LinearQualityDepthTests
         StringAssert.Contains(defect.Message, "细条横贯断裂");
     }
 
+    /// <summary>
+    /// 灰度变浅只在去掉边缘带后内部仍有至少4像素的条上判定；更窄的条内部由成像模糊主导，
+    /// 同样的变浅不计入，二值化后的真实缺墨仍计入。
+    /// </summary>
+    [TestMethod]
+    public void GrayLossNeedsResolvableInterior()
+    {
+        var wide = Bars(8, 16);
+        Paint(wide, 69, 50, 6, 6, 110);
+        var loss = Defects(Inspect(wide)).Single();
+        Assert.AreEqual("barcode_ink_loss", loss.Code);
+
+        var narrow = Bars(4, 12);
+        Paint(narrow, 69, 50, 2, 6, 110);
+        Assert.IsEmpty(
+            Defects(Inspect(narrow)),
+            string.Join(";", Defects(Inspect(narrow)).Select(f => f.Message))
+        );
+
+        var voided = Bars(4, 12);
+        Paint(voided, 69, 50, 2, 6, 255);
+        Assert.AreEqual("barcode_missing_ink", Defects(Inspect(voided)).Single().Code);
+    }
+
     /// <summary>干净条码得到A级指示等级；最窄元素过细时不评级而不是判F。</summary>
     [TestMethod]
     public void ScanGradeIsReportedOrWithheld()

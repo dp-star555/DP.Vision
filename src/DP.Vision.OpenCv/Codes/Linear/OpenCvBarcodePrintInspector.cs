@@ -182,7 +182,8 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
 
         int intervals = 0,
             defects = 0,
-            thinElements = 0;
+            thinElements = 0,
+            grayUnmeasured = 0;
         int edge = options.EdgeTolerance;
         bool ink = true;
         int start = first;
@@ -216,7 +217,15 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
             }
 
             using var attenuation = new Mat(height, width, MatType.CV_8UC1, Scalar.All(0));
-            if (ink && options.DetectInkLoss)
+            // 去掉两侧边缘带后的内部不足MinimumGradedElement（同指示性扫描等级的最小元素要求）时，
+            // 内部反射率由成像模糊和像素相位主导，灰度起伏无法与印刷变浅区分：只按二值化缺墨/断裂判定。
+            bool grayMeasurable = width - 2 * edge >= MinimumGradedElement;
+            if (!grayMeasurable && ink)
+            {
+                grayUnmeasured++;
+            }
+
+            if (ink && options.DetectInkLoss && grayMeasurable)
             {
                 for (int col = start; col < end; col++)
                 {
@@ -412,7 +421,7 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
         findings.Add(
             new QualityFinding(
                 "barcode_print_scope",
-                $"已检查{intervals}个条/空隙区间，发现{defects}个超阈值墨迹缺陷；方向={(rotated ? "垂直" : "水平")}。只触及条/空隙边缘带（{edge}像素，含上下端）的差异视为印刷波动；深入内部的缺墨/多墨按完整面积计入。{thinElements}个细条/细空隙没有边缘带以外的内部，只检查横贯整条宽度的断裂。条内灰度损失检查={options.DetectInkLoss}；每列低分位墨色自参考不保证整条均匀变浅/缺失、绝对条宽、静区或ISO等级。",
+                $"已检查{intervals}个条/空隙区间，发现{defects}个超阈值墨迹缺陷；方向={(rotated ? "垂直" : "水平")}。只触及条/空隙边缘带（{edge}像素，含上下端）的差异视为印刷波动；深入内部的缺墨/多墨按完整面积计入。{thinElements}个细条/细空隙没有边缘带以外的内部，只检查二值化后横贯整条宽度的断裂。条内灰度损失检查={options.DetectInkLoss}，其中{grayUnmeasured}个条去掉边缘带后内部窄于{MinimumGradedElement}像素，灰度起伏无法与成像模糊区分，只按二值化缺墨判定；每列低分位墨色自参考不保证整条均匀变浅/缺失、绝对条宽、静区或ISO等级。",
                 EQualityFindingKind.Information,
                 bounds
             )
