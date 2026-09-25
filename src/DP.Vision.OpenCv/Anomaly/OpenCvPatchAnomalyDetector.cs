@@ -113,7 +113,8 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
 
         double threshold = options.Threshold ?? model.Threshold;
         if (
-            model.PatchSize != options.PatchSize
+            model.FeatureSource != PatchAnomalyModel.Handcrafted
+            || model.PatchSize != options.PatchSize
             || model.Dimensions != PatchFeatures.Dimensions(model.PatchSize)
         )
         {
@@ -125,7 +126,7 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                 {
                     new QualityFinding(
                         "patch_anomaly_model_mismatch",
-                        $"模型块大小{model.PatchSize}与参数{options.PatchSize}不一致，需重新训练。",
+                        $"模型（特征{model.FeatureSource}、块大小{model.PatchSize}）与本实现（手工特征、块大小{options.PatchSize}）不一致，需重新训练。",
                         EQualityFindingKind.Blocker
                     ),
                 },
@@ -191,72 +192,17 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
 
         // 裁图边缘一个块宽的范围只作上下文（1/2尺度上下文块在此范围内会伸出裁图）：
         // 内容被ROI截断时（如字顶贴边）形态与良品不同，但不是印刷缺陷。
-        int border = p;
-        using var scored = map.Clone();
-        if (scored.Rows > 2 * border && scored.Cols > 2 * border)
-        {
-            scored.RowRange(0, border).SetTo(0);
-            scored.RowRange(scored.Rows - border, scored.Rows).SetTo(0);
-            scored.ColRange(0, border).SetTo(0);
-            scored.ColRange(scored.Cols - border, scored.Cols).SetTo(0);
-        }
-
-        var findings = new List<QualityFinding>();
-        using var mask = new Mat();
-        Cv2.Threshold(scored, mask, threshold, 255, ThresholdTypes.Binary);
-        mask.ConvertTo(mask, MatType.CV_8U);
-        using var labels = new Mat();
-        using var stats = new Mat();
-        using var centroids = new Mat();
-        int count = Cv2.ConnectedComponentsWithStats(
-            mask,
-            labels,
-            stats,
-            centroids,
-            PixelConnectivity.Connectivity8
-        );
-        for (int c = 1; c < count; c++)
-        {
-            int area = stats.At<int>(c, (int)ConnectedComponentsTypes.Area);
-            if (area < options.MinimumArea)
-            {
-                continue;
-            }
-
-            var bounds = new PixelBounds(
-                stats.At<int>(c, (int)ConnectedComponentsTypes.Left),
-                stats.At<int>(c, (int)ConnectedComponentsTypes.Top),
-                stats.At<int>(c, (int)ConnectedComponentsTypes.Width),
-                stats.At<int>(c, (int)ConnectedComponentsTypes.Height)
-            );
-            using var region = new Mat(scored, CvPixels.Rect(bounds));
-            Cv2.MinMaxLoc(region, out _, out double peak);
-            findings.Add(
-                new QualityFinding(
-                    "patch_anomaly",
-                    $"局部异常：最大得分{peak:F3}（阈值{threshold:F3}，{peak / threshold:F2}倍），面积{area}像素²；与良品中所有局部块都不相似。",
-                    EQualityFindingKind.Defect,
-                    bounds,
-                    area
-                )
-            );
-        }
-
         double maximum = scores.DefaultIfEmpty(0).Max();
-        findings.Add(
-            new QualityFinding(
-                "patch_anomaly_scope",
-                $"已评分{query.Count}个非纸白局部块（块{p}像素、步长{options.Stride}），记忆库{model.Count}块/{model.TrainingImages}张良品；"
-                    + $"最大得分{maximum:F3}，阈值{threshold:F3}（{(options.Threshold == null ? model.Calibration : "显式设置")}）。"
-                    + $"只能发现与良品不相似的局部形态；良品中未出现过的字形也会被视为异常；裁图边缘{border}像素内只作上下文，不单独报异常。",
-                EQualityFindingKind.Information
-            )
+        return AnomalyMap.Result(
+            map,
+            threshold,
+            p,
+            options.MinimumArea,
+            maximum,
+            $"已评分{query.Count}个局部块（块{p}像素、步长{options.Stride}），记忆库{model.Count}块/{model.TrainingImages}张良品；"
+                + $"最大得分{maximum:F3}，阈值{threshold:F3}（{(options.Threshold == null ? model.Calibration : "显式设置")}）。"
+                + $"只能发现与良品不相似的局部形态；良品中未出现过的字形也会被视为异常；裁图边缘{p}像素内只作上下文，不单独报异常。"
         );
-
-        using var heat = new Mat();
-        map.ConvertTo(heat, MatType.CV_8U, 128.0 / threshold);
-        using var heatImage = CvPixels.Buffer(heat);
-        return new PatchAnomalyResult(EAlgorithmStatus.Completed, maximum, threshold, findings, heatImage);
     }
 
     /// <summary>

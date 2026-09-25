@@ -10,11 +10,11 @@ namespace DP.Vision.Algorithms.Tests;
 [TestClass]
 public sealed class PatchAnomalyTests
 {
-    private const int Width = 160,
+    internal const int Width = 160,
         Height = 48;
 
     /// <summary>若干“笔画”（竖、横、L形），整体平移shift像素，叠加确定性噪声。</summary>
-    private static byte[] Strokes(int shift, int seed)
+    internal static byte[] Strokes(int shift, int seed)
     {
         var random = new Random(seed);
         var pixels = new byte[Width * Height];
@@ -45,7 +45,7 @@ public sealed class PatchAnomalyTests
         return pixels;
     }
 
-    private static IImageSource Image(byte[] pixels)
+    internal static IImageSource Image(byte[] pixels)
     {
         return VisionImage.CopyFrom(new ImageInfo(Width, Height, EPixelLayout.Gray8), pixels);
     }
@@ -160,7 +160,10 @@ public sealed class PatchAnomalyTests
         using (var result = detector.Detect(image, restored, options))
         {
             var box = Defects(result).Single().Bounds!.Value;
-            Assert.IsTrue(box.X <= 65 && box.X + box.Width >= 63 && box.Y <= 23 && box.Y + box.Height >= 20, box.ToString());
+            Assert.IsTrue(
+                box.X <= 65 && box.X + box.Width >= 63 && box.Y <= 23 && box.Y + box.Height >= 20,
+                box.ToString()
+            );
         }
 
         using var small = VisionImage.CopyFrom(
@@ -169,6 +172,44 @@ public sealed class PatchAnomalyTests
         );
         using var mismatch = detector.Detect(small, restored, options);
         Assert.AreEqual(EAlgorithmStatus.UnsupportedInput, mismatch.Status);
+    }
+
+    /// <summary>兼容性：版本1（没有特征来源字段）的模型文件仍可读取，视为手工特征；未知版本明确拒绝。</summary>
+    [TestMethod]
+    public void VersionOneModelsRemainReadable()
+    {
+        var memory = Enumerable.Range(0, 128 * 3).Select(i => (float)(i % 7)).ToArray();
+        byte[] v1;
+        using (var stream = new System.IO.MemoryStream())
+        {
+            using (var writer = new System.IO.BinaryWriter(stream))
+            {
+                writer.Write(0x41505044);
+                writer.Write(1);
+                writer.Write(8);
+                writer.Write(128);
+                writer.Write(.5);
+                writer.Write(2);
+                writer.Write("v1");
+                writer.Write(0);
+                writer.Write(0);
+                writer.Write(0);
+                writer.Write(memory.Length);
+                foreach (float v in memory)
+                {
+                    writer.Write(v);
+                }
+            }
+
+            v1 = stream.ToArray();
+        }
+
+        var model = PatchAnomalyModel.FromBytes(v1);
+        Assert.AreEqual(PatchAnomalyModel.Handcrafted, model.FeatureSource);
+        Assert.AreEqual(3, model.Count);
+        CollectionAssert.AreEqual(memory, model.CopyMemory());
+        v1[4] = 9;
+        Assert.ThrowsExactly<System.IO.InvalidDataException>(() => PatchAnomalyModel.FromBytes(v1));
     }
 
     /// <summary>模型序列化往返后参数与记忆库不变；块大小不一致时拒绝而不是误判。</summary>

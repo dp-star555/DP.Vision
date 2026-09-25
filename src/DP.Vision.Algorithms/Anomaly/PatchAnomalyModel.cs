@@ -5,13 +5,16 @@ namespace DP.Vision.Algorithms;
 
 /// <summary>
 /// 由良品训练得到的局部块记忆库及标定阈值，只含数值数据，可序列化后随配方/ROI保存。
-/// 与位置无关的模式保存核心集块特征；位置相关模式（<see cref = "Radius"/>大于0）保存各良品裁图的墨量平面，
-/// 检测时只与同一位置±Radius像素内的良品块比较。
+/// 与位置无关的模式保存核心集块特征；位置相关模式（<see cref = "Radius"/>大于0）保存各良品裁图的逐图数据
+/// （手工特征为墨量平面，CNN特征为灰度裁图、加载后按同一骨干网络重算特征），检测时只与同一位置±Radius像素内的良品块比较。
 /// </summary>
 public sealed class PatchAnomalyModel
 {
     private const int Magic = 0x41505044; // "DPPA"
-    private const int Version = 1;
+    private const int Version = 2;
+
+    /// <summary>手工块特征（墨量平面）的特征来源标识。</summary>
+    public const string Handcrafted = "handcrafted";
     private readonly float[] _memory;
 
     /// <summary>创建模型快照；记忆库数组会被复制。</summary>
@@ -24,6 +27,7 @@ public sealed class PatchAnomalyModel
     /// <param name = "radius">位置相关搜索半径（像素）；0为与位置无关的核心集模式。</param>
     /// <param name = "width">位置相关模式的裁图宽度。</param>
     /// <param name = "height">位置相关模式的裁图高度。</param>
+    /// <param name = "featureSource">特征来源：<see cref = "Handcrafted"/>或CNN骨干网络标识（含模型哈希与缩放）；检测时必须一致。</param>
     public PatchAnomalyModel(
         int patchSize,
         int dimensions,
@@ -33,10 +37,13 @@ public sealed class PatchAnomalyModel
         string calibration,
         int radius = 0,
         int width = 0,
-        int height = 0
+        int height = 0,
+        string featureSource = Handcrafted
     )
     {
         bool local = radius > 0;
+        featureSource = string.IsNullOrEmpty(featureSource) ? Handcrafted : featureSource;
+        int perImage = trainingImages > 0 && memory != null ? memory.Length / trainingImages : 0;
         if (
             patchSize < 4
             || dimensions < 1
@@ -45,9 +52,16 @@ public sealed class PatchAnomalyModel
             || radius < 0
             || (
                 local
-                    ? width < patchSize
-                        || height < patchSize
-                        || memory.Length != trainingImages * PlaneLength(width, height)
+                    ? width < 1
+                        || height < 1
+                        || memory.Length != trainingImages * perImage
+                        || (
+                            featureSource == Handcrafted
+                                ? width < patchSize
+                                    || height < patchSize
+                                    || perImage != PlaneLength(width, height)
+                                : perImage < 1
+                        )
                     : memory.Length % dimensions != 0
             )
             || double.IsNaN(threshold)
@@ -59,6 +73,7 @@ public sealed class PatchAnomalyModel
         }
 
         Radius = radius;
+        FeatureSource = featureSource;
         Width = local ? width : 0;
         Height = local ? height : 0;
 
@@ -78,6 +93,9 @@ public sealed class PatchAnomalyModel
 
     /// <summary>记忆库块数；位置相关模式为良品平面数。</summary>
     public int Count => Radius > 0 ? TrainingImages : _memory.Length / Dimensions;
+
+    /// <summary>特征来源；检测实现必须使用同一来源，否则拒绝而不是给出无意义的得分。</summary>
+    public string FeatureSource { get; }
 
     /// <summary>位置相关搜索半径（像素）；0为与位置无关模式。</summary>
     public int Radius { get; }
@@ -127,6 +145,7 @@ public sealed class PatchAnomalyModel
             writer.Write(Radius);
             writer.Write(Width);
             writer.Write(Height);
+            writer.Write(FeatureSource);
             writer.Write(_memory.Length);
             foreach (float v in _memory)
             {
@@ -147,9 +166,10 @@ public sealed class PatchAnomalyModel
         }
 
         using var reader = new BinaryReader(new MemoryStream(bytes));
-        if (reader.ReadInt32() != Magic || reader.ReadInt32() != Version)
+        int version = reader.ReadInt32() == Magic ? reader.ReadInt32() : -1;
+        if (version != 1 && version != Version)
         {
-            throw new InvalidDataException("Not a patch anomaly model.");
+            throw new InvalidDataException("Not a patch anomaly model, or a newer format.");
         }
 
         int patchSize = reader.ReadInt32(),
@@ -160,6 +180,8 @@ public sealed class PatchAnomalyModel
         int radius = reader.ReadInt32(),
             width = reader.ReadInt32(),
             height = reader.ReadInt32();
+        // 版本1没有特征来源字段，只有手工特征。
+        string source = version >= 2 ? reader.ReadString() : Handcrafted;
         int length = reader.ReadInt32();
         if (length <= 0 || length > 256 * 1024 * 1024)
         {
@@ -181,7 +203,8 @@ public sealed class PatchAnomalyModel
             calibration,
             radius,
             width,
-            height
+            height,
+            source
         );
     }
 }
