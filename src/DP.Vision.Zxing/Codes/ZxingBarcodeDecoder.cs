@@ -61,12 +61,51 @@ public sealed class ZxingBarcodeDecoder : DP.Vision.Algorithms.IBarcodeReader
             }
         }
 
-        var source = new RGBLuminanceSource(
-            gray,
-            bounds.Width,
-            bounds.Height,
-            RGBLuminanceSource.BitmapFormat.Gray8
-        );
+        var direct = Decode(gray, bounds.Width, bounds.Height, 1, "", bounds, token);
+        if (direct.Count > 0)
+        {
+            return direct;
+        }
+
+        // 原图未读出时依次尝试有限的修复预处理；只接受唯一结果，并记录所用预处理，
+        // 由质量检查报告“原图可读性余量不足”，而不是当作原图直接可读。
+        foreach (var (name, scale, repair) in Repairs)
+        {
+            token.ThrowIfCancellationRequested();
+            var (pixels2, width, height) = repair(gray, bounds.Width, bounds.Height);
+            var repaired = Decode(pixels2, width, height, scale, name, bounds, token);
+            if (repaired.Count == 1)
+            {
+                return repaired;
+            }
+        }
+
+        return Array.Empty<BarcodeObservation>();
+    }
+
+    /// <summary>原图读不出时依次尝试的预处理：去除孤立斑点、墨迹外扩补小缺口、降采样合并细碎噪声。</summary>
+    private static readonly (
+        string Name,
+        int Scale,
+        Func<byte[], int, int, (byte[], int, int)> Repair
+    )[] Repairs =
+    {
+        ("median5", 1, (g, w, h) => (Median(g, w, h, 2), w, h)),
+        ("ink_grow3", 1, (g, w, h) => (Minimum(g, w, h, 1), w, h)),
+        ("half", 2, Half),
+    };
+
+    private static IReadOnlyList<BarcodeObservation> Decode(
+        byte[] gray,
+        int width,
+        int height,
+        int scale,
+        string preprocessing,
+        PixelRect bounds,
+        CancellationToken token
+    )
+    {
+        var source = new RGBLuminanceSource(gray, width, height, RGBLuminanceSource.BitmapFormat.Gray8);
         var reader = new BarcodeReaderGeneric
         {
             AutoRotate = true,
@@ -80,22 +119,105 @@ public sealed class ZxingBarcodeDecoder : DP.Vision.Algorithms.IBarcodeReader
                 r.BarcodeFormat.ToString(),
                 bounds,
                 r.BarcodeFormat == BarcodeFormat.QR_CODE && decoded!.Length == 1
-                    ? TryQrGrid(source, bounds, r.Text, token)
-                    : null
+                    ? TryQrGrid(source, bounds, scale, r.Text, token)
+                    : null,
+                preprocessing
             ))
             .ToArray();
+    }
+
+    /// <summary>方形邻域中值滤波，半径r；边界按最近像素延伸。</summary>
+    private static byte[] Median(byte[] gray, int width, int height, int r)
+    {
+        var output = new byte[gray.Length];
+        var window = new byte[(2 * r + 1) * (2 * r + 1)];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int n = 0;
+                for (int dy = -r; dy <= r; dy++)
+                {
+                    int yy = Math.Min(height - 1, Math.Max(0, y + dy));
+                    for (int dx = -r; dx <= r; dx++)
+                    {
+                        window[n++] = gray[yy * width + Math.Min(width - 1, Math.Max(0, x + dx))];
+                    }
+                }
+
+                Array.Sort(window);
+                output[y * width + x] = window[n / 2];
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>方形邻域最小值（深色墨迹外扩r像素），用于补合细小白点和断裂。</summary>
+    private static byte[] Minimum(byte[] gray, int width, int height, int r)
+    {
+        var output = new byte[gray.Length];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                byte value = 255;
+                for (int dy = -r; dy <= r; dy++)
+                {
+                    int yy = Math.Min(height - 1, Math.Max(0, y + dy));
+                    for (int dx = -r; dx <= r; dx++)
+                    {
+                        value = Math.Min(value, gray[yy * width + Math.Min(width - 1, Math.Max(0, x + dx))]);
+                    }
+                }
+
+                output[y * width + x] = value;
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>2×2平均降采样。</summary>
+    private static (byte[], int, int) Half(byte[] gray, int width, int height)
+    {
+        int w = Math.Max(1, width / 2),
+            h = Math.Max(1, height / 2);
+        var output = new byte[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                int x0 = Math.Min(width - 1, 2 * x),
+                    y0 = Math.Min(height - 1, 2 * y),
+                    x1 = Math.Min(width - 1, x0 + 1),
+                    y1 = Math.Min(height - 1, y0 + 1);
+                output[y * w + x] = (byte)(
+                    (
+                        gray[y0 * width + x0]
+                        + gray[y0 * width + x1]
+                        + gray[y1 * width + x0]
+                        + gray[y1 * width + x1]
+                        + 2
+                    ) / 4
+                );
+            }
+        }
+
+        return (output, w, h);
     }
 
     private static BarcodeModuleGrid? TryQrGrid(
         LuminanceSource source,
         PixelRect bounds,
+        int scale,
         string text,
         CancellationToken token
     )
     {
         try
         {
-            return QrGrid(source, bounds, text, token);
+            return QrGrid(source, bounds, scale, text, token);
         }
         catch (ReaderException)
         {
@@ -114,6 +236,7 @@ public sealed class ZxingBarcodeDecoder : DP.Vision.Algorithms.IBarcodeReader
     private static BarcodeModuleGrid? QrGrid(
         LuminanceSource source,
         PixelRect bounds,
+        int scale,
         string text,
         CancellationToken token
     )
@@ -199,7 +322,8 @@ public sealed class ZxingBarcodeDecoder : DP.Vision.Algorithms.IBarcodeReader
         var original = new double[8];
         for (int i = 0; i < 8; i++)
         {
-            original[i] = corners[i] + (i % 2 == 0 ? bounds.X : bounds.Y) + .5;
+            // ZXing坐标以像素中心为整数；降采样读出时按比例换回原图像素边缘坐标。
+            original[i] = scale * (corners[i] + .5) + (i % 2 == 0 ? bounds.X : bounds.Y);
         }
 
         token.ThrowIfCancellationRequested();

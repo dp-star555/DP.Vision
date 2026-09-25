@@ -122,6 +122,7 @@
 | `MemoryImageSource` | [src/DP.Vision/Imaging/MemoryImageSource.cs](src/DP.Vision/Imaging/MemoryImageSource.cs) |
 | `EnumContractTests` | [tests/DP.Vision.Algorithms.Tests/Architecture/EnumContractTests.cs](tests/DP.Vision.Algorithms.Tests/Architecture/EnumContractTests.cs) |
 | `AlgorithmTests` | [tests/DP.Vision.Algorithms.Tests/Integration/AlgorithmTests.cs](tests/DP.Vision.Algorithms.Tests/Integration/AlgorithmTests.cs) |
+| `LinearQualityDepthTests` | [tests/DP.Vision.Algorithms.Tests/Codes/LinearQualityDepthTests.cs](tests/DP.Vision.Algorithms.Tests/Codes/LinearQualityDepthTests.cs) |
 | `GlyphComparisonTests` | [tests/DP.Vision.Algorithms.Tests/Text/GlyphComparisonTests.cs](tests/DP.Vision.Algorithms.Tests/Text/GlyphComparisonTests.cs) |
 | `TextQualityTests.Matcher` | [tests/DP.Vision.Algorithms.Tests/Text/TestDoubles/TextQualityTests/Matcher.cs](tests/DP.Vision.Algorithms.Tests/Text/TestDoubles/TextQualityTests/Matcher.cs) |
 | `TextQualityTests` | [tests/DP.Vision.Algorithms.Tests/Text/TextQualityTests.cs](tests/DP.Vision.Algorithms.Tests/Text/TextQualityTests.cs) |

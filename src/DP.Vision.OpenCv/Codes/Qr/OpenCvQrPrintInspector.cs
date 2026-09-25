@@ -97,6 +97,11 @@ public sealed class OpenCvQrPrintInspector : IQrQualityInspector
             return Review("未取得唯一QR的可靠模块网格；二维码内容可读不代表打印外观已检查。");
         }
 
+        if (OpenCvBarcodePrintInspector.DecodeAssisted(symbols, bounds) is { } assisted)
+        {
+            findings.Add(assisted);
+        }
+
         var grid = symbols[0].ModuleGrid!;
         int n = grid.Dimension;
         var corners = new Point2f[4];
@@ -174,6 +179,7 @@ public sealed class OpenCvQrPrintInspector : IQrQualityInspector
         var pixels = new byte[w * height];
         System.Runtime.InteropServices.Marshal.Copy(mask.Data, pixels, 0, pixels.Length);
         var assigned = Enumerable.Repeat(-1, pixels.Length).ToArray();
+        var gridCell = Enumerable.Repeat(-1, pixels.Length).ToArray();
         var total = new int[cells];
         var ink = new int[cells];
         double margin = Math.Min(.2, options.EdgeTolerance / minScale);
@@ -201,13 +207,14 @@ public sealed class OpenCvQrPrintInspector : IQrQualityInspector
                     row = (int)v;
                 double fx = u - col,
                     fy = v - row;
+                int cell = row * n + col,
+                    index = y * w + x;
+                gridCell[index] = cell;
                 if (fx < margin || fx > 1 - margin || fy < margin || fy > 1 - margin)
                 {
                     continue;
                 }
 
-                int cell = row * n + col,
-                    index = y * w + x;
                 assigned[index] = cell;
                 total[cell]++;
                 if (pixels[index] > 0)
@@ -264,66 +271,202 @@ public sealed class OpenCvQrPrintInspector : IQrQualityInspector
             }
         }
 
-        var count = new int[cells];
-        var minX = Enumerable.Repeat(int.MaxValue, cells).ToArray();
-        var minY = Enumerable.Repeat(int.MaxValue, cells).ToArray();
-        var maxX = new int[cells];
-        var maxY = new int[cells];
+        // 按模块网格绘制理想图（固定结构用QR规则，数据区用模块多数像素），与实测墨迹逐像素比较。
+        // 深度=到理想图黑白交界的距离：只触及交界边缘带的差异（相邻模块渗墨、模块边缘毛刺）视为印刷波动，
+        // 深入模块内部的缺墨/多墨按完整面积计入，不再因模块内边距或膨胀而缩小。
+        int pad = (int)Math.Ceiling(minScale) + 2,
+            pw = w + 2 * pad,
+            ph = height + 2 * pad;
+        using var expected = new Mat(ph, pw, MatType.CV_8UC1, Scalar.All(0));
+        using var actualInk = new Mat(ph, pw, MatType.CV_8UC1, Scalar.All(0));
+        using var rawMissing = new Mat(ph, pw, MatType.CV_8UC1, Scalar.All(0));
+        using var rawExtra = new Mat(ph, pw, MatType.CV_8UC1, Scalar.All(0));
         for (int y = 0; y < height; y++)
         {
             token.ThrowIfCancellationRequested();
             for (int x = 0; x < w; x++)
             {
                 int index = y * w + x,
-                    cell = assigned[index];
-                if (cell < 0 || ambiguous[cell] || (pixels[index] > 0) == black[cell])
+                    cell = gridCell[index];
+                if (cell < 0)
                 {
                     continue;
                 }
 
-                count[cell]++;
-                minX[cell] = Math.Min(minX[cell], x);
-                minY[cell] = Math.Min(minY[cell], y);
-                maxX[cell] = Math.Max(maxX[cell], x);
-                maxY[cell] = Math.Max(maxY[cell], y);
+                bool inkPixel = pixels[index] > 0;
+                if (black[cell])
+                {
+                    expected.Set(y + pad, x + pad, (byte)255);
+                }
+
+                if (inkPixel)
+                {
+                    actualInk.Set(y + pad, x + pad, (byte)255);
+                }
+
+                if (ambiguous[cell] || inkPixel == black[cell])
+                {
+                    continue;
+                }
+
+                (black[cell] ? rawMissing : rawExtra).Set(y + pad, x + pad, (byte)255);
             }
         }
 
+        using var inside = new Mat();
+        using var outside = new Mat();
+        using var background = new Mat();
+        Cv2.DistanceTransform(expected, inside, DistanceTypes.L2, DistanceTransformMasks.Mask5);
+        Cv2.BitwiseNot(expected, background);
+        Cv2.DistanceTransform(background, outside, DistanceTypes.L2, DistanceTransformMasks.Mask5);
+        // 整体墨迹扩散/收缩（热敏打印常见）：实测与理想墨迹内距离均值之差近似半宽差，只放宽对应方向的边缘带，
+        // 上限为模块半宽的40%。
+        using var actualInside = new Mat();
+        Cv2.DistanceTransform(actualInk, actualInside, DistanceTypes.L2, DistanceTransformMasks.Mask5);
+        double weight =
+            Cv2.CountNonZero(actualInk) == 0 || Cv2.CountNonZero(expected) == 0
+                ? 0
+                : 2 * (Cv2.Mean(actualInside, actualInk).Val0 - Cv2.Mean(inside, expected).Val0);
+        double moduleHalf = minScale / 2,
+            slack = .4 * moduleHalf,
+            missingBand = options.EdgeTolerance + Math.Min(slack, Math.Max(0, -weight)),
+            extraBand = options.EdgeTolerance + Math.Min(slack, Math.Max(0, weight));
         int defects = 0;
-        for (int i = 0; i < cells; i++)
+        foreach (bool missing in new[] { true, false })
         {
-            token.ThrowIfCancellationRequested();
-            if (count[i] < options.MinimumArea || count[i] / (double)total[i] < options.MinimumFraction)
+            var difference = missing ? rawMissing : rawExtra;
+            var depth = missing ? inside : outside;
+            double edgeBand = missing ? missingBand : extraBand,
+                required = Math.Max(edgeBand + 1, .5 * moduleHalf);
+            if (missing)
             {
-                continue;
+                // 整模块缺墨的最深点即模块中心，要求不超过模块半宽，保证整模块翻转仍可检出。
+                required = Math.Min(required, moduleHalf);
             }
 
-            var box = new PixelRect(
-                left + minX[i],
-                top + minY[i],
-                maxX[i] - minX[i] + 1,
-                maxY[i] - minY[i] + 1
+            using var labels = new Mat();
+            int components = Cv2.ConnectedComponents(
+                difference,
+                labels,
+                PixelConnectivity.Connectivity8,
+                MatType.CV_32S
             );
-            findings.Add(
-                new QualityFinding(
-                    black[i] ? "qr_missing_ink" : "qr_extra_ink",
-                    $"QR模块({i / n},{i % n}){(black[i] ? "内部缺墨" : "内部多墨")}：{count[i]}原始px²，占模块内部检查像素{count[i] / (double)total[i]:P2}；{(functional[i].HasValue ? "固定结构规则参考" : "模块多数像素自参考")}，模块内聚合差异，非ISO评级。",
-                    EQualityFindingKind.Defect,
-                    box,
-                    count[i]
-                )
-            );
-            defects++;
-            if (defects == 256)
+            var deepest = new float[components];
+            var deepestCell = new int[components];
+            for (int y = 0; y < ph; y++)
             {
+                token.ThrowIfCancellationRequested();
+                for (int x = 0; x < pw; x++)
+                {
+                    int label = labels.At<int>(y, x);
+                    float d = depth.At<float>(y, x);
+                    if (label > 0 && d > deepest[label])
+                    {
+                        deepest[label] = d;
+                        deepestCell[label] = gridCell[(y - pad) * w + x - pad];
+                    }
+                }
+            }
+
+            using var core = new Mat(ph, pw, MatType.CV_8UC1, Scalar.All(0));
+            var significant = new bool[components];
+            for (int i = 1; i < components; i++)
+            {
+                significant[i] = deepest[i] >= required - 1e-3;
+            }
+
+            for (int y = 0; y < ph; y++)
+            {
+                for (int x = 0; x < pw; x++)
+                {
+                    int label = labels.At<int>(y, x);
+                    if (
+                        label > 0
+                        && significant[label]
+                        && depth.At<float>(y, x) >= Math.Min(required, edgeBand + 1) - 1e-3
+                    )
+                    {
+                        core.Set(y, x, (byte)255);
+                    }
+                }
+            }
+
+            int radius = (int)Math.Ceiling(edgeBand) + 1;
+            using (
+                var grow = Cv2.GetStructuringElement(
+                    MorphShapes.Ellipse,
+                    new Size(2 * radius + 1, 2 * radius + 1)
+                )
+            )
+            {
+                Cv2.Dilate(core, core, grow);
+            }
+
+            var area = new int[components];
+            var minX = Enumerable.Repeat(int.MaxValue, components).ToArray();
+            var minY = Enumerable.Repeat(int.MaxValue, components).ToArray();
+            var maxX = new int[components];
+            var maxY = new int[components];
+            for (int y = 0; y < ph; y++)
+            {
+                for (int x = 0; x < pw; x++)
+                {
+                    int label = labels.At<int>(y, x);
+                    if (label == 0 || !significant[label] || core.At<byte>(y, x) == 0)
+                    {
+                        continue;
+                    }
+
+                    area[label]++;
+                    minX[label] = Math.Min(minX[label], x - pad);
+                    minY[label] = Math.Min(minY[label], y - pad);
+                    maxX[label] = Math.Max(maxX[label], x - pad);
+                    maxY[label] = Math.Max(maxY[label], y - pad);
+                }
+            }
+
+            for (int i = 1; i < components; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                double fraction = area[i] / (minScale * minScale);
+                if (!significant[i] || area[i] < options.MinimumArea || fraction < options.MinimumFraction)
+                {
+                    continue;
+                }
+
+                int cell = deepestCell[i];
+                var box = new PixelRect(
+                    left + minX[i],
+                    top + minY[i],
+                    maxX[i] - minX[i] + 1,
+                    maxY[i] - minY[i] + 1
+                );
                 findings.Add(
                     new QualityFinding(
-                        "barcode_print_review",
-                        "QR缺陷达到256条显示上限。",
-                        EQualityFindingKind.Blocker,
-                        bounds
+                        missing ? "qr_missing_ink" : "qr_extra_ink",
+                        $"QR模块({cell / n},{cell % n}){(missing ? "内部缺墨" : "内部多墨")}：{area[i]}原始px²，约{fraction:P0}个模块面积，最深处距模块交界{deepest[i]:0.0}px；{(functional[cell].HasValue ? "固定结构规则参考" : "模块多数像素自参考")}，只触及交界边缘带的渗墨/毛刺不计入，非ISO评级。",
+                        EQualityFindingKind.Defect,
+                        box,
+                        area[i]
                     )
                 );
+                defects++;
+                if (defects == 256)
+                {
+                    findings.Add(
+                        new QualityFinding(
+                            "barcode_print_review",
+                            "QR缺陷达到256条显示上限。",
+                            EQualityFindingKind.Blocker,
+                            bounds
+                        )
+                    );
+                    break;
+                }
+            }
+
+            if (defects >= 256)
+            {
                 break;
             }
         }
