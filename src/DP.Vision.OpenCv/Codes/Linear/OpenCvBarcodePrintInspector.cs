@@ -183,7 +183,8 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
         int intervals = 0,
             defects = 0,
             thinElements = 0,
-            grayUnmeasured = 0;
+            grayUnmeasured = 0,
+            endVariations = 0;
         int edge = options.EdgeTolerance;
         bool ink = true;
         int start = first;
@@ -273,6 +274,8 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
                 MatType.CV_32S
             );
             var deepest = new int[count];
+            var nearestEnd = Enumerable.Repeat(int.MaxValue, count).ToArray();
+            var farthestEnd = new int[count];
             var spanRows = new Dictionary<(int Label, int Row), int>();
             for (int row = 0; row < height; row++)
             {
@@ -285,6 +288,9 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
                     }
 
                     deepest[label] = Math.Max(deepest[label], Depth(row, col));
+                    int fromEnd = Math.Min(row + 1, height - row);
+                    nearestEnd[label] = Math.Min(nearestEnd[label], fromEnd);
+                    farthestEnd[label] = Math.Max(farthestEnd[label], fromEnd);
                     if (thin && Math.Min(row + 1, height - row) > edge)
                     {
                         spanRows.TryGetValue((label, row), out int n);
@@ -293,9 +299,18 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
                 }
             }
 
+            // 条端区：条高的EndZoneFraction（至少边缘带）。从条端开始且完全落在条端区内的差异是条长/条端模糊的波动
+            // （各条端点不齐、端部渐淡），不影响扫描，不计入；超出条端区或不接触条端的缺陷仍按完整面积计入。
+            int endZone = Math.Max(edge, (int)Math.Round(height * EndZoneFraction));
             var significant = new bool[count];
             for (int i = 1; i < count; i++)
             {
+                if (nearestEnd[i] <= edge + 1 && farthestEnd[i] <= endZone)
+                {
+                    endVariations++;
+                    continue;
+                }
+
                 significant[i] = thin
                     ? spanRows.Any(e => e.Key.Label == i && e.Value == width)
                     : deepest[i] > edge;
@@ -421,7 +436,7 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
         findings.Add(
             new QualityFinding(
                 "barcode_print_scope",
-                $"已检查{intervals}个条/空隙区间，发现{defects}个超阈值墨迹缺陷；方向={(rotated ? "垂直" : "水平")}。只触及条/空隙边缘带（{edge}像素，含上下端）的差异视为印刷波动；深入内部的缺墨/多墨按完整面积计入。{thinElements}个细条/细空隙没有边缘带以外的内部，只检查二值化后横贯整条宽度的断裂。条内灰度损失检查={options.DetectInkLoss}，其中{grayUnmeasured}个条去掉边缘带后内部窄于{MinimumGradedElement}像素，灰度起伏无法与成像模糊区分，只按二值化缺墨判定；每列低分位墨色自参考不保证整条均匀变浅/缺失、绝对条宽、静区或ISO等级。",
+                $"已检查{intervals}个条/空隙区间，发现{defects}个超阈值墨迹缺陷；方向={(rotated ? "垂直" : "水平")}。只触及条/空隙边缘带（{edge}像素）的差异视为印刷波动；从条端开始且不超过条高{EndZoneFraction:P0}的差异视为条端长短/渐淡（本次{endVariations}处），不计入；深入内部的缺墨/多墨按完整面积计入。{thinElements}个细条/细空隙没有边缘带以外的内部，只检查二值化后横贯整条宽度的断裂。条内灰度损失检查={options.DetectInkLoss}，其中{grayUnmeasured}个条去掉边缘带后内部窄于{MinimumGradedElement}像素，灰度起伏无法与成像模糊区分，只按二值化缺墨判定；每列低分位墨色自参考不保证整条均匀变浅/缺失、绝对条宽、静区或ISO等级。",
                 EQualityFindingKind.Information,
                 bounds
             )
@@ -611,6 +626,9 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
 
     /// <summary>评定扫描等级所需的最窄元素像素数；更细时模糊主导反射率曲线，等级无意义。</summary>
     private const int MinimumGradedElement = 4;
+
+    /// <summary>条端区占条高的比例：从条端开始且不超过此深度的缺墨/变浅视为条端长度波动。</summary>
+    private const double EndZoneFraction = .1;
 
     private static int Grade(double value, double a, double b, double c, double d, bool higherIsBetter)
     {

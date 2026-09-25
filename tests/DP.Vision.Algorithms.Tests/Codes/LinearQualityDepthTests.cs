@@ -65,6 +65,27 @@ public sealed class LinearQualityDepthTests
         Assert.IsEmpty(Defects(result), string.Join(";", Defects(result).Select(f => f.Message)));
     }
 
+    /// <summary>条端区（条高10%）内从条端开始的缩短/渐淡是条长波动；超出条端区的缺失仍计入。</summary>
+    [TestMethod]
+    public void ShortBarEndsAreIgnoredButLongLossIsNot()
+    {
+        var shortened = Bars(8, 16);
+        Paint(shortened, 84, 104, 8, 6, 255);
+        Assert.IsEmpty(
+            Defects(Inspect(shortened)),
+            string.Join(";", Defects(Inspect(shortened)).Select(f => f.Message))
+        );
+
+        var faded = Bars(8, 16);
+        Paint(faded, 84, 105, 8, 3, 120);
+        Paint(faded, 84, 108, 8, 2, 200);
+        Assert.IsEmpty(Defects(Inspect(faded)));
+
+        var lost = Bars(8, 16);
+        Paint(lost, 84, 90, 8, 20, 255);
+        Assert.AreEqual("barcode_missing_ink", Defects(Inspect(lost)).Single().Code);
+    }
+
     /// <summary>深入条内部的空洞按完整面积计入，而不是只计入边缘带以内的部分。</summary>
     [TestMethod]
     public void InteriorVoidIsMeasuredInFull()
