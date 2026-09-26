@@ -46,7 +46,10 @@ internal sealed class CnnFeatures : IDisposable
         _net =
             CvDnn.ReadNetFromOnnx(path)
             ?? throw new InvalidDataException("Backbone model could not be loaded.");
-        _outputs = (_net.GetUnconnectedOutLayersNames() ?? Array.Empty<string?>()).Where(n => n != null).Select(n => n!).ToArray();
+        _outputs = (_net.GetUnconnectedOutLayersNames() ?? Array.Empty<string?>())
+            .Where(n => n != null)
+            .Select(n => n!)
+            .ToArray();
         if (_outputs.Length != 2)
         {
             _net.Dispose();

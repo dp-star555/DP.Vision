@@ -161,7 +161,7 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         {
             // 位置相关：纸白块也评分，良品此处有墨而实际无墨（缺笔画）同样得高分。
             query = PatchFeatures.Extract(full, half, p, options.Stride, token, includeBlank: true);
-            scores = LocalScores(query, Planes(model), model.Radius, p, token);
+            scores = LocalScores(query, full, half, Planes(model), model.Radius, p, token);
         }
         else
         {
@@ -172,9 +172,9 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         }
 
         // 得分写入块中心区域（边长取块的一半与步长中较大者），避免整块外扩使缺陷框偏大。
-        using var map = new Mat(gray.Rows, gray.Cols, MatType.CV_32F, Scalar.All(0));
         int core = Math.Max(p / 2, options.Stride),
             inset = (p - core) / 2;
+        var values = new float[gray.Rows * gray.Cols];
         for (int i = 0; i < query.Count; i++)
         {
             var corner = query.Corners[i];
@@ -182,13 +182,17 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             {
                 for (int x = corner.X + inset; x < Math.Min(gray.Cols, corner.X + inset + core); x++)
                 {
-                    if (map.At<float>(y, x) < scores[i])
+                    int k = y * gray.Cols + x;
+                    if (values[k] < scores[i])
                     {
-                        map.Set(y, x, scores[i]);
+                        values[k] = scores[i];
                     }
                 }
             }
         }
+
+        using var map = new Mat(gray.Rows, gray.Cols, MatType.CV_32F);
+        System.Runtime.InteropServices.Marshal.Copy(values, 0, map.Data, values.Length);
 
         // 裁图边缘一个块宽的范围只作上下文（1/2尺度上下文块在此范围内会伸出裁图）：
         // 内容被ROI截断时（如字顶贴边）形态与良品不同，但不是印刷缺陷。
@@ -243,7 +247,12 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                     true
                 );
                 var others = planes.Where((_, j) => j != i).ToList();
-                worst = Math.Max(worst, LocalScores(query, others, radius, p, token).DefaultIfEmpty(0).Max());
+                worst = Math.Max(
+                    worst,
+                    LocalScores(query, planes[i].Full, planes[i].Half, others, radius, p, token)
+                        .DefaultIfEmpty(0)
+                        .Max()
+                );
             }
 
             calibration = $"位置相关±{radius}像素，留一法（{planes.Count}张良品）";
@@ -254,7 +263,7 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             using var augmented = Augment(gray);
             var (full, half) = PatchFeatures.Prepare(augmented);
             var query = PatchFeatures.Extract(full, half, p, TrainingStride, token, true);
-            worst = LocalScores(query, planes, radius, p, token).DefaultIfEmpty(0).Max();
+            worst = LocalScores(query, full, half, planes, radius, p, token).DefaultIfEmpty(0).Max();
             calibration = $"位置相关±{radius}像素，单张良品：平移1像素并轻度模糊的增强图评分";
         }
 
@@ -307,54 +316,155 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         return planes;
     }
 
-    /// <summary>每个查询块到任一良品同位置±半径内块的最近L2距离。</summary>
+    /// <summary>
+    /// 每个查询块到任一良品同位置±半径内块的最近L2距离。按“良品×偏移”整体计算：原尺度块距离是差值平方图在P×P窗口内的和，
+    /// 1/2尺度上下文块距离同理（上下文块位置随偏移的奇偶变化，按实际位移分别缓存），均用积分图一次求出所有块，
+    /// 结果与逐块逐位置比较相同，但不随块数×偏移数×维数逐项循环。
+    /// </summary>
     private static float[] LocalScores(
         PatchFeatures.Set query,
+        PatchFeatures.Plane queryFull,
+        PatchFeatures.Plane queryHalf,
         IReadOnlyList<(PatchFeatures.Plane Full, PatchFeatures.Plane Half)> references,
         int radius,
         int patchSize,
         CancellationToken token
     )
     {
-        var scores = new float[query.Count];
-        var q = new float[query.Dimensions];
-        for (int i = 0; i < query.Count; i++)
+        int n = query.Count,
+            w = queryFull.Width,
+            h = queryFull.Height,
+            hp = patchSize / 2,
+            pad = patchSize + radius + 2;
+        var best = new double[n];
+        var cqx = new int[n];
+        var cqy = new int[n];
+        for (int i = 0; i < n; i++)
         {
-            if ((i & 1023) == 0)
-            {
-                token.ThrowIfCancellationRequested();
-            }
+            best[i] = double.MaxValue;
+            cqx[i] = (query.Corners[i].X + hp) / 2 - hp;
+            cqy[i] = (query.Corners[i].Y + hp) / 2 - hp;
+        }
 
-            query.Values.CopyTo(i * query.Dimensions, q, 0, query.Dimensions);
-            var corner = query.Corners[i];
-            float best = float.MaxValue;
-            foreach (var (full, half) in references)
+        var queryContext = PatchFeatures.PaddedContext(queryHalf, pad);
+        var fullIntegral = new double[(w + 1) * (h + 1)];
+        var squared = new double[w * h];
+        foreach (var (full, half) in references)
+        {
+            var referenceContext = PatchFeatures.PaddedContext(half, pad);
+            var contextIntegrals = new Dictionary<(int, int), double[]>();
+            for (int oy = -radius; oy <= radius; oy++)
             {
-                for (
-                    int y = Math.Max(0, corner.Y - radius);
-                    y <= Math.Min(full.Height - patchSize, corner.Y + radius);
-                    y++
-                )
+                for (int ox = -radius; ox <= radius; ox++)
                 {
-                    for (
-                        int x = Math.Max(0, corner.X - radius);
-                        x <= Math.Min(full.Width - patchSize, corner.X + radius);
-                        x++
-                    )
+                    token.ThrowIfCancellationRequested();
+                    Array.Clear(squared, 0, squared.Length);
+                    for (int y = Math.Max(0, -oy); y < Math.Min(h, h - oy); y++)
                     {
-                        float d = PatchFeatures.SquaredDistance(q, full, half, x, y, patchSize, best);
-                        if (d < best)
+                        int q = y * w,
+                            r = (y + oy) * w + ox;
+                        for (int x = Math.Max(0, -ox); x < Math.Min(w, w - ox); x++)
                         {
-                            best = d;
+                            double t = queryFull.Data[q + x] - full.Data[r + x];
+                            squared[q + x] = t * t;
+                        }
+                    }
+
+                    Integral(squared, w, h, fullIntegral);
+                    for (int i = 0; i < n; i++)
+                    {
+                        int x = query.Corners[i].X,
+                            y = query.Corners[i].Y,
+                            rx = x + ox,
+                            ry = y + oy;
+                        if (rx < 0 || ry < 0 || rx + patchSize > w || ry + patchSize > h)
+                        {
+                            continue;
+                        }
+
+                        double d = Box(fullIntegral, w + 1, x, y, patchSize);
+                        if (d >= best[i])
+                        {
+                            continue;
+                        }
+
+                        var shift = ((rx + hp) / 2 - hp - cqx[i], (ry + hp) / 2 - hp - cqy[i]);
+                        if (!contextIntegrals.TryGetValue(shift, out var context))
+                        {
+                            context = contextIntegrals[shift] = ContextIntegral(
+                                queryContext,
+                                referenceContext,
+                                shift.Item1,
+                                shift.Item2
+                            );
+                        }
+
+                        d += Box(context, queryContext.Width + 1, cqx[i] + pad, cqy[i] + pad, patchSize);
+                        if (d < best[i])
+                        {
+                            best[i] = d;
                         }
                     }
                 }
             }
+        }
 
-            scores[i] = best == float.MaxValue ? 0 : (float)Math.Sqrt(best);
+        var scores = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            scores[i] = best[i] == double.MaxValue ? 0 : (float)Math.Sqrt(Math.Max(0, best[i]));
         }
 
         return scores;
+    }
+
+    /// <summary>(查询上下文 − 平移后的良品上下文)²的积分图；平移超出填充范围处按纸白（0）计。</summary>
+    private static double[] ContextIntegral(
+        PatchFeatures.Plane query,
+        PatchFeatures.Plane reference,
+        int shiftX,
+        int shiftY
+    )
+    {
+        int w = query.Width,
+            h = query.Height;
+        var squared = new double[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                double t = query.Data[y * w + x] - reference.At(x + shiftX, y + shiftY);
+                squared[y * w + x] = t * t;
+            }
+        }
+
+        var integral = new double[(w + 1) * (h + 1)];
+        Integral(squared, w, h, integral);
+        return integral;
+    }
+
+    private static void Integral(double[] values, int w, int h, double[] integral)
+    {
+        int stride = w + 1;
+        Array.Clear(integral, 0, stride);
+        for (int y = 0; y < h; y++)
+        {
+            double row = 0;
+            integral[(y + 1) * stride] = 0;
+            for (int x = 0; x < w; x++)
+            {
+                row += values[y * w + x];
+                integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row;
+            }
+        }
+    }
+
+    private static double Box(double[] integral, int stride, int x, int y, int size)
+    {
+        return integral[(y + size) * stride + x + size]
+            - integral[y * stride + x + size]
+            - integral[(y + size) * stride + x]
+            + integral[y * stride + x];
     }
 
     /// <summary>若干良品块集合并为记忆库并按核心集压缩；全部为纸白时用单个零向量代表纸白。</summary>
