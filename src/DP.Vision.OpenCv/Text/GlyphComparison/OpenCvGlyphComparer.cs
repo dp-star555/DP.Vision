@@ -359,9 +359,20 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
     /// <returns>调用方拥有的112×112二值墨迹Mat；墨迹为255，背景为0。</returns>
     private static Mat Normalize(IImageSource frame, GlyphComparisonOptions options, CancellationToken token)
     {
-        using var gray = CvPixels.Gray(frame);
+        using var raw = CvPixels.Gray(frame);
+        using var gray = new Mat();
+        if (options.Binarization == EGlyphBinarization.Midpoint)
+        {
+            // 3×3中值去掉单像素噪点，避免噪点在阈值附近产生毛边；不改变笔画位置。
+            Cv2.MedianBlur(raw, gray, 3);
+        }
+        else
+        {
+            raw.CopyTo(gray);
+        }
+
         using var mask = new Mat();
-        if (options.Binarization == EGlyphBinarization.Otsu)
+        if (options.Binarization != EGlyphBinarization.Fixed)
         {
             // 保留2%/98%灰度分位差的低对比度保护；不能与不带保护的普通Otsu等同。
             // 统计发生在裁白边之前，因此白边比例仍可能影响这一前处理结果。
@@ -383,7 +394,15 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
                 return new Mat(112, 112, MatType.CV_8UC1, Scalar.All(0));
             }
 
-            Cv2.Threshold(gray, mask, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
+            if (options.Binarization == EGlyphBinarization.Midpoint)
+            {
+                // 严格小于中点视为墨迹，与固定阈值语义一致。
+                Cv2.Threshold(gray, mask, (low + high) / 2.0 - 1, 255, ThresholdTypes.BinaryInv);
+            }
+            else
+            {
+                Cv2.Threshold(gray, mask, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
+            }
         }
         else
         {

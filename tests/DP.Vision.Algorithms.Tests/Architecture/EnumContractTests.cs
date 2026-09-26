@@ -17,7 +17,7 @@ public sealed class EnumContractTests
         "Completed=0,UnsupportedInput=1,InsufficientEvidence=2,NotRequested=3"
     )]
     [DataRow(typeof(EQualityFindingKind), "Information=0,Blocker=1,Defect=2")]
-    [DataRow(typeof(EGlyphBinarization), "Otsu=0,Fixed=1")]
+    [DataRow(typeof(EGlyphBinarization), "Otsu=0,Fixed=1,Midpoint=2")]
     public void NamesAndValuesRemainExplicit(Type type, string expected)
     {
         Assert.IsTrue(type.IsEnum && type.Name.StartsWith("E", StringComparison.Ordinal));
