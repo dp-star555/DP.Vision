@@ -28,6 +28,10 @@
 | `InkDefect` | [src/DP.Vision.Algorithms/Surfaces/InkDefect.cs](src/DP.Vision.Algorithms/Surfaces/InkDefect.cs) |
 | `InkInspectionOptions` | [src/DP.Vision.Algorithms/Surfaces/InkInspectionOptions.cs](src/DP.Vision.Algorithms/Surfaces/InkInspectionOptions.cs) |
 | `InkInspectionResult` | [src/DP.Vision.Algorithms/Surfaces/InkInspectionResult.cs](src/DP.Vision.Algorithms/Surfaces/InkInspectionResult.cs) |
+| `IPatchAnomalyDetector` | [src/DP.Vision.Algorithms/Anomaly/IPatchAnomalyDetector.cs](src/DP.Vision.Algorithms/Anomaly/IPatchAnomalyDetector.cs) |
+| `PatchAnomalyModel` | [src/DP.Vision.Algorithms/Anomaly/PatchAnomalyModel.cs](src/DP.Vision.Algorithms/Anomaly/PatchAnomalyModel.cs) |
+| `PatchAnomalyOptions` | [src/DP.Vision.Algorithms/Anomaly/PatchAnomalyOptions.cs](src/DP.Vision.Algorithms/Anomaly/PatchAnomalyOptions.cs) |
+| `PatchAnomalyResult` | [src/DP.Vision.Algorithms/Anomaly/PatchAnomalyResult.cs](src/DP.Vision.Algorithms/Anomaly/PatchAnomalyResult.cs) |
 | `ITextRegionDetector` | [src/DP.Vision.Algorithms/Text/Detection/ITextRegionDetector.cs](src/DP.Vision.Algorithms/Text/Detection/ITextRegionDetector.cs) |
 | `EGlyphBinarization` | [src/DP.Vision.Algorithms/Text/GlyphComparison/EGlyphBinarization.cs](src/DP.Vision.Algorithms/Text/GlyphComparison/EGlyphBinarization.cs) |
 | `GlyphComparisonOptions` | [src/DP.Vision.Algorithms/Text/GlyphComparison/GlyphComparisonOptions.cs](src/DP.Vision.Algorithms/Text/GlyphComparison/GlyphComparisonOptions.cs) |
@@ -63,6 +67,15 @@
 | `CvImages` | [src/DP.Vision.OpenCv/Imaging/CvImages.cs](src/DP.Vision.OpenCv/Imaging/CvImages.cs) |
 | `CvPixels` | [src/DP.Vision.OpenCv/Imaging/CvPixels.cs](src/DP.Vision.OpenCv/Imaging/CvPixels.cs) |
 | `OpenCvInkInspector` | [src/DP.Vision.OpenCv/Surfaces/OpenCvInkInspector.cs](src/DP.Vision.OpenCv/Surfaces/OpenCvInkInspector.cs) |
+| `AnomalyMap` | [src/DP.Vision.OpenCv/Anomaly/AnomalyMap.cs](src/DP.Vision.OpenCv/Anomaly/AnomalyMap.cs) |
+| `CnnFeatures` | [src/DP.Vision.OpenCv/Anomaly/CnnFeatures.cs](src/DP.Vision.OpenCv/Anomaly/CnnFeatures.cs) |
+| `Coreset` | [src/DP.Vision.OpenCv/Anomaly/Coreset.cs](src/DP.Vision.OpenCv/Anomaly/Coreset.cs) |
+| `OpenCvCnnPatchAnomalyDetector` | [src/DP.Vision.OpenCv/Anomaly/OpenCvCnnPatchAnomalyDetector.cs](src/DP.Vision.OpenCv/Anomaly/OpenCvCnnPatchAnomalyDetector.cs) |
+| `OpenCvCnnPatchAnomalyDetector.CellGrid` | [src/DP.Vision.OpenCv/Anomaly/Internal/OpenCvCnnPatchAnomalyDetector/CellGrid.cs](src/DP.Vision.OpenCv/Anomaly/Internal/OpenCvCnnPatchAnomalyDetector/CellGrid.cs) |
+| `OpenCvPatchAnomalyDetector` | [src/DP.Vision.OpenCv/Anomaly/OpenCvPatchAnomalyDetector.cs](src/DP.Vision.OpenCv/Anomaly/OpenCvPatchAnomalyDetector.cs) |
+| `PatchFeatures` | [src/DP.Vision.OpenCv/Anomaly/PatchFeatures.cs](src/DP.Vision.OpenCv/Anomaly/PatchFeatures.cs) |
+| `PatchFeatures.Plane` | [src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Plane.cs](src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Plane.cs) |
+| `PatchFeatures.Set` | [src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Set.cs](src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Set.cs) |
 | `OpenCvGlyphComparer` | [src/DP.Vision.OpenCv/Text/GlyphComparison/OpenCvGlyphComparer.cs](src/DP.Vision.OpenCv/Text/GlyphComparison/OpenCvGlyphComparer.cs) |
 | `OpenCvTextLinePreprocessor` | [src/DP.Vision.OpenCv/Text/Recognition/OpenCvTextLinePreprocessor.cs](src/DP.Vision.OpenCv/Text/Recognition/OpenCvTextLinePreprocessor.cs) |
 | `OpenCvCharacterSegmenter` | [src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs](src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs) |
