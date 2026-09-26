@@ -97,6 +97,42 @@ public sealed class GlyphComparisonTests
         Assert.IsGreaterThan(0, result.Extra);
     }
 
+    /// <summary>中点二值化：低对比度灰纸、单像素噪点下与干净参考无差异，内部空洞仍计入。</summary>
+    [TestMethod]
+    public void MidpointIgnoresContrastAndSpeckleButKeepsVoids()
+    {
+        byte[] Degrade(byte[] clean)
+        {
+            var random = new Random(3);
+            var bytes = clean.Select(v => (byte)(v == 0 ? 90 : 170)).ToArray();
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                if (random.NextDouble() < .02)
+                {
+                    bytes[i] = (byte)(bytes[i] == 90 ? 170 : 90);
+                }
+            }
+
+            return bytes;
+        }
+
+        var options = new GlyphComparisonOptions(160, 2, EGlyphBinarization.Midpoint);
+        using var a = VisionImage.CopyFrom(
+            new ImageInfo(Width, Height, EPixelLayout.Gray8),
+            Degrade(Glyph())
+        );
+        using var r = VisionImage.CopyFrom(new ImageInfo(Width, Height, EPixelLayout.Gray8), Glyph());
+        using var same = new OpenCvGlyphComparer().Compare(a, r, options);
+        Assert.AreEqual(EAlgorithmStatus.Completed, same.Status);
+        Assert.AreEqual(0d, same.Difference);
+
+        var voided = Glyph();
+        Paint(voided, 16, 30, 20, 34, 255);
+        using var v = VisionImage.CopyFrom(new ImageInfo(Width, Height, EPixelLayout.Gray8), Degrade(voided));
+        using var hole = new OpenCvGlyphComparer().Compare(v, r, options);
+        Assert.IsGreaterThan(10, hole.Missing);
+    }
+
     /// <summary>深度比例只接受0–1，默认值保持兼容构造函数行为。</summary>
     [TestMethod]
     public void DepthRatioIsValidated()
