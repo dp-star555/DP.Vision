@@ -27,11 +27,13 @@ internal static partial class PatchFeatures
     internal static (Plane Full, Plane Half) Prepare(Mat gray)
     {
         var histogram = new int[256];
-        for (int y = 0; y < gray.Rows; y++)
+        using (var packed = gray.IsContinuous() ? gray.Clone() : gray.Clone())
         {
-            for (int x = 0; x < gray.Cols; x++)
+            var bytes = new byte[packed.Rows * packed.Cols];
+            Marshal.Copy(packed.Data, bytes, 0, bytes.Length);
+            foreach (byte b in bytes)
             {
-                histogram[gray.At<byte>(y, x)]++;
+                histogram[b]++;
             }
         }
 
@@ -126,48 +128,21 @@ internal static partial class PatchFeatures
         return peak;
     }
 
-    /// <summary>
-    /// 查询块特征与参考平面上(x, y)处块的平方距离；累计超过<paramref name = "limit"/>即提前返回（位置相关检测的逐位置搜索）。
-    /// </summary>
-    internal static float SquaredDistance(
-        float[] query,
-        Plane full,
-        Plane half,
-        int x,
-        int y,
-        int patchSize,
-        float limit
-    )
+    /// <summary>1/2尺度平面乘以上下文权重并在四周补<paramref name = "pad"/>像素纸白（0），供位置相关的整体距离计算。</summary>
+    internal static Plane PaddedContext(Plane half, int pad)
     {
-        float sum = 0;
-        int k = 0;
-        for (int dy = 0; dy < patchSize; dy++)
+        int w = half.Width + 2 * pad,
+            h = half.Height + 2 * pad;
+        var data = new float[w * h];
+        for (int y = 0; y < half.Height; y++)
         {
-            int row = (y + dy) * full.Width + x;
-            for (int dx = 0; dx < patchSize; dx++)
+            for (int x = 0; x < half.Width; x++)
             {
-                float t = query[k++] - full.Data[row + dx];
-                sum += t * t;
-            }
-
-            if (sum > limit)
-            {
-                return sum;
+                data[(y + pad) * w + x + pad] = half.Data[y * half.Width + x] * ContextWeight;
             }
         }
 
-        int cx = (x + patchSize / 2) / 2 - patchSize / 2,
-            cy = (y + patchSize / 2) / 2 - patchSize / 2;
-        for (int dy = 0; dy < patchSize; dy++)
-        {
-            for (int dx = 0; dx < patchSize; dx++)
-            {
-                float t = query[k++] - half.At(cx + dx, cy + dy) * ContextWeight;
-                sum += t * t;
-            }
-        }
-
-        return sum;
+        return new Plane(data, w, h);
     }
 
     private static Plane ToPlane(Mat m)

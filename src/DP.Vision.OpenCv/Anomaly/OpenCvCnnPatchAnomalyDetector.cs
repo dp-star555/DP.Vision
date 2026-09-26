@@ -24,8 +24,13 @@ public sealed partial class OpenCvCnnPatchAnomalyDetector : IPatchAnomalyDetecto
     private readonly CnnFeatures _features;
 
     /// <summary>位置相关模型的良品特征网格缓存：模型只保存灰度裁图，首次检测时用同一骨干网络重算一次。</summary>
-    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<PatchAnomalyModel, List<CellGrid>> _references =
-        new System.Runtime.CompilerServices.ConditionalWeakTable<PatchAnomalyModel, List<CellGrid>>();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        PatchAnomalyModel,
+        List<CellGrid>
+    > _references = new System.Runtime.CompilerServices.ConditionalWeakTable<
+        PatchAnomalyModel,
+        List<CellGrid>
+    >();
 
     /// <summary>加载骨干网络。</summary>
     /// <param name = "backbonePath">
