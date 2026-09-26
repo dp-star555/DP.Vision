@@ -290,7 +290,11 @@ public sealed partial class OpenCvBarcodePrintInspector : ILinearBarcodeQualityI
                     deepest[label] = Math.Max(deepest[label], Depth(row, col));
                     int fromEnd = Math.Min(row + 1, height - row);
                     nearestEnd[label] = Math.Min(nearestEnd[label], fromEnd);
-                    farthestEnd[label] = Math.Max(farthestEnd[label], fromEnd);
+                    // 两侧边缘带内的像素本就不计入，条端区只按条内部列判断（细条没有内部列，按全部像素）。
+                    if (thin || Math.Min(col + 1, width - col) > edge)
+                    {
+                        farthestEnd[label] = Math.Max(farthestEnd[label], fromEnd);
+                    }
                     if (thin && Math.Min(row + 1, height - row) > edge)
                     {
                         spanRows.TryGetValue((label, row), out int n);

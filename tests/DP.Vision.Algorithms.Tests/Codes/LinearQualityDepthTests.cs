@@ -81,6 +81,15 @@ public sealed class LinearQualityDepthTests
         Paint(faded, 84, 108, 8, 2, 200);
         Assert.IsEmpty(Defects(Inspect(faded)));
 
+        // 渐淡的条端与沿条边一列的灰边相连：边缘列本就不计入，条端区只按内部列判断。
+        var greyEdge = Bars(8, 16);
+        Paint(greyEdge, 84, 88, 1, 22, 110);
+        Paint(greyEdge, 85, 106, 7, 4, 120);
+        Assert.IsEmpty(
+            Defects(Inspect(greyEdge)),
+            string.Join(";", Defects(Inspect(greyEdge)).Select(f => f.Message))
+        );
+
         var lost = Bars(8, 16);
         Paint(lost, 84, 90, 8, 20, 255);
         Assert.AreEqual("barcode_missing_ink", Defects(Inspect(lost)).Single().Code);
