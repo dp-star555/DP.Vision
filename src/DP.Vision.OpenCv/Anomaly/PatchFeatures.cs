@@ -128,17 +128,25 @@ internal static partial class PatchFeatures
         return peak;
     }
 
-    /// <summary>1/2尺度平面乘以上下文权重并在四周补<paramref name = "pad"/>像素纸白（0），供位置相关的整体距离计算。</summary>
-    internal static Plane PaddedContext(Plane half, int pad)
+    /// <summary>
+    /// 从原尺度墨量平面按2×2块平均得到1/2尺度上下文平面（起点错开<paramref name = "px"/>、<paramref name = "py"/>像素，
+    /// 越界像素按纸白0计），乘以上下文权重并在四周补<paramref name = "pad"/>格纸白，供位置相关的整体距离计算。
+    /// </summary>
+    internal static Plane PhaseContext(Plane full, int px, int py, int pad)
     {
-        int w = half.Width + 2 * pad,
-            h = half.Height + 2 * pad;
+        int hw = (full.Width - px + 1) / 2,
+            hh = (full.Height - py + 1) / 2,
+            w = hw + 2 * pad,
+            h = hh + 2 * pad;
         var data = new float[w * h];
-        for (int y = 0; y < half.Height; y++)
+        for (int j = 0; j < hh; j++)
         {
-            for (int x = 0; x < half.Width; x++)
+            for (int i = 0; i < hw; i++)
             {
-                data[(y + pad) * w + x + pad] = half.Data[y * half.Width + x] * ContextWeight;
+                int x = 2 * i + px,
+                    y = 2 * j + py;
+                float sum = full.At(x, y) + full.At(x + 1, y) + full.At(x, y + 1) + full.At(x + 1, y + 1);
+                data[(j + pad) * w + i + pad] = sum / 4 * ContextWeight;
             }
         }
 

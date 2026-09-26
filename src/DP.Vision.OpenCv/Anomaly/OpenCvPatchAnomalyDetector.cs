@@ -67,7 +67,7 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                     31 + i,
                     token
                 );
-                worst = Math.Max(worst, Scores(sets[i], others).DefaultIfEmpty(0).Max());
+                worst = Math.Max(worst, InteriorMax(Scores(sets[i], others), sets[i], planes[i].Full, p, 1));
             }
 
             calibration = $"留一法（{sets.Count}张良品，每张用其余良品的记忆库评分）";
@@ -77,9 +77,8 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             using var gray = CvPixels.Gray(good[0]);
             using var shifted = Augment(gray);
             var (full, half) = PatchFeatures.Prepare(shifted);
-            worst = Scores(PatchFeatures.Extract(full, half, p, TrainingStride, token), memory)
-                .DefaultIfEmpty(0)
-                .Max();
+            var augmented = PatchFeatures.Extract(full, half, p, TrainingStride, token);
+            worst = InteriorMax(Scores(augmented, memory), augmented, full, p, TrainingStride);
             calibration = "单张良品：平移1像素并轻度模糊的增强图评分";
         }
 
@@ -161,7 +160,7 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         {
             // 位置相关：纸白块也评分，良品此处有墨而实际无墨（缺笔画）同样得高分。
             query = PatchFeatures.Extract(full, half, p, options.Stride, token, includeBlank: true);
-            scores = LocalScores(query, full, half, Planes(model), model.Radius, p, token);
+            scores = LocalScores(query, full, Planes(model), model.Radius, p, token);
         }
         else
         {
@@ -249,9 +248,13 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                 var others = planes.Where((_, j) => j != i).ToList();
                 worst = Math.Max(
                     worst,
-                    LocalScores(query, planes[i].Full, planes[i].Half, others, radius, p, token)
-                        .DefaultIfEmpty(0)
-                        .Max()
+                    InteriorMax(
+                        LocalScores(query, planes[i].Full, others, radius, p, token),
+                        query,
+                        planes[i].Full,
+                        p,
+                        TrainingStride
+                    )
                 );
             }
 
@@ -263,7 +266,13 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             using var augmented = Augment(gray);
             var (full, half) = PatchFeatures.Prepare(augmented);
             var query = PatchFeatures.Extract(full, half, p, TrainingStride, token, true);
-            worst = LocalScores(query, full, half, planes, radius, p, token).DefaultIfEmpty(0).Max();
+            worst = InteriorMax(
+                LocalScores(query, full, planes, radius, p, token),
+                query,
+                full,
+                p,
+                TrainingStride
+            );
             calibration = $"位置相关±{radius}像素，单张良品：平移1像素并轻度模糊的增强图评分";
         }
 
@@ -318,13 +327,13 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
 
     /// <summary>
     /// 每个查询块到任一良品同位置±半径内块的最近L2距离。按“良品×偏移”整体计算：原尺度块距离是差值平方图在P×P窗口内的和，
-    /// 1/2尺度上下文块距离同理（上下文块位置随偏移的奇偶变化，按实际位移分别缓存），均用积分图一次求出所有块，
-    /// 结果与逐块逐位置比较相同，但不随块数×偏移数×维数逐项循环。
+    /// 用积分图一次求出所有块。1/2尺度上下文按实际物理位置对应：偏移为奇数像素时，良品的上下文取按同一相位（错开1像素）
+    /// 下采样的平面，因此任意整像素平移都能精确对上；否则奇数偏移下上下文相差半个下采样像素，锐利边缘处得分虚高，
+    /// 平移1像素的良品也会被判异常。
     /// </summary>
     private static float[] LocalScores(
         PatchFeatures.Set query,
         PatchFeatures.Plane queryFull,
-        PatchFeatures.Plane queryHalf,
         IReadOnlyList<(PatchFeatures.Plane Full, PatchFeatures.Plane Half)> references,
         int radius,
         int patchSize,
@@ -346,13 +355,13 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             cqy[i] = (query.Corners[i].Y + hp) / 2 - hp;
         }
 
-        var queryContext = PatchFeatures.PaddedContext(queryHalf, pad);
+        var queryContext = PatchFeatures.PhaseContext(queryFull, 0, 0, pad);
         var fullIntegral = new double[(w + 1) * (h + 1)];
         var squared = new double[w * h];
-        foreach (var (full, half) in references)
+        foreach (var (full, _) in references)
         {
-            var referenceContext = PatchFeatures.PaddedContext(half, pad);
-            var contextIntegrals = new Dictionary<(int, int), double[]>();
+            var phases = new PatchFeatures.Plane?[4];
+            var contextIntegrals = new Dictionary<(int, int, int), double[]>();
             for (int oy = -radius; oy <= radius; oy++)
             {
                 for (int ox = -radius; ox <= radius; ox++)
@@ -371,13 +380,28 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                     }
 
                     Integral(squared, w, h, fullIntegral);
+
+                    // 上下文块覆盖原尺度[2c, 2c+2P)；良品对应区域为[2c+o, …)，落在相位(o mod 2)的下采样平面第c+(o−相位)/2格。
+                    int px = ((ox % 2) + 2) % 2,
+                        py = ((oy % 2) + 2) % 2,
+                        phase = py * 2 + px;
+                    var key = (phase, (ox - px) / 2, (oy - py) / 2);
+                    if (!contextIntegrals.TryGetValue(key, out var context))
+                    {
+                        var plane = phases[phase] ??= PatchFeatures.PhaseContext(full, px, py, pad);
+                        context = contextIntegrals[key] = ContextIntegral(
+                            queryContext,
+                            plane,
+                            key.Item2,
+                            key.Item3
+                        );
+                    }
+
                     for (int i = 0; i < n; i++)
                     {
                         int x = query.Corners[i].X,
-                            y = query.Corners[i].Y,
-                            rx = x + ox,
-                            ry = y + oy;
-                        if (rx < 0 || ry < 0 || rx + patchSize > w || ry + patchSize > h)
+                            y = query.Corners[i].Y;
+                        if (x + ox < 0 || y + oy < 0 || x + ox + patchSize > w || y + oy + patchSize > h)
                         {
                             continue;
                         }
@@ -386,17 +410,6 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                         if (d >= best[i])
                         {
                             continue;
-                        }
-
-                        var shift = ((rx + hp) / 2 - hp - cqx[i], (ry + hp) / 2 - hp - cqy[i]);
-                        if (!contextIntegrals.TryGetValue(shift, out var context))
-                        {
-                            context = contextIntegrals[shift] = ContextIntegral(
-                                queryContext,
-                                referenceContext,
-                                shift.Item1,
-                                shift.Item2
-                            );
                         }
 
                         d += Box(context, queryContext.Width + 1, cqx[i] + pad, cqy[i] + pad, patchSize);
@@ -416,6 +429,42 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         }
 
         return scores;
+    }
+
+    /// <summary>
+    /// 边缘带以外的块中的最大得分（与<see cref = "AnomalyMap"/>一致：块的得分核心区与边缘带以内区域相交即计入）。
+    /// 阈值标定只用这些块：边缘带内的内容可能被裁图截断，检测时也不报异常。裁图太小没有内部区域时用全部块。
+    /// </summary>
+    private static double InteriorMax(
+        float[] scores,
+        PatchFeatures.Set set,
+        PatchFeatures.Plane full,
+        int patchSize,
+        int stride
+    )
+    {
+        int core = Math.Max(patchSize / 2, stride),
+            inset = (patchSize - core) / 2,
+            w = full.Width,
+            h = full.Height,
+            border = patchSize;
+        if (w <= 2 * border || h <= 2 * border)
+        {
+            return scores.DefaultIfEmpty(0).Max();
+        }
+
+        double worst = 0;
+        for (int i = 0; i < scores.Length; i++)
+        {
+            int x = set.Corners[i].X + inset,
+                y = set.Corners[i].Y + inset;
+            if (x + core > border && x < w - border && y + core > border && y < h - border)
+            {
+                worst = Math.Max(worst, scores[i]);
+            }
+        }
+
+        return worst;
     }
 
     /// <summary>(查询上下文 − 平移后的良品上下文)²的积分图；平移超出填充范围处按纸白（0）计。</summary>
