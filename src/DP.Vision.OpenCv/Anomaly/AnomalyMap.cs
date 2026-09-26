@@ -4,14 +4,16 @@ using OpenCvSharp;
 
 namespace DP.Vision.OpenCv;
 
-/// <summary>异常得分图转为结果：边缘带只作上下文，超阈值连通域为缺陷，热力图128对应阈值。两种特征实现共用。</summary>
+/// <summary>
+/// 异常得分图转为结果：边缘带只作上下文（不报异常、不计入最大得分和热力图），超阈值连通域为缺陷，热力图128对应阈值。两种特征实现共用。
+/// </summary>
 internal static class AnomalyMap
 {
     /// <param name = "map">与裁图同尺寸的CV_32F得分图。</param>
     /// <param name = "threshold">阈值。</param>
     /// <param name = "border">裁图边缘只作上下文的宽度（像素）。</param>
     /// <param name = "minimumArea">异常区域最小面积。</param>
-    /// <param name = "maximum">全部块的最大得分。</param>
+    /// <param name = "maximum">全部块的最大得分；裁图大于两倍边缘带时改用边缘带以外的最大得分，与异常区域、热力图一致。</param>
     /// <param name = "scope">说明信息。</param>
     internal static PatchAnomalyResult Result(
         Mat map,
@@ -29,6 +31,7 @@ internal static class AnomalyMap
             scored.RowRange(scored.Rows - border, scored.Rows).SetTo(0);
             scored.ColRange(0, border).SetTo(0);
             scored.ColRange(scored.Cols - border, scored.Cols).SetTo(0);
+            Cv2.MinMaxLoc(scored, out _, out maximum);
         }
 
         var findings = new List<QualityFinding>();
@@ -74,7 +77,7 @@ internal static class AnomalyMap
 
         findings.Add(new QualityFinding("patch_anomaly_scope", scope, EQualityFindingKind.Information));
         using var heat = new Mat();
-        map.ConvertTo(heat, MatType.CV_8U, 128.0 / threshold);
+        scored.ConvertTo(heat, MatType.CV_8U, 128.0 / threshold);
         using var heatImage = CvPixels.Buffer(heat);
         return new PatchAnomalyResult(EAlgorithmStatus.Completed, maximum, threshold, findings, heatImage);
     }

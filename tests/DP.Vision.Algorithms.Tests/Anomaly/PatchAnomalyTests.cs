@@ -174,6 +174,34 @@ public sealed class PatchAnomalyTests
         Assert.AreEqual(EAlgorithmStatus.UnsupportedInput, mismatch.Status);
     }
 
+    /// <summary>
+    /// 位置相关模式：良品全部同一位置（训练时对齐得很准），检测时整体平移1像素（奇数）或2像素的良品仍须通过；
+    /// 最大得分只统计边缘带以外的块，与报告的异常区域一致。
+    /// </summary>
+    [TestMethod]
+    public void LocalModeAbsorbsOddPixelShifts()
+    {
+        var options = new PatchAnomalyOptions(localRadius: 3);
+        var good = new[] { Image(Strokes(2, 1)), Image(Strokes(2, 2)), Image(Strokes(2, 3)) };
+        var model = new OpenCvPatchAnomalyDetector().Train(good, options);
+        foreach (var g in good)
+        {
+            g.Dispose();
+        }
+
+        var detector = new OpenCvPatchAnomalyDetector();
+        foreach (int shift in new[] { 1, 2, 3, 4 })
+        {
+            using var image = Image(Strokes(shift, 10 + shift));
+            using var result = detector.Detect(image, model, options);
+            Assert.IsTrue(
+                result.Passed && result.MaximumScore < result.Threshold,
+                $"shift {shift - 2}: {result.MaximumScore:F3}/{result.Threshold:F3} "
+                    + string.Join(";", Defects(result).Select(f => f.Message))
+            );
+        }
+    }
+
     /// <summary>兼容性：版本1（没有特征来源字段）的模型文件仍可读取，视为手工特征；未知版本明确拒绝。</summary>
     [TestMethod]
     public void VersionOneModelsRemainReadable()
