@@ -12,8 +12,17 @@ namespace DP.Vision.OpenCv;
 /// 检测块到最近良品块的L2距离即异常得分。阈值按留一法标定（每张良品用不含它的记忆库评分，取最大值乘余量）；
 /// 只有一张良品时用平移1像素并轻度模糊的增强图代替。
 /// </summary>
-public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
+public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
 {
+    /// <summary>位置相关模型的良品参考数据缓存（与模型同生命周期；模型不可变，可多线程共用）。</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        PatchAnomalyModel,
+        LocalReference[]
+    > _references = new System.Runtime.CompilerServices.ConditionalWeakTable<
+        PatchAnomalyModel,
+        LocalReference[]
+    >();
+
     /// <summary>留一法标定与位置相关训练的查询采样步长；检测步长由参数决定。</summary>
     private const int TrainingStride = 2;
 
@@ -159,8 +168,12 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         if (model.Radius > 0)
         {
             // 位置相关：纸白块也评分，良品此处有墨而实际无墨（缺笔画）同样得高分。
-            query = PatchFeatures.Extract(full, half, p, options.Stride, token, includeBlank: true);
-            scores = LocalScores(query, full, Planes(model), model.Radius, p, token);
+            query = PatchFeatures.Grid(full.Width, full.Height, p, options.Stride);
+            var references = _references.GetValue(
+                model,
+                m => Planes(m).Select(pl => new LocalReference(pl.Full, m.PatchSize, m.Radius)).ToArray()
+            );
+            scores = LocalScores(query, full, references, model.Radius, p, token);
         }
         else
         {
@@ -173,18 +186,24 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         // 得分写入块中心区域（边长取块的一半与步长中较大者），避免整块外扩使缺陷框偏大。
         int core = Math.Max(p / 2, options.Stride),
             inset = (p - core) / 2;
-        var values = new float[gray.Rows * gray.Cols];
+        int rows = gray.Rows,
+            cols = gray.Cols;
+        var values = new float[rows * cols];
         for (int i = 0; i < query.Count; i++)
         {
             var corner = query.Corners[i];
-            for (int y = corner.Y + inset; y < Math.Min(gray.Rows, corner.Y + inset + core); y++)
+            float score = scores[i];
+            int y1 = Math.Min(rows, corner.Y + inset + core),
+                x0 = corner.X + inset,
+                x1 = Math.Min(cols, x0 + core);
+            for (int y = corner.Y + inset; y < y1; y++)
             {
-                for (int x = corner.X + inset; x < Math.Min(gray.Cols, corner.X + inset + core); x++)
+                int row = y * cols;
+                for (int x = x0; x < x1; x++)
                 {
-                    int k = y * gray.Cols + x;
-                    if (values[k] < scores[i])
+                    if (values[row + x] < score)
                     {
-                        values[k] = scores[i];
+                        values[row + x] = score;
                     }
                 }
             }
@@ -231,21 +250,15 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             );
         }
 
+        var references = planes.Select(pl => new LocalReference(pl.Full, p, radius)).ToArray();
         double worst = 0;
         string calibration;
         if (planes.Count >= 2)
         {
             for (int i = 0; i < planes.Count; i++)
             {
-                var query = PatchFeatures.Extract(
-                    planes[i].Full,
-                    planes[i].Half,
-                    p,
-                    TrainingStride,
-                    token,
-                    true
-                );
-                var others = planes.Where((_, j) => j != i).ToList();
+                var query = PatchFeatures.Grid(width, height, p, TrainingStride);
+                var others = references.Where((_, j) => j != i).ToList();
                 worst = Math.Max(
                     worst,
                     InteriorMax(
@@ -264,10 +277,10 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         {
             using var gray = CvPixels.Gray(good[0]);
             using var augmented = Augment(gray);
-            var (full, half) = PatchFeatures.Prepare(augmented);
-            var query = PatchFeatures.Extract(full, half, p, TrainingStride, token, true);
+            var (full, _) = PatchFeatures.Prepare(augmented);
+            var query = PatchFeatures.Grid(full.Width, full.Height, p, TrainingStride);
             worst = InteriorMax(
-                LocalScores(query, full, planes, radius, p, token),
+                LocalScores(query, full, references, radius, p, token),
                 query,
                 full,
                 p,
@@ -334,7 +347,7 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
     private static float[] LocalScores(
         PatchFeatures.Set query,
         PatchFeatures.Plane queryFull,
-        IReadOnlyList<(PatchFeatures.Plane Full, PatchFeatures.Plane Half)> references,
+        IReadOnlyList<LocalReference> references,
         int radius,
         int patchSize,
         CancellationToken token
@@ -344,7 +357,7 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             w = queryFull.Width,
             h = queryFull.Height,
             hp = patchSize / 2,
-            pad = patchSize + radius + 2;
+            pad = LocalReference.Pad(patchSize, radius);
         var best = new double[n];
         var cqx = new int[n];
         var cqy = new int[n];
@@ -357,45 +370,26 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
 
         var queryContext = PatchFeatures.PhaseContext(queryFull, 0, 0, pad);
         var fullIntegral = new double[(w + 1) * (h + 1)];
-        var squared = new double[w * h];
-        foreach (var (full, _) in references)
+        var contextIntegral = new double[(queryContext.Width + 1) * (queryContext.Height + 1)];
+        foreach (var reference in references)
         {
-            var phases = new PatchFeatures.Plane?[4];
-            var contextIntegrals = new Dictionary<(int, int, int), double[]>();
             for (int oy = -radius; oy <= radius; oy++)
             {
                 for (int ox = -radius; ox <= radius; ox++)
                 {
                     token.ThrowIfCancellationRequested();
-                    Array.Clear(squared, 0, squared.Length);
-                    for (int y = Math.Max(0, -oy); y < Math.Min(h, h - oy); y++)
-                    {
-                        int q = y * w,
-                            r = (y + oy) * w + ox;
-                        for (int x = Math.Max(0, -ox); x < Math.Min(w, w - ox); x++)
-                        {
-                            double t = queryFull.Data[q + x] - full.Data[r + x];
-                            squared[q + x] = t * t;
-                        }
-                    }
-
-                    Integral(squared, w, h, fullIntegral);
+                    ShiftedIntegral(queryFull, reference.Full, ox, oy, fullIntegral);
 
                     // 上下文块覆盖原尺度[2c, 2c+2P)；良品对应区域为[2c+o, …)，落在相位(o mod 2)的下采样平面第c+(o−相位)/2格。
                     int px = ((ox % 2) + 2) % 2,
-                        py = ((oy % 2) + 2) % 2,
-                        phase = py * 2 + px;
-                    var key = (phase, (ox - px) / 2, (oy - py) / 2);
-                    if (!contextIntegrals.TryGetValue(key, out var context))
-                    {
-                        var plane = phases[phase] ??= PatchFeatures.PhaseContext(full, px, py, pad);
-                        context = contextIntegrals[key] = ContextIntegral(
-                            queryContext,
-                            plane,
-                            key.Item2,
-                            key.Item3
-                        );
-                    }
+                        py = ((oy % 2) + 2) % 2;
+                    ContextIntegral(
+                        queryContext,
+                        reference.Phases[py * 2 + px],
+                        (ox - px) / 2,
+                        (oy - py) / 2,
+                        contextIntegral
+                    );
 
                     for (int i = 0; i < n; i++)
                     {
@@ -412,7 +406,13 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                             continue;
                         }
 
-                        d += Box(context, queryContext.Width + 1, cqx[i] + pad, cqy[i] + pad, patchSize);
+                        d += Box(
+                            contextIntegral,
+                            queryContext.Width + 1,
+                            cqx[i] + pad,
+                            cqy[i] + pad,
+                            patchSize
+                        );
                         if (d < best[i])
                         {
                             best[i] = d;
@@ -467,43 +467,92 @@ public sealed class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         return worst;
     }
 
-    /// <summary>(查询上下文 − 平移后的良品上下文)²的积分图；平移超出填充范围处按纸白（0）计。</summary>
-    private static double[] ContextIntegral(
+    /// <summary>
+    /// (查询 − 平移(ox, oy)后的良品)²的积分图，写入<paramref name = "integral"/>（(w+1)×(h+1)）；良品平移后无对应像素处按0计。
+    /// 差值平方与积分一次完成、不分配内存，逐项累加顺序与先求差值平方图再积分相同，结果逐位一致。
+    /// </summary>
+    private static void ShiftedIntegral(
         PatchFeatures.Plane query,
         PatchFeatures.Plane reference,
-        int shiftX,
-        int shiftY
+        int ox,
+        int oy,
+        double[] integral
     )
     {
         int w = query.Width,
-            h = query.Height;
-        var squared = new double[w * h];
-        for (int y = 0; y < h; y++)
-        {
-            for (int x = 0; x < w; x++)
-            {
-                double t = query.Data[y * w + x] - reference.At(x + shiftX, y + shiftY);
-                squared[y * w + x] = t * t;
-            }
-        }
-
-        var integral = new double[(w + 1) * (h + 1)];
-        Integral(squared, w, h, integral);
-        return integral;
-    }
-
-    private static void Integral(double[] values, int w, int h, double[] integral)
-    {
-        int stride = w + 1;
+            h = query.Height,
+            stride = w + 1,
+            x0 = Math.Max(0, -ox),
+            x1 = Math.Min(w, w - ox);
+        var q = query.Data;
+        var r = reference.Data;
         Array.Clear(integral, 0, stride);
         for (int y = 0; y < h; y++)
         {
             double row = 0;
-            integral[(y + 1) * stride] = 0;
+            int above = y * stride + 1,
+                current = (y + 1) * stride + 1;
+            integral[current - 1] = 0;
+            if (y + oy < 0 || y + oy >= h)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    integral[current + x] = integral[above + x] + row;
+                }
+
+                continue;
+            }
+
+            int qr = y * w,
+                rr = (y + oy) * w + ox;
             for (int x = 0; x < w; x++)
             {
-                row += values[y * w + x];
-                integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row;
+                if (x >= x0 && x < x1)
+                {
+                    double t = q[qr + x] - r[rr + x];
+                    row += t * t;
+                }
+                else
+                {
+                    row += 0.0;
+                }
+
+                integral[current + x] = integral[above + x] + row;
+            }
+        }
+    }
+
+    /// <summary>(查询上下文 − 平移后的良品上下文)²的积分图，写入<paramref name = "integral"/>；平移超出填充范围处按纸白（0）计。</summary>
+    private static void ContextIntegral(
+        PatchFeatures.Plane query,
+        PatchFeatures.Plane reference,
+        int shiftX,
+        int shiftY,
+        double[] integral
+    )
+    {
+        int w = query.Width,
+            h = query.Height,
+            stride = w + 1,
+            rw = reference.Width,
+            rh = reference.Height;
+        var q = query.Data;
+        var r = reference.Data;
+        Array.Clear(integral, 0, stride);
+        for (int y = 0; y < h; y++)
+        {
+            double row = 0;
+            int above = y * stride + 1,
+                current = (y + 1) * stride + 1,
+                ry = y + shiftY;
+            bool inside = ry >= 0 && ry < rh;
+            integral[current - 1] = 0;
+            for (int x = 0; x < w; x++)
+            {
+                int rx = x + shiftX;
+                double t = q[y * w + x] - (inside && rx >= 0 && rx < rw ? r[ry * rw + rx] : 0f);
+                row += t * t;
+                integral[current + x] = integral[above + x] + row;
             }
         }
     }

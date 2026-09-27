@@ -97,6 +97,24 @@ internal static partial class PatchFeatures
         return set;
     }
 
+    /// <summary>
+    /// 全部块位置（含纯纸白块），只有左上角坐标、不填特征值：位置相关评分直接用墨量平面整体计算距离，
+    /// 不需要逐块特征向量（与<see cref = "Extract"/>在includeBlank为true时的块位置和顺序相同）。
+    /// </summary>
+    internal static Set Grid(int width, int height, int patchSize, int stride)
+    {
+        var set = new Set(Dimensions(patchSize));
+        for (int y = 0; y + patchSize <= height; y += stride)
+        {
+            for (int x = 0; x + patchSize <= width; x += stride)
+            {
+                set.Corners.Add(new Point(x, y));
+            }
+        }
+
+        return set;
+    }
+
     /// <summary>填充左上角(x, y)处的块特征，返回块内最大墨量。</summary>
     internal static float Fill(Plane full, Plane half, int x, int y, int patchSize, float[] buffer)
     {

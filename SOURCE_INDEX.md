@@ -73,6 +73,7 @@
 | `OpenCvCnnPatchAnomalyDetector` | [src/DP.Vision.OpenCv/Anomaly/OpenCvCnnPatchAnomalyDetector.cs](src/DP.Vision.OpenCv/Anomaly/OpenCvCnnPatchAnomalyDetector.cs) |
 | `OpenCvCnnPatchAnomalyDetector.CellGrid` | [src/DP.Vision.OpenCv/Anomaly/Internal/OpenCvCnnPatchAnomalyDetector/CellGrid.cs](src/DP.Vision.OpenCv/Anomaly/Internal/OpenCvCnnPatchAnomalyDetector/CellGrid.cs) |
 | `OpenCvPatchAnomalyDetector` | [src/DP.Vision.OpenCv/Anomaly/OpenCvPatchAnomalyDetector.cs](src/DP.Vision.OpenCv/Anomaly/OpenCvPatchAnomalyDetector.cs) |
+| `OpenCvPatchAnomalyDetector.LocalReference` | [src/DP.Vision.OpenCv/Anomaly/Internal/OpenCvPatchAnomalyDetector/LocalReference.cs](src/DP.Vision.OpenCv/Anomaly/Internal/OpenCvPatchAnomalyDetector/LocalReference.cs) |
 | `PatchFeatures` | [src/DP.Vision.OpenCv/Anomaly/PatchFeatures.cs](src/DP.Vision.OpenCv/Anomaly/PatchFeatures.cs) |
 | `PatchFeatures.Plane` | [src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Plane.cs](src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Plane.cs) |
 | `PatchFeatures.Set` | [src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Set.cs](src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Set.cs) |
