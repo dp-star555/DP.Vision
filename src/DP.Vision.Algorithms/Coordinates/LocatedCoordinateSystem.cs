@@ -15,6 +15,30 @@ public sealed class CoordinateMatrix2D
         _ = new Coordinate2D(m11, m12); _ = new Coordinate2D(m21, m22); _ = new Coordinate2D(tx, ty);
         M11 = m11; M12 = m12; Tx = tx; M21 = m21; M22 = m22; Ty = ty;
     }
+    /// <summary>没有提供定位变换时使用的恒等变换；零矩阵会抹掉坐标且不可逆。</summary>
+    public static CoordinateMatrix2D Identity { get; } = FromAffine(1, 0, 0, 0, 1, 0);
+    /// <summary>构造非退化的二维仿射变换；平移、旋转、缩放和剪切都可表示。</summary>
+    /// <param name="m11">目标X的源X系数。</param><param name="m12">目标X的源Y系数。</param><param name="tx">目标X平移。</param>
+    /// <param name="m21">目标Y的源X系数。</param><param name="m22">目标Y的源Y系数。</param><param name="ty">目标Y平移。</param>
+    /// <returns>可逆的像素边界坐标变换。</returns>
+    public static CoordinateMatrix2D FromAffine(double m11, double m12, double tx, double m21, double m22, double ty)
+    {
+        var matrix = new CoordinateMatrix2D(m11, m12, tx, m21, m22, ty);
+        double determinant = m11 * m22 - m12 * m21;
+        if (double.IsNaN(determinant) || double.IsInfinity(determinant) || Math.Abs(determinant) < 1e-12)
+            throw new ArgumentException("Affine transform must be invertible.");
+        return matrix;
+    }
+    /// <summary>求逆变换，退化矩阵不能反演。</summary>
+    /// <returns>目标到源的仿射变换。</returns>
+    public CoordinateMatrix2D Inverse()
+    {
+        double det = M11 * M22 - M12 * M21;
+        if (double.IsNaN(det) || double.IsInfinity(det) || Math.Abs(det) < 1e-12)
+            throw new InvalidOperationException("Affine transform is not invertible.");
+        return FromAffine(M22 / det, -M12 / det, (M12 * Ty - M22 * Tx) / det,
+            -M21 / det, M11 / det, (M21 * Tx - M11 * Ty) / det);
+    }
     /// <summary>X的X系数。</summary>
     public double M11 { get; }
     /// <summary>X的Y系数。</summary>
@@ -29,6 +53,23 @@ public sealed class CoordinateMatrix2D
     public double Ty { get; }
     /// <summary>映射有限坐标，不隐式修正半像素。</summary><param name="point">输入。</param><returns>输出。</returns>
     public Coordinate2D Map(Coordinate2D point) => new Coordinate2D(M11 * point.X + M12 * point.Y + Tx, M21 * point.X + M22 * point.Y + Ty);
+    /// <summary>将矩形或轮廓映射为精确连续轮廓；剪切矩形不能退化为轴对齐外接框。</summary>
+    /// <param name="geometry">局部矩形或轮廓；未支持的几何必须显式拒绝。</param>
+    /// <returns>原顺序顶点映射后的轮廓，保留填充语义。</returns>
+    public ContourGeometry MapGeometry(Geometry geometry)
+    {
+        if (geometry == null) throw new ArgumentNullException(nameof(geometry));
+        if (geometry is RectangleGeometry rectangle)
+            return new ContourGeometry(rectangle.Corners.Select(MapPoint), true, true);
+        if (geometry is ContourGeometry contour)
+            return new ContourGeometry(contour.Points.Select(MapPoint), contour.Closed, contour.Filled);
+        throw new NotSupportedException("Affine mapping currently supports rectangles and contours, not raster regions or ellipses.");
+    }
+    private PointD MapPoint(PointD point)
+    {
+        var mapped = Map(new Coordinate2D(point.X, point.Y));
+        return new PointD(mapped.X, mapped.Y);
+    }
 }
 
 /// <summary>同一检测点的图像/模板局部双坐标及来源身份。</summary>

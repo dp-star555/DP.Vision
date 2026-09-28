@@ -179,6 +179,21 @@ public sealed class ImageSourceTests
         CollectionAssert.AreEqual(expected, region);
     }
 
+    /// <summary>裁剪返回独立租约并保留精确多通道像素，源图释放后仍可读取。</summary>
+    [TestMethod]
+    public void CropProducesIndependentTightlyPackedImage()
+    {
+        var pixels = Enumerable.Range(0, 4 * 3 * 3).Select(i => (byte)i).ToArray();
+        var source = VisionImage.CopyFrom(new ImageInfo(4, 3, EPixelLayout.Bgr24), pixels);
+        using var crop = source.Crop(1, 1, 2, 2);
+        source.Dispose();
+        var actual = new byte[crop.Info.ByteLength];
+        crop.CopyTo(0, actual, 0, actual.Length);
+        CollectionAssert.AreEqual(new byte[] { 15, 16, 17, 18, 19, 20, 27, 28, 29, 30, 31, 32 }, actual);
+        Assert.AreEqual(2, crop.Info.Width);
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => crop.Crop(1, 0, 2, 1));
+    }
+
     /// <summary>越界区域或放不下区域的目标数组明确拒绝，不做静默裁剪。</summary>
     [TestMethod]
     public void CopyRegionRejectsOutOfRangeRequests()

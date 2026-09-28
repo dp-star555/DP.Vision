@@ -5,6 +5,20 @@ namespace DP.Vision;
 /// <summary>建立在<see cref="IImageSource.CopyTo"/>之上的像素读取辅助，不要求图像源实现额外成员。</summary>
 public static class ImageSourceExtensions
 {
+    /// <summary>从原始像素精确裁取独立图像租约；不复制整张原图，不做插值。</summary>
+    /// <param name="source">借用的只读图像源。</param>
+    /// <param name="x">裁剪左边缘。</param><param name="y">裁剪上边缘。</param>
+    /// <param name="width">裁剪宽度。</param><param name="height">裁剪高度。</param>
+    /// <returns>调用方负责释放的裁图租约。</returns>
+    public static IImageSource Crop(this IImageSource source, int x, int y, int width, int height)
+    {
+        if (source == null) throw new ArgumentNullException(nameof(source));
+        var info = new ImageInfo(width, height, source.Info.Layout);
+        var bytes = new byte[info.ByteLength];
+        source.CopyRegion(x, y, width, height, bytes);
+        return VisionImage.CopyFrom(info, bytes);
+    }
+
     /// <summary>
     /// 把原图中的半开像素矩形 [x, x+width) × [y, y+height) 按行紧密复制到调用方数组，
     /// 每行 width × BytesPerPixel 字节，保留原像素布局；只读取该矩形，不复制整幅图像。

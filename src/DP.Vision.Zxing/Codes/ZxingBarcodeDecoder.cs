@@ -9,19 +9,26 @@ using PixelRect = DP.Vision.Algorithms.PixelBounds;
 
 namespace DP.Vision.Zxing;
 
-/// <summary>独立于OpenCV、HALCON和UI的托管ZXing解码器，不代表提供ISO印刷等级。</summary>
-public sealed class ZxingBarcodeDecoder : DP.Vision.Algorithms.IBarcodeReader
+/// <summary>独立于OpenCV、HALCON和UI的托管ZXing解码器，不代表提供ISO印刷等级。掩膜模式只尝试原始像素，不运行可能越过掩膜的修复滤波。</summary>
+public sealed class ZxingBarcodeDecoder : IMaskedBarcodeReader
 {
     /// <inheritdoc/>
     public BarcodeReadResult Read(IImageSource frame, PixelRect bounds, CancellationToken token = default)
     {
-        return new BarcodeReadResult(Decode(frame, bounds, token));
+        return new BarcodeReadResult(Decode(frame, bounds, null, token));
     }
 
     /// <inheritdoc/>
+    public BarcodeReadResult Read(IImageSource frame, PixelRect bounds, RegionGeometry regionMask, CancellationToken token = default)
+    {
+        if (regionMask == null) throw new ArgumentNullException(nameof(regionMask));
+        return new BarcodeReadResult(Decode(frame, bounds, regionMask, token));
+    }
+
     private IReadOnlyList<BarcodeObservation> Decode(
         IImageSource frame,
         PixelRect bounds,
+        RegionGeometry? regionMask,
         CancellationToken token
     )
     {
@@ -41,16 +48,39 @@ public sealed class ZxingBarcodeDecoder : DP.Vision.Algorithms.IBarcodeReader
             throw new NotSupportedException("Reader supports Gray8 and Bgr24.");
         }
 
+        if (regionMask != null && (regionMask.AreaPixels == 0 || regionMask.Runs.Any(r =>
+            r.Row < 0 || r.Row >= frame.Info.Height || r.Start < 0 || r.EndExclusive > frame.Info.Width)))
+        {
+            throw new ArgumentException("Mask must be nonempty and inside the original image.", nameof(regionMask));
+        }
+
         var pixels = new byte[frame.Info.ByteLength];
         frame.CopyTo(0, pixels, 0, pixels.Length);
         var gray = new byte[bounds.Width * bounds.Height];
+        if (regionMask != null) for (int i = 0; i < gray.Length; i++) gray[i] = 255;
         int channels = frame.Info.Layout == EPixelLayout.Gray8 ? 1 : 3;
+        int runIndex = 0;
+        bool intersects = false;
         for (int y = 0; y < bounds.Height; y++)
         {
             token.ThrowIfCancellationRequested();
+            int row = bounds.Y + y;
+            if (regionMask != null)
+            {
+                while (runIndex < regionMask.Runs.Count && regionMask.Runs[runIndex].Row < row) runIndex++;
+            }
             for (int x = 0; x < bounds.Width; x++)
             {
-                int offset = (y + bounds.Y) * frame.Info.Stride + (x + bounds.X) * channels;
+                int column = bounds.X + x;
+                if (regionMask != null)
+                {
+                    while (runIndex < regionMask.Runs.Count && regionMask.Runs[runIndex].Row == row
+                        && regionMask.Runs[runIndex].EndExclusive <= column) runIndex++;
+                    if (runIndex >= regionMask.Runs.Count || regionMask.Runs[runIndex].Row != row
+                        || regionMask.Runs[runIndex].Start > column) continue;
+                    intersects = true;
+                }
+                int offset = row * frame.Info.Stride + column * channels;
                 gray[y * bounds.Width + x] =
                     channels == 1
                         ? pixels[offset]
@@ -60,12 +90,17 @@ public sealed class ZxingBarcodeDecoder : DP.Vision.Algorithms.IBarcodeReader
                         );
             }
         }
+        if (regionMask != null && !intersects)
+            throw new ArgumentException("Mask and search bounds do not intersect.", nameof(regionMask));
 
         var direct = Decode(gray, bounds.Width, bounds.Height, 1, "", bounds, token);
         if (direct.Count > 0)
         {
             return direct;
         }
+
+        // 掩膜内读取不允许修复滤波将墨迹扩散到排除区域；直接读取失败时保留未读出状态。
+        if (regionMask != null) return Array.Empty<BarcodeObservation>();
 
         // 原图未读出时依次尝试有限的修复预处理；只接受唯一结果，并记录所用预处理，
         // 由质量检查报告“原图可读性余量不足”，而不是当作原图直接可读。

@@ -225,12 +225,19 @@ M2（打开失败重新抛出 → `StartAsync` 直接失败、不再是 `Degrade
 **关键语义**：窗口的持有者是**消费方**（节点侧的帧作用域），不是根运行。
 窗口关闭 = 收口本代次并释放未领取帧；窗口之外的帧仍按现有规则被拒绝并计数。
 
-**为什么契约部分现在不做**：`IVisionAcquisition` 在 DP.WorkFlow 侧的**全部 5 个消费点**
-（`VisionCaptureNodeExecution.cs`、`WorkflowImageRuntimePluginModule.cs`、两个 sample、
-`BufferedExternalRunScopeEndToEndTests.cs`）此刻正被**另一个进程暂存或修改中**
-（2026-09-22 17:2x 仍在写），而 `VisionAcquisitionRunScope.cs` 与 `WorkflowVisionFrameScope.cs`
-是必须同步改的桥。现在改契约会打断对方在途的工作并让其暂存批次编译不过。
-**等对方那批落地后再动**；解阻后 DP.Vision 侧与本仓侧要作为一个整体提交。
+**⛔→✅ 阻塞已解除（2026-09-23 晚核实）**：原阻塞原因是 `IVisionAcquisition` 在 DP.WorkFlow 侧的
+**全部 5 个消费点**（`VisionCaptureNodeExecution.cs`、`WorkflowImageRuntimePluginModule.cs`、两个 sample、
+`BufferedExternalRunScopeEndToEndTests.cs`）被另一个进程暂存/修改中，而
+`VisionAcquisitionRunScope.cs` 与 `WorkflowVisionFrameScope.cs` 是必须同步改的桥；
+在那时改契约会打断对方在途工作并让其暂存批次编译不过。
+
+解除依据（可复核）：对方那批已作为独立提交落地（DP.WorkFlow `1fdadf1 feat(vision): 拆分面阵与线扫采集节点`，
+`WorkflowVisionFrameScope.cs` / `VisionCaptureNodeExecution.cs` / `WorkflowImageRuntimePluginModule.cs` 均在列），
+**两仓工作区均已干净**（`git status --short` 无输出，暂存区 0 条），且这些消费点的磁盘 mtime 停在 `09-21 17:2x`
+——**近两天无人再写**。⇒ 契约部分现在可以做。
+
+**提交纪律**：DP.Vision 侧（契约 + 运行时）与 DP.WorkFlow 侧（5 个消费点 + 两个桥）要作为**一个整体提交**，
+不要只提交一侧留下编译不过的中间态。动手前先确认两仓仍为干净基线（本仓 `74ae648`、DP.WorkFlow `2201316`）。
 
 ### 4.0.1 顺序约束：Phase A 必须先于 Phase C（诊断重做）
 
