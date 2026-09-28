@@ -61,4 +61,26 @@ public static class InspectionMask
         if (mask != null && mask.Runs.Any(r => r.Row < 0 || r.Row >= image.Info.Height || r.Start < 0 || r.EndExclusive > image.Info.Width))
             throw new ArgumentOutOfRangeException(nameof(mask));
     }
+
+    /// <summary>把Region在指定原图范围内渲染为Gray8掩码图（范围内属于Region的像素为255，其余为0），供以掩码图为参数的算子使用。</summary>
+    /// <param name="mask">原图坐标的Region。</param>
+    /// <param name="bounds">输出掩码图对应的原图范围。</param>
+    /// <param name="token">取消令牌。</param>
+    /// <returns>与范围同尺寸的独立Gray8图像。</returns>
+    public static IImageSource ToImage(RegionGeometry mask, PixelBounds bounds, CancellationToken token = default)
+    {
+        if (mask == null) throw new ArgumentNullException(nameof(mask));
+        var info = new ImageInfo(bounds.Width, bounds.Height, EPixelLayout.Gray8);
+        var bytes = new byte[info.ByteLength];
+        foreach (var run in mask.Runs)
+        {
+            token.ThrowIfCancellationRequested();
+            int y = run.Row - bounds.Y;
+            int start = Math.Max(run.Start, bounds.X), end = Math.Min(run.EndExclusive, bounds.X + bounds.Width);
+            if (y < 0 || y >= bounds.Height || end <= start) continue;
+            for (int x = start; x < end; x++) bytes[y * info.Stride + x - bounds.X] = 255;
+        }
+
+        return VisionImage.CopyFrom(info, bytes);
+    }
 }

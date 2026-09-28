@@ -42,6 +42,9 @@
 | `PatchAnomalyOptions` | [src/DP.Vision.Algorithms/Anomaly/PatchAnomalyOptions.cs](src/DP.Vision.Algorithms/Anomaly/PatchAnomalyOptions.cs) |
 | `PatchAnomalyResult` | [src/DP.Vision.Algorithms/Anomaly/PatchAnomalyResult.cs](src/DP.Vision.Algorithms/Anomaly/PatchAnomalyResult.cs) |
 | `NormalizedCharacterCell` | [src/DP.Vision.Algorithms/Anomaly/NormalizedCharacterCell.cs](src/DP.Vision.Algorithms/Anomaly/NormalizedCharacterCell.cs) |
+| `ITranslationRegistrar` | [src/DP.Vision.Algorithms/Location/ITranslationRegistrar.cs](src/DP.Vision.Algorithms/Location/ITranslationRegistrar.cs) |
+| `TranslationRegistrationOptions` | [src/DP.Vision.Algorithms/Location/TranslationRegistrationOptions.cs](src/DP.Vision.Algorithms/Location/TranslationRegistrationOptions.cs) |
+| `TranslationRegistrationResult` | [src/DP.Vision.Algorithms/Location/TranslationRegistrationResult.cs](src/DP.Vision.Algorithms/Location/TranslationRegistrationResult.cs) |
 | `ITextRegionDetector` | [src/DP.Vision.Algorithms/Text/Detection/ITextRegionDetector.cs](src/DP.Vision.Algorithms/Text/Detection/ITextRegionDetector.cs) |
 | `EGlyphBinarization` | [src/DP.Vision.Algorithms/Text/GlyphComparison/EGlyphBinarization.cs](src/DP.Vision.Algorithms/Text/GlyphComparison/EGlyphBinarization.cs) |
 | `GlyphComparisonOptions` | [src/DP.Vision.Algorithms/Text/GlyphComparison/GlyphComparisonOptions.cs](src/DP.Vision.Algorithms/Text/GlyphComparison/GlyphComparisonOptions.cs) |
@@ -94,6 +97,7 @@
 | `PatchFeatures` | [src/DP.Vision.OpenCv/Anomaly/PatchFeatures.cs](src/DP.Vision.OpenCv/Anomaly/PatchFeatures.cs) |
 | `PatchFeatures.Plane` | [src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Plane.cs](src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Plane.cs) |
 | `PatchFeatures.Set` | [src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Set.cs](src/DP.Vision.OpenCv/Anomaly/Internal/PatchFeatures/Set.cs) |
+| `OpenCvTranslationRegistrar` | [src/DP.Vision.OpenCv/Location/OpenCvTranslationRegistrar.cs](src/DP.Vision.OpenCv/Location/OpenCvTranslationRegistrar.cs) |
 | `OpenCvGlyphComparer` | [src/DP.Vision.OpenCv/Text/GlyphComparison/OpenCvGlyphComparer.cs](src/DP.Vision.OpenCv/Text/GlyphComparison/OpenCvGlyphComparer.cs) |
 | `OpenCvTextLinePreprocessor` | [src/DP.Vision.OpenCv/Text/Recognition/OpenCvTextLinePreprocessor.cs](src/DP.Vision.OpenCv/Text/Recognition/OpenCvTextLinePreprocessor.cs) |
 | `OpenCvCharacterSegmenter` | [src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs](src/DP.Vision.OpenCv/Text/Segmentation/OpenCvCharacterSegmenter.cs) |
@@ -156,6 +160,7 @@
 | `AlgorithmTests` | [tests/DP.Vision.Algorithms.Tests/Integration/AlgorithmTests.cs](tests/DP.Vision.Algorithms.Tests/Integration/AlgorithmTests.cs) |
 | `LinearQualityDepthTests` | [tests/DP.Vision.Algorithms.Tests/Codes/LinearQualityDepthTests.cs](tests/DP.Vision.Algorithms.Tests/Codes/LinearQualityDepthTests.cs) |
 | `CharacterAnomalyTests` | [tests/DP.Vision.Algorithms.Tests/Anomaly/CharacterAnomalyTests.cs](tests/DP.Vision.Algorithms.Tests/Anomaly/CharacterAnomalyTests.cs) |
+| `TranslationRegistrationTests` | [tests/DP.Vision.Algorithms.Tests/Location/TranslationRegistrationTests.cs](tests/DP.Vision.Algorithms.Tests/Location/TranslationRegistrationTests.cs) |
 | `GlyphComparisonTests` | [tests/DP.Vision.Algorithms.Tests/Text/GlyphComparisonTests.cs](tests/DP.Vision.Algorithms.Tests/Text/GlyphComparisonTests.cs) |
 | `TextQualityTests.Matcher` | [tests/DP.Vision.Algorithms.Tests/Text/TestDoubles/TextQualityTests/Matcher.cs](tests/DP.Vision.Algorithms.Tests/Text/TestDoubles/TextQualityTests/Matcher.cs) |
 | `TextQualityTests` | [tests/DP.Vision.Algorithms.Tests/Text/TextQualityTests.cs](tests/DP.Vision.Algorithms.Tests/Text/TextQualityTests.cs) |

@@ -58,4 +58,23 @@ public readonly struct PixelBounds
     {
         return new RectD(X, Y, Width, Height);
     }
+
+    /// <summary>转换为轴对齐矩形几何；按像素中心栅格化时恰好覆盖本范围的像素。</summary>
+    public RectangleGeometry ToGeometry()
+    {
+        return new RectangleGeometry(new PointD(X + Width / 2d, Y + Height / 2d), Width, Height);
+    }
+
+    /// <summary>与另一范围的交集；不相交时为null。</summary>
+    /// <param name = "other">另一原图范围。</param>
+    public PixelBounds? Intersect(PixelBounds other)
+    {
+        int left = Math.Max(X, other.X),
+            top = Math.Max(Y, other.Y),
+            right = Math.Min(X + Width, other.X + other.Width),
+            bottom = Math.Min(Y + Height, other.Y + other.Height);
+        return right > left && bottom > top
+            ? new PixelBounds(left, top, right - left, bottom - top)
+            : (PixelBounds?)null;
+    }
 }
