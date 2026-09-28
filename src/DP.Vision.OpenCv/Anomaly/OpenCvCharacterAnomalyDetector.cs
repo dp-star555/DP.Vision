@@ -75,12 +75,18 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
                         crops.Add(CvPixels.Buffer(cell.Image));
                     }
 
-                    var model = _trainer.Train(crops, options.Patch, token);
-                    // 缺墨阈值按来源图留一标定（同一原图对象的灰度图相同，即同一来源）。
+                    // 来源：同一原图对象的灰度图相同，即同一来源。缺墨阈值总按来源图留一标定。
+                    var origins = chosen
+                        .Select(c => sources.FindIndex(g => ReferenceEquals(g, c.Gray)))
+                        .ToList();
+                    var model =
+                        options.SourceLeaveOneOut && _trainer is IGroupedPatchAnomalyTrainer grouped
+                            ? grouped.Train(crops, origins, options.Patch, token)
+                            : _trainer.Train(crops, options.Patch, token);
                     double? ink = CharacterInkLoss.Supports(model)
                         ? CharacterInkLoss.Calibrate(
                             CharacterInkLoss.Planes(model),
-                            chosen.Select(c => sources.FindIndex(g => ReferenceEquals(g, c.Gray))).ToList(),
+                            origins,
                             model.Width,
                             model.Height,
                             options.Patch.ThresholdMargin

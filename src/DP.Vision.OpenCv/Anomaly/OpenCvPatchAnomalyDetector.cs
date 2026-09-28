@@ -12,7 +12,7 @@ namespace DP.Vision.OpenCv;
 /// 检测块到最近良品块的L2距离即异常得分。阈值按留一法标定（每张良品用不含它的记忆库评分，取最大值乘余量）；
 /// 只有一张良品时用平移1像素并轻度模糊的增强图代替。
 /// </summary>
-public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
+public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector, IGroupedPatchAnomalyTrainer
 {
     /// <summary>位置相关模型的良品参考数据缓存（与模型同生命周期；模型不可变，可多线程共用）。</summary>
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
@@ -36,10 +36,34 @@ public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
         CancellationToken token = default
     )
     {
+        return Train(good, null, options, token);
+    }
+
+    /// <inheritdoc/>
+    public PatchAnomalyModel Train(
+        IReadOnlyList<IImageSource> good,
+        IReadOnlyList<int>? sources,
+        PatchAnomalyOptions options,
+        CancellationToken token = default
+    )
+    {
         if (good == null || good.Count == 0 || good.Any(g => g == null))
         {
             throw new ArgumentException("At least one good image is required.", nameof(good));
         }
+
+        if (sources != null && sources.Count != good.Count)
+        {
+            throw new ArgumentException("One source per good image is required.", nameof(sources));
+        }
+
+        // 来源少于2个时无法按来源留一，退回按单个样本留一。
+        var groups =
+            sources != null && sources.Distinct().Count() >= 2
+                ? sources.ToArray()
+                : Enumerable.Range(0, good.Count).ToArray();
+        string by =
+            groups.Distinct().Count() < good.Count ? $"按来源留一，{groups.Distinct().Count()}个来源" : "";
 
         if (options == null)
         {
@@ -56,7 +80,7 @@ public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
 
         if (options.LocalRadius is int radius)
         {
-            return TrainLocal(good, planes, options, radius, token);
+            return TrainLocal(good, planes, groups, by, options, radius, token);
         }
 
         // 与位置无关的记忆库按1像素步长采样，覆盖全部平移相位；否则奇数像素平移的良品边缘整体错开1像素，标定阈值被抬高。
@@ -70,7 +94,7 @@ public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             for (int i = 0; i < sets.Count; i++)
             {
                 using var others = Memory(
-                    sets.Where((_, j) => j != i).ToList(),
+                    sets.Where((_, j) => groups[j] != groups[i]).ToList(),
                     Math.Max(256, options.MemorySize / 2),
                     p,
                     31 + i,
@@ -79,7 +103,10 @@ public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                 worst = Math.Max(worst, InteriorMax(Scores(sets[i], others), sets[i], planes[i].Full, p, 1));
             }
 
-            calibration = $"留一法（{sets.Count}张良品，每张用其余良品的记忆库评分）";
+            calibration =
+                by == ""
+                    ? $"留一法（{sets.Count}张良品，每张用其余良品的记忆库评分）"
+                    : $"留一法（{sets.Count}张良品，{by}：每张用其他来源良品的记忆库评分）";
         }
         else
         {
@@ -234,6 +261,8 @@ public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
     private static PatchAnomalyModel TrainLocal(
         IReadOnlyList<IImageSource> good,
         List<(PatchFeatures.Plane Full, PatchFeatures.Plane Half)> planes,
+        int[] groups,
+        string by,
         PatchAnomalyOptions options,
         int radius,
         CancellationToken token
@@ -258,7 +287,7 @@ public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
             for (int i = 0; i < planes.Count; i++)
             {
                 var query = PatchFeatures.Grid(width, height, p, TrainingStride);
-                var others = references.Where((_, j) => j != i).ToList();
+                var others = references.Where((_, j) => groups[j] != groups[i]).ToList();
                 worst = Math.Max(
                     worst,
                     InteriorMax(
@@ -271,7 +300,10 @@ public sealed partial class OpenCvPatchAnomalyDetector : IPatchAnomalyDetector
                 );
             }
 
-            calibration = $"位置相关±{radius}像素，留一法（{planes.Count}张良品）";
+            calibration =
+                by == ""
+                    ? $"位置相关±{radius}像素，留一法（{planes.Count}张良品）"
+                    : $"位置相关±{radius}像素，留一法（{planes.Count}张良品，{by}）";
         }
         else
         {

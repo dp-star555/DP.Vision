@@ -200,4 +200,27 @@ public sealed class CharacterAnomalyTests
             }
         }
     }
+
+    /// <summary>
+    /// 同一原图中重复出现的字符（孪生样本）：按样本留一时被孪生样本解释、阈值偏紧；按来源留一时阈值不低于按样本留一；
+    /// 不启用时与普通训练逐字节相同。
+    /// </summary>
+    [TestMethod]
+    public void SourceLeaveOneOutIgnoresTwins()
+    {
+        var detector = new OpenCvCharacterAnomalyDetector();
+        using var a = Line(1);
+        using var b = Line(2);
+        // 每张图两行完全相同的字符：同一来源的孪生样本。
+        var lines = new[] { a, a, b, b }.Select(g => new CharacterAnomalyLine(g, Characters())).ToArray();
+        var sample = detector.Train(lines, new CharacterAnomalyOptions());
+        var source = detector.Train(lines, new CharacterAnomalyOptions(sourceLeaveOneOut: true));
+        var plain = detector.Train(lines, new CharacterAnomalyOptions(sourceLeaveOneOut: false));
+        for (int i = 0; i < sample.Count; i++)
+        {
+            CollectionAssert.AreEqual(sample[i].Model.ToBytes(), plain[i].Model.ToBytes());
+            Assert.IsTrue(source[i].Model.Threshold > sample[i].Model.Threshold, source[i].Key);
+            StringAssert.Contains(source[i].Model.Calibration, "按来源留一，2个来源");
+        }
+    }
 }
