@@ -37,6 +37,7 @@
 | `CharacterAnomalyTraining` | [src/DP.Vision.Algorithms/Anomaly/CharacterAnomalyTraining.cs](src/DP.Vision.Algorithms/Anomaly/CharacterAnomalyTraining.cs) |
 | `ECharacterAnomalyStatus` | [src/DP.Vision.Algorithms/Anomaly/ECharacterAnomalyStatus.cs](src/DP.Vision.Algorithms/Anomaly/ECharacterAnomalyStatus.cs) |
 | `ICharacterAnomalyDetector` | [src/DP.Vision.Algorithms/Anomaly/ICharacterAnomalyDetector.cs](src/DP.Vision.Algorithms/Anomaly/ICharacterAnomalyDetector.cs) |
+| `IGroupedPatchAnomalyTrainer` | [src/DP.Vision.Algorithms/Anomaly/IGroupedPatchAnomalyTrainer.cs](src/DP.Vision.Algorithms/Anomaly/IGroupedPatchAnomalyTrainer.cs) |
 | `IPatchAnomalyDetector` | [src/DP.Vision.Algorithms/Anomaly/IPatchAnomalyDetector.cs](src/DP.Vision.Algorithms/Anomaly/IPatchAnomalyDetector.cs) |
 | `PatchAnomalyModel` | [src/DP.Vision.Algorithms/Anomaly/PatchAnomalyModel.cs](src/DP.Vision.Algorithms/Anomaly/PatchAnomalyModel.cs) |
 | `PatchAnomalyOptions` | [src/DP.Vision.Algorithms/Anomaly/PatchAnomalyOptions.cs](src/DP.Vision.Algorithms/Anomaly/PatchAnomalyOptions.cs) |
