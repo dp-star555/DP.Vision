@@ -68,6 +68,12 @@ public sealed class RoiEditor
         }
     }
 
+    /// <summary>整像素编辑规则；null（默认）时按连续坐标编辑。设置后轴对齐矩形的绘制、移动与缩放按整像素并限制在原图内。</summary>
+    public RoiPixelRules? PixelRules { get; set; }
+
+    /// <summary>当前拖动的预览几何（新建草稿或被编辑ROI的新形状）；没有手势时为null。</summary>
+    public Geometry? Preview => _preview;
+
     /// <summary>选中ROI的稳定配置标识，不是检测证据编号。</summary>
     public string? SelectedId => _selected;
 
@@ -454,7 +460,14 @@ public sealed class RoiEditor
             }
         }
 
-        var hit = Document.Rois.Reverse().FirstOrDefault(r => r.Shape.Contains(point, tolerance));
+        var hit =
+            PixelRules == null
+                ? Document.Rois.Reverse().FirstOrDefault(r => r.Shape.Contains(point, tolerance))
+                // 整像素规则：命中按像素范围（含边缘）精确判断，容差只用于控制点。
+                : Document
+                    .Rois.Where(r => r.Shape.Contains(point, 1e-6))
+                    .OrderBy(r => r.Shape.Bounds.Width * r.Shape.Bounds.Height)
+                    .FirstOrDefault();
         _selected = hit?.Id;
         if (hit != null)
         {
@@ -486,10 +499,19 @@ public sealed class RoiEditor
         {
             if (_original != null)
             {
-                _preview = _handle.HasValue
-                    ? ChangeHandle(_original, _handle.Value, point)
-                    : _original.Shape.Translate(point.X - _start.Value.X, point.Y - _start.Value.Y);
-                _changedGesture = !Same(_start.Value, point);
+                if (PixelRules is { } rules && PixelRect(_original, out int x, out int y, out int w, out int h))
+                {
+                    // 整像素规则：只有取整后的矩形确实改变才算一次编辑。
+                    _preview = PixelEdit(rules, x, y, w, h, _handle, _start.Value, point);
+                    _changedGesture = !SameRect(_original.Shape, _preview);
+                }
+                else
+                {
+                    _preview = _handle.HasValue
+                        ? ChangeHandle(_original, _handle.Value, point)
+                        : _original.Shape.Translate(point.X - _start.Value.X, point.Y - _start.Value.Y);
+                    _changedGesture = !Same(_start.Value, point);
+                }
             }
             else
             {
@@ -539,6 +561,20 @@ public sealed class RoiEditor
                 ),
                 "edit"
             );
+            return;
+        }
+
+        if (
+            original == null
+            && preview != null
+            && PixelRules is { } pixel
+            && Tool == ERoiTool.Rectangle
+            && (preview.Bounds.Width < pixel.MinimumSize || preview.Bounds.Height < pixel.MinimumSize)
+        )
+        {
+            // 小于最小边长的框视为误触，不创建。
+            ResetGesture();
+            Notify();
             return;
         }
 
@@ -624,6 +660,17 @@ public sealed class RoiEditor
 
     private Geometry? Creation(PointD a, PointD b)
     {
+        if (PixelRules is { } rules && Tool == ERoiTool.Rectangle)
+        {
+            var p = Snap(rules, a);
+            var q = Snap(rules, b);
+            double w = Math.Abs(q.X - p.X),
+                h = Math.Abs(q.Y - p.Y);
+            return w < 1 || h < 1
+                ? null
+                : new RectangleGeometry(new PointD((p.X + q.X) / 2, (p.Y + q.Y) / 2), w, h);
+        }
+
         double width = Math.Abs(b.X - a.X),
             height = Math.Abs(b.Y - a.Y);
         if (Tool == ERoiTool.Circle)
@@ -816,6 +863,101 @@ public sealed class RoiEditor
         return roi.Shape is RectangleGeometry
             ? (Geometry)new RectangleGeometry(center, width, height, angle)
             : new EllipseGeometry(center, width / 2, height / 2, angle);
+    }
+
+    private static PointD Snap(RoiPixelRules rules, PointD p)
+    {
+        return new PointD(
+            Math.Max(0, Math.Min(rules.ImageWidth, Math.Round(p.X))),
+            Math.Max(0, Math.Min(rules.ImageHeight, Math.Round(p.Y)))
+        );
+    }
+
+    // 轴对齐、角度为0的矩形ROI按整像素边缘取出（其他形状不适用整像素规则）。
+    private static bool PixelRect(RoiDefinition roi, out int x, out int y, out int width, out int height)
+    {
+        x = y = width = height = 0;
+        if (!(roi.Shape is RectangleGeometry r) || Math.Abs(r.Angle) > 1e-12)
+        {
+            return false;
+        }
+
+        x = (int)Math.Round(r.Center.X - r.Width / 2);
+        y = (int)Math.Round(r.Center.Y - r.Height / 2);
+        width = (int)Math.Round(r.Width);
+        height = (int)Math.Round(r.Height);
+        return width > 0 && height > 0;
+    }
+
+    private static bool SameRect(Geometry a, Geometry? b)
+    {
+        return b != null
+            && Math.Abs(a.Bounds.X - b.Bounds.X) < 1e-9
+            && Math.Abs(a.Bounds.Y - b.Bounds.Y) < 1e-9
+            && Math.Abs(a.Bounds.Width - b.Bounds.Width) < 1e-9
+            && Math.Abs(a.Bounds.Height - b.Bounds.Height) < 1e-9;
+    }
+
+    /// <summary>
+    /// 整像素移动/缩放：位移按整像素；移动时整框限制在原图内；缩放时被拖动的边限制在原图内且与对边至少相距最小边长。
+    /// 控制点编号：0左上、1上、2右上、3右、4右下、5下、6左下、7左。
+    /// </summary>
+    private static Geometry PixelEdit(
+        RoiPixelRules rules,
+        int x,
+        int y,
+        int width,
+        int height,
+        RoiHandle? handle,
+        PointD start,
+        PointD point
+    )
+    {
+        var from = Snap(rules, start);
+        var to = Snap(rules, point);
+        int dx = (int)(to.X - from.X),
+            dy = (int)(to.Y - from.Y),
+            l,
+            t,
+            r,
+            b;
+        if (!handle.HasValue)
+        {
+            l = Math.Max(0, Math.Min(rules.ImageWidth - width, x + dx));
+            t = Math.Max(0, Math.Min(rules.ImageHeight - height, y + dy));
+            r = l + width;
+            b = t + height;
+        }
+        else
+        {
+            int i = handle.Value.Index,
+                min = rules.MinimumSize;
+            l = x;
+            t = y;
+            r = x + width;
+            b = y + height;
+            if (i == 0 || i == 6 || i == 7)
+            {
+                l = Math.Max(0, Math.Min(r - min, l + dx));
+            }
+
+            if (i == 2 || i == 3 || i == 4)
+            {
+                r = Math.Min(rules.ImageWidth, Math.Max(l + min, r + dx));
+            }
+
+            if (i == 0 || i == 1 || i == 2)
+            {
+                t = Math.Max(0, Math.Min(b - min, t + dy));
+            }
+
+            if (i == 4 || i == 5 || i == 6)
+            {
+                b = Math.Min(rules.ImageHeight, Math.Max(t + min, b + dy));
+            }
+        }
+
+        return new RectangleGeometry(new PointD((l + r) / 2.0, (t + b) / 2.0), r - l, b - t);
     }
 
     // 把矩形/椭圆统一成中心、宽、高（椭圆为直径）与角度，供控制点计算和拖动共用。

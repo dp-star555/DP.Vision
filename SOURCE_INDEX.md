@@ -117,6 +117,7 @@
 | `ERoiPointerAction` | [src/DP.Vision.UI/Roi/Editing/ERoiPointerAction.cs](src/DP.Vision.UI/Roi/Editing/ERoiPointerAction.cs) |
 | `ERoiTool` | [src/DP.Vision.UI/Roi/Editing/ERoiTool.cs](src/DP.Vision.UI/Roi/Editing/ERoiTool.cs) |
 | `RoiEditor` | [src/DP.Vision.UI/Roi/Editing/RoiEditor.cs](src/DP.Vision.UI/Roi/Editing/RoiEditor.cs) |
+| `RoiPixelRules` | [src/DP.Vision.UI/Roi/Editing/RoiPixelRules.cs](src/DP.Vision.UI/Roi/Editing/RoiPixelRules.cs) |
 | `RoiHandle` | [src/DP.Vision.UI/Roi/Editing/RoiHandle.cs](src/DP.Vision.UI/Roi/Editing/RoiHandle.cs) |
 | `RoiDocumentXml` | [src/DP.Vision.UI/Roi/Persistence/RoiDocumentXml.cs](src/DP.Vision.UI/Roi/Persistence/RoiDocumentXml.cs) |
 | `VisionCanvasControl.Tile` | [src/DP.Vision.Winform/Canvas/VisionCanvasControl.cs](src/DP.Vision.Winform/Canvas/VisionCanvasControl.cs) |
@@ -168,6 +169,7 @@
 | `EnumContractTests` | [tests/DP.Vision.Tests/Architecture/EnumContractTests.cs](tests/DP.Vision.Tests/Architecture/EnumContractTests.cs) |
 | `VisionTests` | [tests/DP.Vision.Tests/Integration/VisionTests.cs](tests/DP.Vision.Tests/Integration/VisionTests.cs) |
 | `RoiEditorTests` | [tests/DP.Vision.Tests/RoiEditing/RoiEditorTests.cs](tests/DP.Vision.Tests/RoiEditing/RoiEditorTests.cs) |
+| `RoiPixelRulesTests` | [tests/DP.Vision.Tests/RoiEditing/RoiPixelRulesTests.cs](tests/DP.Vision.Tests/RoiEditing/RoiPixelRulesTests.cs) |
 | `RoiLayerTests` | [tests/DP.Vision.Tests/RoiEditing/RoiLayerTests.cs](tests/DP.Vision.Tests/RoiEditing/RoiLayerTests.cs) |
 | `RoiVertexTests` | [tests/DP.Vision.Tests/RoiEditing/RoiVertexTests.cs](tests/DP.Vision.Tests/RoiEditing/RoiVertexTests.cs) |
 | `RoiInteractionProbe` | [tools/DP.Vision.Probe/Interaction/RoiInteractionProbe.cs](tools/DP.Vision.Probe/Interaction/RoiInteractionProbe.cs) |
