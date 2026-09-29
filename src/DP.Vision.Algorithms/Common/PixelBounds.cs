@@ -53,6 +53,30 @@ public readonly struct PixelBounds
             && (long)Y + Height <= image.Info.Height;
     }
 
+    /// <summary>检查范围是否完整位于给定图像尺寸内（只用尺寸，不读取像素），并拒绝默认空范围。</summary>
+    /// <param name = "imageWidth">原图宽度。</param>
+    /// <param name = "imageHeight">原图高度。</param>
+    public bool Fits(int imageWidth, int imageHeight)
+    {
+        return Width > 0 && Height > 0 && (long)X + Width <= imageWidth && (long)Y + Height <= imageHeight;
+    }
+
+    /// <summary>检查与另一范围是否有重叠像素。</summary>
+    /// <param name = "other">另一原图范围。</param>
+    public bool Intersects(PixelBounds other)
+    {
+        return X < (long)other.X + other.Width
+            && other.X < (long)X + Width
+            && Y < (long)other.Y + other.Height
+            && other.Y < (long)Y + Height;
+    }
+
+    /// <summary>显示用坐标：按X、Y、宽度、高度排列，如 <c>[10,20,30,40]</c>。</summary>
+    public override string ToString()
+    {
+        return $"[{X},{Y},{Width},{Height}]";
+    }
+
     /// <summary>无损转换为连续的像素边缘几何。</summary>
     public RectD ToRect()
     {
