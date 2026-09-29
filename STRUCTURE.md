@@ -43,8 +43,7 @@
 | `DP.Vision.Acquisition.Management` | 采集配置/发现/监控快照与呈现模型（`AcquisitionManagementPresenter` 等），平台中立、不引用 UI 套件 |
 | `DP.Vision.Acquisition.WinForms` | `AcquisitionManagementControl`；只依赖 `Acquisition.Management` |
 | `DP.Vision.OpenCv` | `Imaging`、`Surfaces`、`Codes/Linear`、`Codes/Qr`及文字相关目录 |
-| `DP.Vision.Onnx` | `Recognition` |
-| `DP.Vision.OnnxDetection` | `Detection` |
+| `DP.Vision.PPOcr.Onnx` | `Recognition`、`Detection`（模型任务，不引用 OpenCV） |
 | `DP.Vision.Zxing` | `Codes` |
 | `DP.Vision.Winform`、`DP.Vision.WPF` | `Canvas`及其内部渲染辅助类型 |
 

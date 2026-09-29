@@ -8,7 +8,7 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using PixelRect = DP.Vision.Algorithms.PixelBounds;
 
-namespace DP.Vision.Onnx;
+namespace DP.Vision.PPOcr.Onnx;
 
 /// <summary>带内嵌字典和可注入任务级预处理器的CPU PP-OCRv4识别器。</summary>
 /// <remarks>调用与释放串行执行；取消是协作式的，不强制中断原生推理。</remarks>

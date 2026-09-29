@@ -59,11 +59,11 @@
 4. **再拆识别（独立提交）**：在标签侧组合输入准备、模型任务、CTC 解码；真实 OCR 文本、token、置信度及模型身份回归不变。检查其他消费者再决定旧 `ITextLineRecognizer` 的兼容周期。
 5. **第二执行端触发条件**：实际落地 OpenVINO 模型格式、可运行样本和基线后，再验证输出映射、字典、概率尺度及性能；只有两种真实实现存在时才抽取共享的内部执行 seam。业务候选处理应能消费两端同一语义的概率图，不要求像素级相同。
 
-验收不只看编译：Vision 核心与 PPOcr 执行端无 OpenCV/标签引用；检测任务不返回候选框；概率图独立于已释放推理会话；相同输入的业务候选与现有实现一致；真实识别回归不退化；**两个仓库各自**的 net48 与 net8.0-windows 构建及相关测试通过。**阶段 1–2 已完成（见「实施进度」），阶段 3–5 尚未开始**；本文其余部分仍是待实施方案，不表示代码已完成迁移。
+验收不只看编译：Vision 核心与 PPOcr 执行端无 OpenCV/标签引用；检测任务不返回候选框；概率图独立于已释放推理会话；相同输入的业务候选与现有实现一致；真实识别回归不退化；**两个仓库各自**的 net48 与 net8.0-windows 构建及相关测试通过。**阶段 1–3 已完成（见「实施进度」），阶段 4–5 尚未开始**；本文其余部分仍是待实施方案，不表示代码已完成迁移。
 
 ## 实施进度
 
-**阶段 1–2 已完成，阶段 3–5 未开始。** 下列内容全部是实测结果，不是计划。
+**阶段 1–3 已完成，阶段 4–5 未开始。** 下列内容全部是实测结果，不是计划。
 
 ### 阶段 1：证据基线（已完成）
 
@@ -103,13 +103,13 @@
 
 | 位置 | 职责 | 关键依赖 |
 |---|---|---|
-| `DP.Vision.OnnxDetection/Detection/PPOcrDetectionInput` | 调用者准备好的 NCHW 输入 + 显式几何映射；不做缩放 | 无 |
-| `DP.Vision.OnnxDetection/Detection/PPOcrDetectionOutput` | 模型身份 + 概率图快照 + 几何映射；含尺寸、数值与字节预算校验 | 无 |
-| `DP.Vision.OnnxDetection/Detection/PPOcrDetectionTask` | 模型加载、契约校验、推理、证据返回 | OnnxRuntime；**不含 OpenCV** |
+| `DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionInput` | 调用者准备好的 NCHW 输入 + 显式几何映射；不做缩放 | 无 |
+| `DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionOutput` | 模型身份 + 概率图快照 + 几何映射；含尺寸、数值与字节预算校验 | 无 |
+| `DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionTask` | 模型加载、契约校验、推理、证据返回 | OnnxRuntime；**不含 OpenCV** |
 | `DP.LabelInspection.Runtime/Text/Detection/PPOcrDetectionPreparer` | 原图 → NCHW（缩放 / BGR / 归一化） | OpenCV |
 | `DP.LabelInspection.Runtime/Text/Detection/DbTextRegionCandidates` | 概率图 → 候选（二值化 / 轮廓 / 旋转过滤 / 均值筛选 / 边框扩张 / 去重 / 排序 / 上限 64） | OpenCV |
 
-`OnnxTextRegionDetector` 暂时保留为「旧实现」以便逐字节对拍，阶段 3 删除（不保留长期并行的同名旧实现）。
+`OnnxTextRegionDetector` 已在阶段 3 删除（不保留长期并行的同名旧实现）；阶段 2 期间它暂时保留为「旧实现」以便逐字节对拍。
 
 等价性证据（不是"看代码像"）：
 
@@ -118,15 +118,40 @@
 - 离线单测：`tests/…/Text/DbTextRegionCandidatesTests.cs`（4 例），只消费冻结概率图，不启动 ONNX。
 - 候选规则常量（`.3` / `.6` / 64 / 1000 轮廓）**原样搬迁**，未重新调参。
 
+### 阶段 3：收敛工程与引用（已完成）
+
+Vision 侧把 `DP.Vision.Onnx`（识别）与 `DP.Vision.OnnxDetection`（检测）**合并为一个执行端工程** `DP.Vision.PPOcr.Onnx`：`net48;net8.0-windows`，引用 `DP.Vision.Algorithms` + `Microsoft.ML.OnnxRuntime`，**不引用 OpenCV**。`Recognition/` 与 `Detection/` 是工程内目录，未按一个类一个工程拆分（待决项 #2 按临时口径落地）。
+
+| 动作 | 对象 |
+|---|---|
+| `git mv` 保留历史 | `OnnxTextLineRecognizer.cs` → `PPOcr.Onnx/Recognition/`；`PPOcrDetection{Input,Output,Task}.cs` → `PPOcr.Onnx/Detection/` |
+| 命名空间统一 | 四个文件 `namespace` → `DP.Vision.PPOcr.Onnx` |
+| 删除 | `OnnxTextRegionDetector.cs`；旧工程 `DP.Vision.Onnx` / `DP.Vision.OnnxDetection` 及其 `packages.lock.json` |
+| `.sln` 改写 | 两个仓库各自的 `.sln`：两条旧工程条目 → 一条 `DP.Vision.PPOcr.Onnx`（`DP.Vision.sln` 工程数 27→26） |
+| 跨仓引用 | `DP.LabelInspection.Runtime.csproj`：删 `DP.Vision.Onnx`、`DP.Vision.OnnxDetection` → `DP.Vision.PPOcr.Onnx`；**保留** `DP.Vision.OpenCv`、`DP.Vision.Zxing` |
+| 调用点 | `Hosting/LabelInspectionHost.cs`、`OcrRegression` 的 `using` 别名改指新命名空间 |
+| 架构测试 | `ProjectBoundaryTests` 禁止重名表新增 `PPOcrDetection{Input,Output,Task}`；新增 `PpocrEvidenceTypesStayOutOfLabelContracts` |
+
+收敛后等价性复核（同一真实模型 + 同一 9 帧）：
+
+- 基线工具 `--verify`：`BASELINE MATCH`，9 帧候选与阶段 1 冻结基线**逐字节相同**（模型 sha256 `d2a7720d…`）。
+- 业务测试：net8.0-windows 与 net48 各 **296/296** 通过（阶段 2 的 295 + 新增 1 条架构断言）。
+- 变异验证：临时在标签 `Contracts` 放一个同名 `PPOcrDetectionOutput`，`GeneralVisionAlgorithmsHaveNoLabelContractDuplicates` 如期变红并精确指出 `DP.LabelInspection.Contracts: PPOcrDetectionOutput`；删除探针后恢复全绿——禁止清单不是永真断言。
+- 文档同步：Vision 侧 `STRUCTURE.md`、`SOURCE_INDEX.md`；业务侧 `README.md`、`CURRENT_INSPECTION_FLOW.md`、`VALIDATION.md`。
+
+按临时口径落地的待决项：#1 采用 `DP.Vision.PPOcr.Onnx`；#2 不拆两个发布工程；#4 无生产调用点，未造 `ITextRegionDetector` 适配器（该接口在 Vision 侧已无实现）。
+
+阶段 1 末尾的两个**既有**阻塞项在阶段 3 的处置：阻塞项 1 已按「改指到存在的帧」临时处理（`OcrRegression` 发现步骤改读 `pst-heldout.png`，附注释说明）；阻塞项 2 的验收口径**仍未拍板**。
+
 ## 待决项
 
 下列各项在正文中以「待决项 #N」标出引用位置。表中「阻塞」列说明未定会卡住哪个阶段——这些是需要人来拍的决定，不能由实施过程自行选择；未定之前按「临时口径」先行。
 
 | # | 待决内容 | 阻塞 | 决定依据 | 临时口径（未定前） |
 |---|---|---|---|---|
-| 1 | 工程命名：`DP.Vision.PPOcr.Onnx` 还是团队统一的 `PPocr` 形式 | 阶段 3 | 团队/仓库命名约定 | 全文暂用 `DP.Vision.PPOcr.Onnx` |
-| 2 | 是否按部署诉求拆为 `.Recognition` / `.Detection` 两个发布工程 | 阶段 3 | 实际部署是否要求“仅识别时不携带检测模型/代码” | 不拆；单工程内以目录区分 |
+| 1 | 工程命名：`DP.Vision.PPOcr.Onnx` 还是团队统一的 `PPocr` 形式 | 已定（阶段 3） | 团队/仓库命名约定 | 已采用 `DP.Vision.PPOcr.Onnx` |
+| 2 | 是否按部署诉求拆为 `.Recognition` / `.Detection` 两个发布工程 | 已定（阶段 3） | 实际部署是否要求“仅识别时不携带检测模型/代码” | 不拆；单工程内以目录区分 |
 | 3 | 检测候选处理与 `ITextRegionDetector` 适配器的落点：`DP.LabelInspection.Runtime` 还是该仓库既有的 `DP.LabelInspection.Adapter.Vision` | 阶段 2 | `DP.LabelInspection` 既有分层约定 | 暂按正文写 `Runtime` |
-| 4 | 旧 `ITextLineRecognizer` / `ITextRegionDetector` 的兼容周期与迁移窗口 | 阶段 3、阶段 4 | 仓库外消费者的实际情况 | 无生产调用点则不造适配器；有则另行计划窗口 |
+| 4 | 旧 `ITextLineRecognizer` / `ITextRegionDetector` 的兼容周期与迁移窗口 | 已定（阶段 3）；识别侧待阶段 4 | 仓库外消费者的实际情况 | 无生产调用点则不造适配器；有则另行计划窗口 |
 | 5 | 冻结样本的具体内容与存放位置（概率图、候选数量/坐标、52 行 OCR/CTC 结果） | 阶段 1 | 已定，见「实施进度」 | 概率图放业务测试夹具目录；真实候选基线放基线工具目录；52 行仍用既有 `ocr-oracle.tsv` |
 | 6 | `OnnxTextRegionDetector` 消费者的盘点范围 | 阶段 1 | 已盘点，见「实施进度」 | 范围＝本仓库 `src/` 之外 + 同级仓库；结论：`src/` 内无使用点，但 `tools/` 有 1 处实例化、`tests/` 有 1 处架构断言 |

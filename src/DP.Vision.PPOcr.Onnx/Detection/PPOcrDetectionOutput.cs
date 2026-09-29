@@ -1,6 +1,6 @@
 using System;
 
-namespace DP.Vision.OnnxDetection;
+namespace DP.Vision.PPOcr.Onnx;
 
 /// <summary>脱离推理会话的DB概率图快照；不含候选框，也不含业务阈值。</summary>
 /// <remarks>概率图与模型身份一起构成检测证据；候选提取与筛选由业务侧负责。</remarks>

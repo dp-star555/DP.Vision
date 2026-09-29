@@ -19,7 +19,7 @@
 | `DP.Vision.Algorithms`（首批已实现） | 中立算法接口、输入输出、执行状态、能力与参数契约 | 引用DP.Vision；不引用厂商和UI |
 | `DP.Vision.OpenCv`（首批已实现） | OpenCV实现及其图像/几何适配 | 引用算法契约和OpenCV，不引用标签业务 |
 | `DP.Vision.Halcon`（拟议） | HALCON实现及其适配 | 引用算法契约和HALCON；运行库、平台与许可证要求限定在此侧 |
-| `DP.Vision.Onnx`（拟议） | 适用的识别、分割或质量模型实现 | 引用算法契约和推理运行库；模型及能力分别声明 |
+| `DP.Vision.PPOcr.Onnx`（已实现） | PP-OCRv4 检测与识别的模型校验、推理与证据返回 | 引用算法契约和OnnxRuntime；不引用OpenCV、标签业务 |
 | `DP.Vision.Zxing`（拟议） | 适用码制的读取实现 | 引用算法契约和ZXing；不冒充印刷质检实现 |
 | `DP.Vision.Winform` / `DP.Vision.WPF`（已有） | 原生显示和ROI交互 | 不因新增算法而被迫引用OpenCV、HALCON或标签业务 |
 

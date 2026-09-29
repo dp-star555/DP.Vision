@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
 
-namespace DP.Vision.OnnxDetection;
+namespace DP.Vision.PPOcr.Onnx;
 
 /// <summary>调用者准备好的DB检测模型输入；不隐含缩放，也不携带候选策略。</summary>
 /// <remarks>维度、通道顺序与数值有限性由模型执行端校验；归一化与缩放由调用者负责。</remarks>

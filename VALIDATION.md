@@ -52,7 +52,7 @@ WinForms/WPF两框架原生探针验证无节点选择器、视图切换、图�
 
 ## 历史：工程收敛
 
-实际DB检测器已迁入 `DP.Vision.OnnxDetection`，无标签业务依赖；旧标签四个算法工程已删除，宿主统一引用 `DP.LabelInspection.Runtime`。完整日志 `artifacts/project-consolidation-verification.log`：core两框架各60、算法各24通过，原生控件通过；标签两框架各203及实际DB/OCR/原生UI验收通过。WPF物理输入仍未验证。
+实际DB检测器已迁入 `DP.Vision.OnnxDetection`（该工程在后续 PP-OCR 收敛中并入 `DP.Vision.PPOcr.Onnx`，见 `PPOCR_REFACTOR_PLAN.md`），无标签业务依赖；旧标签四个算法工程已删除，宿主统一引用 `DP.LabelInspection.Runtime`。完整日志 `artifacts/project-consolidation-verification.log`：core两框架各60、算法各24通过，原生控件通过；标签两框架各203及实际DB/OCR/原生UI验收通过。WPF物理输入仍未验证。
 
 下列批次为历史验证记录。
 

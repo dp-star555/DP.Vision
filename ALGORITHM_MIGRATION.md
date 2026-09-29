@@ -6,7 +6,7 @@
 
 已从解决方案和src删除四个旧工程：`DP.LabelInspection.Barcode.Zxing / Ocr.Onnx / Vision.OpenCv / Vision.OnnxDetection`。业务装配与标签契约转换归入唯一 `DP.LabelInspection.Runtime`；无旧程序集、旧命名空间或类型转发。下面早期迁移描述中的“旧入口保留”已被本次工程级破坏性变更取代。
 
-DB检测器的真实模型加载、预处理、推理和后处理已移至独立 `DP.Vision.OnnxDetection`，通过中立 `ITextRegionDetector` 输入ImageBuffer、输出原图PixelBounds；不引用标签业务。真实模型仍产生37个冻结候选。该工程实际需要ONNX和OpenCV，没有给纯OCR工程增加OpenCV依赖。
+DB检测器的真实模型加载、契约校验与推理现归入 `DP.Vision.PPOcr.Onnx` 的 `PPOcrDetectionTask`，输出概率图证据（不再只给 `PixelBounds`，也不再引用OpenCV）；图像缩放/归一化与概率图→候选的 OpenCV 处理已迁至标签侧 `DP.LabelInspection.Runtime`。不引用标签业务。真实模型仍产生37个冻结候选。中立 `ITextRegionDetector` 在Vision侧已无实现。
 
 标签两框架各203项测试及完整真实OCR/原生UI验收通过；当前日志 `../DP.LabelInspection/artifacts/project-consolidation-verification.log`。
 
@@ -14,7 +14,7 @@ DB检测器的真实模型加载、预处理、推理和后处理已移至独立
 
 - **DP.Vision.Algorithms / netstandard2.0**：图块坐标、物理分割、独立字符配对、单字比较、整段文字质量组合、固定/空白质量、OCR/CTC、读码、一维码/QR质量契约。结果显式区分完成、未完成、不支持、未请求。
 - **DP.Vision.OpenCv / net48 + net8.0-windows**：真实字符分割与制库候选补切、单字比较、固定/空白、1D/QR印刷质量、OCR图像预处理。
-- **DP.Vision.Onnx / net48 + net8.0-windows**：真实模型校验、CPU推理及CTC识别；不依赖标签业务或OpenCV。
+- **DP.Vision.PPOcr.Onnx / net48 + net8.0-windows**：PP-OCRv4 检测与识别的模型校验、CPU推理与证据返回（`PPOcrDetection{Input,Output,Task}`、`OnnxTextLineRecognizer`）；不依赖标签业务或OpenCV。
 - **DP.Vision.Zxing / netstandard2.0**：实际解码与网格证据提取。
 - 标签旧入口以适配方式调用上述实现；业务引导值、字库发布和固定修订、ROI编排仍归标签层。
 
@@ -87,6 +87,6 @@ WinForms/WPF提供独立数据/质量项目设置，配方持久化；原始OCR�
 ## 边界
 
 - 第三方旧非分阶段 `IInspectionBackend` 仍有历史兼容通道；需实现新的session接口才能获得阶段门控保证。
-- 标签运行时仍包含整图ECC的标签参考/忽略区装配及图像codec/证据绘制；文字候选检测器算法现已下沉到DP.Vision.OnnxDetection。
+- 标签运行时仍包含整图ECC的标签参考/忽略区装配及图像codec/证据绘制；文字候选检测算法（概率图→候选）由标签侧 `DP.LabelInspection.Runtime/Text/Detection` 拥有，`DP.Vision.PPOcr.Onnx` 只负责模型推理与证据返回。
 - HALCON算法后端、通用OCR接口的非CTC实现、通用插件/模型选择UI仍未提供；当前ONNX是明确的PP-OCR识别实现。
 - 不证明工业准确率、ISO评级、WPF物理输入路由或实际16K相机吞吐。

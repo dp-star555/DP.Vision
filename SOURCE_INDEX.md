@@ -71,8 +71,10 @@
 | `CharacterSegmentation` | [src/DP.Vision.Algorithms/Text/Segmentation/CharacterSegmentation.cs](src/DP.Vision.Algorithms/Text/Segmentation/CharacterSegmentation.cs) |
 | `ICharacterSegmenter` | [src/DP.Vision.Algorithms/Text/Segmentation/ICharacterSegmenter.cs](src/DP.Vision.Algorithms/Text/Segmentation/ICharacterSegmenter.cs) |
 | `IGlyphCandidateSegmenter` | [src/DP.Vision.Algorithms/Text/Segmentation/IGlyphCandidateSegmenter.cs](src/DP.Vision.Algorithms/Text/Segmentation/IGlyphCandidateSegmenter.cs) |
-| `OnnxTextLineRecognizer` | [src/DP.Vision.Onnx/Recognition/OnnxTextLineRecognizer.cs](src/DP.Vision.Onnx/Recognition/OnnxTextLineRecognizer.cs) |
-| `OnnxTextRegionDetector` | [src/DP.Vision.OnnxDetection/Detection/OnnxTextRegionDetector.cs](src/DP.Vision.OnnxDetection/Detection/OnnxTextRegionDetector.cs) |
+| `OnnxTextLineRecognizer` | [src/DP.Vision.PPOcr.Onnx/Recognition/OnnxTextLineRecognizer.cs](src/DP.Vision.PPOcr.Onnx/Recognition/OnnxTextLineRecognizer.cs) |
+| `PPOcrDetectionInput` | [src/DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionInput.cs](src/DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionInput.cs) |
+| `PPOcrDetectionOutput` | [src/DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionOutput.cs](src/DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionOutput.cs) |
+| `PPOcrDetectionTask` | [src/DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionTask.cs](src/DP.Vision.PPOcr.Onnx/Detection/PPOcrDetectionTask.cs) |
 | `OpenCvBarcodePrintInspector.Band` | [src/DP.Vision.OpenCv/Codes/Linear/Internal/OpenCvBarcodePrintInspector/Band.cs](src/DP.Vision.OpenCv/Codes/Linear/Internal/OpenCvBarcodePrintInspector/Band.cs) |
 | `OpenCvBarcodePrintInspector` | [src/DP.Vision.OpenCv/Codes/Linear/OpenCvBarcodePrintInspector.cs](src/DP.Vision.OpenCv/Codes/Linear/OpenCvBarcodePrintInspector.cs) |
 | `OpenCvQrPrintInspector` | [src/DP.Vision.OpenCv/Codes/Qr/OpenCvQrPrintInspector.cs](src/DP.Vision.OpenCv/Codes/Qr/OpenCvQrPrintInspector.cs) |

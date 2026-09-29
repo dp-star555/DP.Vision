@@ -6,7 +6,7 @@ using System.Threading;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
-namespace DP.Vision.OnnxDetection;
+namespace DP.Vision.PPOcr.Onnx;
 
 /// <summary>PP-OCRv4 DB检测模型任务：加载、契约校验、推理与证据返回。</summary>
 /// <remarks>本类不引用OpenCV，也不产生候选框或业务阈值；调用与释放串行执行，取消是协作式的。</remarks>
