@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>可替换的已对齐固定图案检查接口，独立于标签配方和模板存储。</summary>
+[VisionCapability("surface.fixed", "质量检查", "固定图案检查")]
 public interface IFixedQualityInspector
 {
     /// <summary>比较同尺寸借用图块；可选二值Gray8掩码同时作用于两图，排除像素周围的容差扩展区不测量。不修改或保留输入；取消及无效参数均抛出异常。</summary>

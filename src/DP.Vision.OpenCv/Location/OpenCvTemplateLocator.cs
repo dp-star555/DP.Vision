@@ -10,17 +10,17 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
 {
     /// <inheritdoc/>
     public TemplateLocationResult Locate(ImageFrame frame, PixelBounds search, ImageFrame template,
-        PixelBounds templateBounds, double minimumScore = .9, CancellationToken token = default, RegionGeometry? regionMask = null, LocatedCoordinateSystem? searchCoordinates = null)
+        PixelBounds templateBounds, double minimumScore = .9, CancellationToken token = default, RegionGeometry? regionMask = null, VisionCoordinateSystem? searchCoordinates = null)
     {
         if (frame == null || template == null) throw new ArgumentNullException(nameof(frame));
         InspectionMask.Validate(regionMask, frame.Image);
         if (searchCoordinates != null)
         {
-            searchCoordinates.Validate(frame, searchCoordinates.CoordinateSystemId, searchCoordinates.TemplateSignature);
+            searchCoordinates.ValidateFrame(frame);
             if (templateBounds.X != 0 || templateBounds.Y != 0 || templateBounds.Width != template.Image.Info.Width || templateBounds.Height != template.Image.Info.Height)
                 throw new ArgumentException("Located translation search requires the complete template.");
             var pose = new OpenCvTemplatePoseLocator().Locate(frame, template, search,
-                new TemplatePoseOptions(new[] { searchCoordinates.Pose.AngleRadians }, new[] { searchCoordinates.Pose.Scale }, minimumScore), token, regionMask);
+                new TemplatePoseOptions(new[] { searchCoordinates.RotationRadians }, new[] { searchCoordinates.SimilarityScale }, minimumScore), token, regionMask);
             return TemplateLocationResult.FromPose(pose, searchCoordinates);
         }
         if (!search.Fits(frame.Image) || !templateBounds.Fits(template.Image)

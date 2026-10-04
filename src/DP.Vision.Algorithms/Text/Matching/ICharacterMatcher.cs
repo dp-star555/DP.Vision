@@ -4,6 +4,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>独立的序数参考配对接口；字典是传入快照，不是存储连接。</summary>
+[VisionCapability("text.match", "文字", "字符配对")]
 public interface ICharacterMatcher
 {
     /// <summary>按实际图块顺序返回参考键或null，保留重复字符和序列位置。</summary>

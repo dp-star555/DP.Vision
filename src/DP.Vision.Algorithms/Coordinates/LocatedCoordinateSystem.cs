@@ -25,7 +25,7 @@ public sealed class CoordinateMatrix2D
     {
         var matrix = new CoordinateMatrix2D(m11, m12, tx, m21, m22, ty);
         double determinant = m11 * m22 - m12 * m21;
-        if (double.IsNaN(determinant) || double.IsInfinity(determinant) || Math.Abs(determinant) < 1e-12)
+        if (!IsInvertible(m11, m12, m21, m22, determinant))
             throw new ArgumentException("Affine transform must be invertible.");
         return matrix;
     }
@@ -34,10 +34,17 @@ public sealed class CoordinateMatrix2D
     public CoordinateMatrix2D Inverse()
     {
         double det = M11 * M22 - M12 * M21;
-        if (double.IsNaN(det) || double.IsInfinity(det) || Math.Abs(det) < 1e-12)
+        if (!IsInvertible(M11, M12, M21, M22, det))
             throw new InvalidOperationException("Affine transform is not invertible.");
         return FromAffine(M22 / det, -M12 / det, (M12 * Ty - M22 * Tx) / det,
             -M21 / det, M11 / det, (M21 * Tx - M11 * Ty) / det);
+    }
+    private static bool IsInvertible(double m11, double m12, double m21, double m22, double determinant)
+    {
+        // 相对退化阈值不依赖像素/毫米倍率；正反变换采用同一条件。
+        double scale = Math.Max(Math.Max(Math.Abs(m11), Math.Abs(m12)), Math.Max(Math.Abs(m21), Math.Abs(m22)));
+        double normalizedDet = (m11 / scale) * (m22 / scale) - (m12 / scale) * (m21 / scale);
+        return scale > 0 && determinant != 0 && !double.IsNaN(determinant) && !double.IsInfinity(determinant) && Math.Abs(normalizedDet) > 1e-12;
     }
     /// <summary>X的X系数。</summary>
     public double M11 { get; }
@@ -53,6 +60,14 @@ public sealed class CoordinateMatrix2D
     public double Ty { get; }
     /// <summary>映射有限坐标，不隐式修正半像素。</summary><param name="point">输入。</param><returns>输出。</returns>
     public Coordinate2D Map(Coordinate2D point) => new Coordinate2D(M11 * point.X + M12 * point.Y + Tx, M21 * point.X + M22 * point.Y + Ty);
+    /// <summary>矩阵组合：本矩阵乘右矩阵，先执行右侧转换。</summary>
+    /// <param name="right">先执行的转换。</param><returns>组合矩阵。</returns>
+    public CoordinateMatrix2D Multiply(CoordinateMatrix2D right)
+    {
+        if (right == null) throw new ArgumentNullException(nameof(right));
+        return FromAffine(M11 * right.M11 + M12 * right.M21, M11 * right.M12 + M12 * right.M22, M11 * right.Tx + M12 * right.Ty + Tx,
+            M21 * right.M11 + M22 * right.M21, M21 * right.M12 + M22 * right.M22, M21 * right.Tx + M22 * right.Ty + Ty);
+    }
     /// <summary>将矩形或轮廓映射为精确连续轮廓；剪切矩形不能退化为轴对齐外接框。</summary>
     /// <param name="geometry">局部矩形或轮廓；未支持的几何必须显式拒绝。</param>
     /// <returns>原顺序顶点映射后的轮廓，保留填充语义。</returns>
@@ -72,101 +87,58 @@ public sealed class CoordinateMatrix2D
     }
 }
 
-/// <summary>同一检测点的图像/模板局部双坐标及来源身份。</summary>
+/// <summary>同一检测点的原图/业务局部双坐标及来源身份。</summary>
 public sealed class LocatedPoint
 {
-    internal LocatedPoint(LocatedCoordinateSystem system, PointD image)
-    { FrameId = system.FrameId; CoordinateSystemId = system.CoordinateSystemId; TemplateSignature = system.TemplateSignature; ImagePosition = new Coordinate2D(image.X, image.Y); LocalPosition = system.ImageToLocal.Map(ImagePosition); }
+    internal LocatedPoint(VisionCoordinateSystem system, PointD image)
+    { FrameId = system.FrameId; CoordinateSystemId = system.CoordinateSystemId; TemplateSignature = (system as LocatedCoordinateSystem)?.TemplateSignature ?? ""; ImagePosition = new Coordinate2D(image.X, image.Y); LocalPosition = system.ImageToLocal.Map(ImagePosition); Definition = system.Definition; }
+    /// <summary>通用业务定义与单位。</summary>
+    public VisionCoordinateDefinition Definition { get; }
     /// <summary>图像内容身份。</summary>
     public string FrameId { get; }
-    /// <summary>模板坐标系定义身份。</summary>
+    /// <summary>业务坐标定义身份。</summary>
     public string CoordinateSystemId { get; }
-    /// <summary>模板内容签名。</summary>
+    /// <summary>模板兼容来源的内容签名；通用来源为空。</summary>
     public string TemplateSignature { get; }
     /// <summary>当前原图像素边界坐标。</summary>
     public Coordinate2D ImagePosition { get; }
-    /// <summary>模板局部像素边界坐标。</summary>
+    /// <summary>业务局部坐标，单位由Definition决定。</summary>
     public Coordinate2D LocalPosition { get; }
 }
 
 /// <summary>一次成功定位产生的不可变坐标系；只描述本帧，不保存上一帧回退状态。</summary>
-public sealed class LocatedCoordinateSystem
+public sealed class LocatedCoordinateSystem : VisionCoordinateSystem
 {
-    /// <summary>建立定位坐标系；定义ID须由模板制作/文档持久保存。</summary>
-    /// <param name="coordinateSystemId">稳定定义ID。</param><param name="templateSignature">模板像素签名。</param>
-    /// <param name="frameId">当前帧身份。</param><param name="imageWidth">当前图像宽。</param><param name="imageHeight">当前图像高。</param><param name="pose">模板到本帧姿态。</param>
+    /// <summary>模板定位兼容来源；通用业务坐标请使用VisionCoordinateBuilder。</summary>
+    /// <param name="coordinateSystemId">模板定义。</param><param name="templateSignature">模型签名。</param><param name="frameId">本帧。</param>
+    /// <param name="imageWidth">宽。</param><param name="imageHeight">高。</param><param name="pose">定位姿态。</param>
     public LocatedCoordinateSystem(string coordinateSystemId, string templateSignature, string frameId, int imageWidth, int imageHeight, TemplatePoseTransform pose)
+        : base(new VisionCoordinateDefinition(coordinateSystemId, coordinateSystemId, 1, EVisionCoordinateUnit.TemplatePixel,
+            "template:" + RequireSignature(templateSignature), "模板X右/Y下"), frameId, imageWidth, imageHeight, PoseMatrix(pose), "template:" + templateSignature)
     {
-        if (string.IsNullOrWhiteSpace(coordinateSystemId) || string.IsNullOrWhiteSpace(templateSignature) || string.IsNullOrWhiteSpace(frameId)
-            || imageWidth < 1 || imageHeight < 1) throw new ArgumentException("Coordinate identity and dimensions are required.");
-        Pose = pose ?? throw new ArgumentNullException(nameof(pose));
-        if (pose.Scale < .1 || pose.Scale > 10) throw new ArgumentException("Located coordinate scale must be 0.1..10.");
-        if (pose.Center.X < 0 || pose.Center.Y < 0 || pose.Center.X > imageWidth || pose.Center.Y > imageHeight)
-            throw new ArgumentException("Located template center must lie inside the image.");
-        CoordinateSystemId = coordinateSystemId; TemplateSignature = templateSignature; FrameId = frameId; ImageWidth = imageWidth; ImageHeight = imageHeight;
-        double a = pose.Scale * Math.Cos(pose.AngleRadians), b = -pose.Scale * Math.Sin(pose.AngleRadians);
-        var origin = pose.ToImage(new Coordinate2D(0, 0));
-        LocalToImage = new CoordinateMatrix2D(a, b, origin.X, -b, a, origin.Y);
-        double factor = pose.Scale * pose.Scale;
-        ImageToLocal = new CoordinateMatrix2D(a / factor, -b / factor, (-a * origin.X + b * origin.Y) / factor,
-            b / factor, a / factor, (-b * origin.X - a * origin.Y) / factor);
+        if (pose.Scale < .1 || pose.Scale > 10 || pose.Center.X < 0 || pose.Center.Y < 0 || pose.Center.X > imageWidth || pose.Center.Y > imageHeight)
+            throw new ArgumentException("Located template pose is outside supported bounds.");
+        TemplateSignature = templateSignature; Pose = pose;
     }
-    /// <summary>模板坐标系定义ID，区别于帧ID。</summary>
-    public string CoordinateSystemId { get; }
-    /// <summary>模板像素与布局的SHA256签名，换模板时不自动接受旧ROI。</summary>
+    private static string RequireSignature(string value) => !string.IsNullOrWhiteSpace(value) ? value : throw new ArgumentException("Template signature is required.");
+    private static CoordinateMatrix2D PoseMatrix(TemplatePoseTransform pose)
+    {
+        if (pose == null) throw new ArgumentNullException(nameof(pose));
+        var origin = pose.ToImage(new Coordinate2D(0, 0));
+        double a = pose.Scale * Math.Cos(pose.AngleRadians), b = pose.Scale * Math.Sin(pose.AngleRadians);
+        return CoordinateMatrix2D.FromAffine(a, -b, origin.X, b, a, origin.Y);
+    }
+    /// <summary>模板定位证据签名，仅供兼容绑定及来源校验。</summary>
     public string TemplateSignature { get; }
-    /// <summary>本帧身份。</summary>
-    public string FrameId { get; }
-    /// <summary>本帧宽。</summary>
-    public int ImageWidth { get; }
-    /// <summary>本帧高。</summary>
-    public int ImageHeight { get; }
-    /// <summary>本帧姿态。</summary>
+    /// <summary>原始模板姿态证据。</summary>
     public TemplatePoseTransform Pose { get; }
-    /// <summary>模板局部到当前图像矩阵。</summary>
-    public CoordinateMatrix2D LocalToImage { get; }
-    /// <summary>当前图像到模板局部矩阵。</summary>
-    public CoordinateMatrix2D ImageToLocal { get; }
-    /// <summary>验证图像与预期定义；不能仅依据尺寸推断同帧。</summary>
-    /// <param name="frame">输入帧。</param><param name="expectedId">预期定义。</param><param name="expectedSignature">预期模板内容。</param>
+    /// <summary>兼容旧模板定义和模型签名校验。</summary>
+    /// <param name="frame">本帧。</param><param name="expectedId">定义。</param><param name="expectedSignature">模型签名。</param>
     public void Validate(ImageFrame frame, string expectedId, string expectedSignature)
     {
-        if (frame == null) throw new ArgumentNullException(nameof(frame));
-        if (FrameId != frame.FrameId || ImageWidth != frame.Image.Info.Width || ImageHeight != frame.Image.Info.Height)
-            throw new InvalidOperationException("Located coordinate system belongs to another frame.");
+        ValidateFrame(frame);
         if (CoordinateSystemId != expectedId || TemplateSignature != expectedSignature)
             throw new InvalidOperationException("Coordinate definition or template content differs from the authored ROI.");
-    }
-    /// <summary>构建同一实际检测点的双坐标表达。</summary><param name="imagePoint">当前图像点。</param><returns>带身份的双坐标点。</returns>
-    public LocatedPoint Locate(PointD imagePoint) => new LocatedPoint(this, imagePoint);
-    /// <summary>连续ROI映射到当前图像；不变成外接框。</summary><param name="local">局部几何。</param><returns>精确连续几何。</returns>
-    public Geometry ToImageGeometry(Geometry local) => TransformGeometry(local, false);
-    /// <summary>制作时将图上绘制的ROI逆变换为局部配置。</summary><param name="image">图像几何。</param><returns>局部几何。</returns>
-    public Geometry ToLocalGeometry(Geometry image) => TransformGeometry(image, true);
-    private Geometry TransformGeometry(Geometry geometry, bool inverse)
-    {
-        if (geometry == null) throw new ArgumentNullException(nameof(geometry));
-        var matrix = inverse ? ImageToLocal : LocalToImage;
-        PointD Map(PointD p) { var q = matrix.Map(new Coordinate2D(p.X, p.Y)); return new PointD(q.X, q.Y); }
-        double scale = inverse ? 1 / Pose.Scale : Pose.Scale, angle = inverse ? -Pose.AngleRadians : Pose.AngleRadians;
-        if (geometry is RectangleGeometry r) return new RectangleGeometry(Map(r.Center), r.Width * scale, r.Height * scale, r.Angle + angle);
-        if (geometry is EllipseGeometry e) return new EllipseGeometry(Map(e.Center), e.RadiusX * scale, e.RadiusY * scale, e.Angle + angle);
-        if (geometry is ContourGeometry c)
-        {
-            if (c.Points.Count > 4096) throw new ArgumentException("Located ROI contour point budget exceeded.");
-            return new ContourGeometry(c.Points.Select(Map), c.Closed, c.Filled);
-        }
-        throw new NotSupportedException("Transform continuous ROI shapes before rasterization; raster Region cannot be replaced with its bounding box.");
-    }
-    /// <summary>局部包含/排除ROI先连续变换，再在当前原图精确栅格化。</summary>
-    /// <param name="frame">当前原图。</param><param name="include">局部包含形状，必须非空。</param><param name="exclude">局部排除形状。</param><param name="token">取消。</param><returns>当前原图的精确掩码。</returns>
-    public RegionGeometry ResolveRegion(ImageFrame frame, IEnumerable<Geometry> include, IEnumerable<Geometry> exclude, CancellationToken token = default)
-    {
-        Validate(frame, CoordinateSystemId, TemplateSignature); token.ThrowIfCancellationRequested();
-        var shapes = (include ?? throw new ArgumentNullException(nameof(include))).Take(513).ToArray();
-        var holes = (exclude ?? throw new ArgumentNullException(nameof(exclude))).Take(513).ToArray();
-        if (shapes.Length == 0 || shapes.Length + holes.Length > 512) throw new ArgumentException("Located ROI requires explicit bounded include shapes.");
-        return InspectionMask.Compose(frame.Image, shapes.Select(ToImageGeometry), holes.Select(ToImageGeometry), token);
     }
     /// <summary>计算模板布局/像素签名，不绑定读取产生的临时FrameId；最大64MiB。</summary>
     /// <param name="image">借用模板。</param><param name="token">取消。</param><returns>SHA256大写十六进制。</returns>

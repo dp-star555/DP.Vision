@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>可替换的空白表面检查接口，不需要参考图、OCR或业务数据。</summary>
+[VisionCapability("surface.blank", "质量检查", "空白检查")]
 public interface IBlankQualityInspector
 {
     /// <summary>检查借用图块，原点将图块边缘映射到原图；可选Gray8掩码必须同尺寸，0排除、255包含。不修改或保留输入；取消及无效参数均抛出异常。</summary>

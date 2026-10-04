@@ -69,7 +69,9 @@ public sealed class CaliperResult
     internal CaliperResult(string frameId, CaliperOptions options, double step, double[] profile, IEnumerable<CaliperEdge> edges)
     { FrameId = frameId; Start = options.Start; End = options.End; SampleStep = step; Profile = Array.AsReadOnly((double[])profile.Clone()); Edges = Array.AsReadOnly(edges.ToArray()); }
     /// <summary>可选本帧定位来源；原有端点/边缘/距离均保持原图像素。</summary>
-    public LocatedCoordinateSystem? CoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
+    /// <summary>同序边缘点，未绑定定位时也保留原图身份。</summary>
+    public IReadOnlyList<VisionPoint> MeasuredEdges => Array.AsReadOnly(Edges.Select(e => new VisionPoint(FrameId, e.Position, CoordinateSystem)).ToArray());
     /// <summary>与Edges同序的双坐标边缘；未绑定时为空。</summary>
     public IReadOnlyList<LocatedPoint>? LocatedEdges { get; private set; }
     /// <summary>采样起点的双坐标。</summary>
@@ -77,7 +79,7 @@ public sealed class CaliperResult
     /// <summary>采样终点的双坐标。</summary>
     public LocatedPoint? LocatedEnd => CoordinateSystem?.Locate(End);
     /// <summary>附加定位坐标，不改变不可变采样证据。</summary><param name="system">同帧定位。</param><returns>独立结果。</returns>
-    public CaliperResult InCoordinates(LocatedCoordinateSystem system)
+    public CaliperResult InCoordinates(VisionCoordinateSystem system)
     {
         if (system == null) throw new ArgumentNullException(nameof(system));
         if (system.FrameId != FrameId) throw new InvalidOperationException("Result coordinate frame mismatch.");
@@ -103,6 +105,7 @@ public sealed class CaliperResult
 }
 
 /// <summary>独立采样带卡尺。</summary>
+[VisionCapability("measurement.caliper", "测量", "亚像素卡尺")]
 public interface ICaliperMeasurer
 {
     /// <summary>仅接受Gray8，不隐式滤波、裁剪或转换位深。</summary>

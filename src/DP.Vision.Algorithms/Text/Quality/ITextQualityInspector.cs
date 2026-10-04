@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>整段文字质量的替换接口；执行前必须声明所需识别和参考条件。</summary>
+[VisionCapability("text.quality", "质量检查", "文字质量")]
 public interface ITextQualityInspector
 {
     /// <summary>该实现是否需要独立参考图像。</summary>

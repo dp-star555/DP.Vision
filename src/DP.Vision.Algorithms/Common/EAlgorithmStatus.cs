@@ -1,6 +1,6 @@
 namespace DP.Vision.Algorithms;
 
-/// <summary>所要求的测量是否确实完成，不是标签业务判定。</summary>
+/// <summary>所要求的测量是否确实完成。</summary>
 public enum EAlgorithmStatus
 {
     /// <summary>全部要求的测量均已完成。</summary>

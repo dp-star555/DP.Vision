@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>可选的人工复核参考制作接口，不用于正式验收分割。</summary>
+[VisionCapability("text.segment-candidates", "文字", "制库字符候选")]
 public interface IGlyphCandidateSegmenter
 {
     /// <summary>提供有界的候选切分，同时保留物理证据的不确定状态。</summary>

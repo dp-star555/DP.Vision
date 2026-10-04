@@ -80,6 +80,9 @@
           "System.Runtime.CompilerServices.Unsafe": "4.5.3"
         }
       },
+      "dp.plugins.runtime": {
+        "type": "Project"
+      },
       "dp.vision": {
         "type": "Project"
       },
@@ -93,14 +96,9 @@
       "dp.vision.acquisition.runtime": {
         "type": "Project",
         "dependencies": {
+          "DP.Plugins.Runtime": "[0.1.0-preview.2, )",
           "DP.Vision.Acquisition.Abstractions": "[0.1.0-preview.2, )",
           "System.Text.Json": "[8.0.5, )"
-        }
-      },
-      "dp.vision.ui": {
-        "type": "Project",
-        "dependencies": {
-          "DP.Vision": "[0.1.0-preview.2, )"
         }
       }
     }

@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFrameworks>net48;net8.0</TargetFrameworks><DefineConstants>$(DefineConstants);PROBE_V1</DefineConstants></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../Probe.Contracts/Probe.Contracts.csproj" /><ProjectReference Include="../PrivateV1/PrivateV1.csproj" /><Compile Include="../ProbeModule.cs" Link="ProbeModule.cs" /></ItemGroup>
+</Project>

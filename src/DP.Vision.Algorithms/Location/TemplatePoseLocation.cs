@@ -68,7 +68,7 @@ public sealed class TemplatePoseTransform
 }
 
 /// <summary>单个最佳姿态候选；未找到时Transform为空，不能伪装成零位姿。</summary>
-public sealed class TemplatePoseResult
+public sealed class TemplatePoseResult : IVisionCoordinateResult
 {
     /// <summary>创建同帧事实。</summary><param name="frameId">图像身份。</param><param name="templateFrameId">模板身份。</param><param name="score">最佳候选分数。</param><param name="transform">达标变换，未检出为空。</param>
     public TemplatePoseResult(string frameId, string templateFrameId, double score, TemplatePoseTransform? transform)
@@ -77,17 +77,28 @@ public sealed class TemplatePoseResult
         FrameId = frameId; TemplateFrameId = templateFrameId; Score = score; Transform = transform;
     }
     /// <summary>可选搜索父坐标系，区别于本节点产生的子坐标系。</summary>
-    public LocatedCoordinateSystem? SearchCoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? SearchCoordinateSystem { get; private set; }
     /// <summary>记录同帧搜索来源；结果姿态已是原图坐标，不再次乘父矩阵。</summary>
     /// <param name="parent">父定位。</param><returns>独立结果。</returns>
-    public TemplatePoseResult WithSearchCoordinates(LocatedCoordinateSystem parent)
+    public TemplatePoseResult WithSearchCoordinates(VisionCoordinateSystem parent)
     {
         if (parent == null) throw new ArgumentNullException(nameof(parent));
         if (parent.FrameId != FrameId) throw new InvalidOperationException("Parent coordinate frame mismatch.");
         var copy = (TemplatePoseResult)MemberwiseClone(); copy.SearchCoordinateSystem = parent; return copy;
     }
     /// <summary>成功定位的共享坐标系；普通算法输出或未检出时为空。</summary>
-    public LocatedCoordinateSystem? CoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
+    VisionCoordinateSystem? IVisionCoordinateResult.CoordinateSystem => CoordinateSystem;
+    /// <summary>同帧匹配中心，供几何测量绑定。</summary>
+    public VisionPoint? MeasuredCenter => Transform is { } pose ? new VisionPoint(FrameId, pose.Center, CoordinateSystem) : null;
+    /// <summary>为资源模型定位附加与模型像素无关的参考定义。</summary>
+    public TemplatePoseResult InReferenceCoordinates(string id, ImageFrame frame, VisionTemplateDefinition definition, string identity)
+    {
+        if (FrameId != frame.FrameId || TemplateFrameId != identity) throw new InvalidOperationException("模型定位结果身份不一致。");
+        var copy = (TemplatePoseResult)MemberwiseClone();
+        copy.CoordinateSystem = Transform == null ? null : definition.Locate(id, frame, Transform, identity);
+        return copy;
+    }
     /// <summary>为成功定位附加稳定模板定义；不修改原结果。</summary>
     /// <param name="definitionId">持久化定义ID。</param><param name="frame">当前图像。</param><param name="template">本次模板。</param><param name="token">取消。</param><returns>独立结果。</returns>
     public TemplatePoseResult InCoordinateSystem(string definitionId, ImageFrame frame, ImageFrame template, CancellationToken token = default)
@@ -114,6 +125,7 @@ public sealed class TemplatePoseResult
 }
 
 /// <summary>有界离散旋转/尺度模板定位。</summary>
+[VisionCapability("location.template-pose", "定位", "旋转尺度模板定位")]
 public interface ITemplatePoseLocator
 {
     /// <summary>借用图像和模板；8位灰度或显式灰度转换的彩色，拒绝Gray16。</summary>

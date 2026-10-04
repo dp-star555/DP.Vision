@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using DP.Plugins;
 
 namespace DP.Vision.Acquisition;
 
@@ -26,6 +27,18 @@ public sealed record VisionAcquisitionDriverModuleLoadResult(
 /// </summary>
 public sealed class VisionAcquisitionDriverModuleLoader
 {
+    private readonly PluginLoadSession _session;
+
+    /// <summary>保留既有无参数构造入口。</summary>
+    public VisionAcquisitionDriverModuleLoader() : this(null) { }
+
+    /// <summary>创建采集发现器，可与 Workflow 和算法发现器共用加载会话。</summary>
+    public VisionAcquisitionDriverModuleLoader(PluginLoadSession? session)
+    {
+        _session = session ?? new PluginLoadSession();
+        _session.RegisterSharedAssembly(typeof(IVisionAcquisitionDriverModule).Assembly);
+        _session.RegisterSharedAssembly(typeof(IImageSource).Assembly);
+    }
     /// <summary>扫描插件根目录并加载全部Driver Module。</summary>
     /// <param name="pluginRoot">受信任插件根目录；递归扫描其下的所有托管DLL。</param>
     /// <returns>加载结果；单个DLL失败不会阻止其他DLL。</returns>
@@ -44,17 +57,9 @@ public sealed class VisionAcquisitionDriverModuleLoader
             return new VisionAcquisitionDriverModuleLoadResult(modules, failures);
         }
 
-        foreach (var assemblyPath in DiscoverAssemblies(root))
-        {
-            try
-            {
-                modules.AddRange(CreateModules(assemblyPath));
-            }
-            catch (Exception failure) when (failure is not OutOfMemoryException)
-            {
-                failures.Add(new VisionAcquisitionDriverModuleFailure(assemblyPath, failure.Message));
-            }
-        }
+        var discovered = _session.Discover<IVisionAcquisitionDriverModule>(root);
+        modules.AddRange(discovered.Modules);
+        failures.AddRange(discovered.Failures.Select(failure => new VisionAcquisitionDriverModuleFailure(failure.AssemblyPath, failure.Reason)));
 
         return new VisionAcquisitionDriverModuleLoadResult(
             modules
@@ -64,58 +69,4 @@ public sealed class VisionAcquisitionDriverModuleLoader
             failures.OrderBy(item => item.AssemblyPath, StringComparer.Ordinal).ToArray());
     }
 
-    private static IReadOnlyList<string> DiscoverAssemblies(string root) =>
-        Directory.EnumerateFiles(root, "*.dll", SearchOption.AllDirectories)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-    private static IReadOnlyList<IVisionAcquisitionDriverModule> CreateModules(string assemblyPath)
-    {
-        Assembly assembly;
-        try
-        {
-            assembly = VisionAcquisitionPluginAssemblyLoader.Load(assemblyPath);
-        }
-        catch (BadImageFormatException)
-        {
-            // 原生SDK依赖DLL（halcon/pylon等）不是托管Driver Module，静默跳过而不是报告失败。
-            return Array.Empty<IVisionAcquisitionDriverModule>();
-        }
-
-        Type[] types;
-        try
-        {
-            types = assembly.GetExportedTypes()
-                .Where(type => IsDriverModuleType(type))
-                .OrderBy(type => type.FullName, StringComparer.Ordinal)
-                .ToArray();
-        }
-        catch (ReflectionTypeLoadException exception)
-        {
-            // 依赖解析不全会让部分类型无法加载；只使用能加载的类型。
-            // 一个没有Driver Module的依赖DLL不是模块，静默跳过而不是报告失败。
-            types = (exception.Types ?? Array.Empty<Type>())
-                .Where(type => type is not null)
-                .Select(type => type!)
-                .Where(IsDriverModuleType)
-                .OrderBy(type => type.FullName, StringComparer.Ordinal)
-                .ToArray();
-        }
-
-        var modules = new List<IVisionAcquisitionDriverModule>();
-        foreach (var type in types)
-        {
-            var created = Activator.CreateInstance(type);
-            if (created is not IVisionAcquisitionDriverModule module)
-                throw new VisionSourceConfigurationException($"Driver Module类型无法创建：{type.FullName}。");
-            modules.Add(module);
-        }
-
-        return modules;
-    }
-
-    private static bool IsDriverModuleType(Type type) =>
-        typeof(IVisionAcquisitionDriverModule).IsAssignableFrom(type)
-        && type is { IsAbstract: false, IsInterface: false }
-        && type.GetConstructor(Type.EmptyTypes) is not null;
 }

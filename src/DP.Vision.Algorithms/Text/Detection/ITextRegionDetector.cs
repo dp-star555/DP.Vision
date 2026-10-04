@@ -5,6 +5,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>通用的原图坐标文本候选；发现候选不等于印刷质量验收。</summary>
+[VisionCapability("text.detect", "文字", "文字区域检测")]
 public interface ITextRegionDetector : IDisposable
 {
     /// <summary>实际模型快照的标识。</summary>

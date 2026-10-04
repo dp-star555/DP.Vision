@@ -4,6 +4,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>通用的可移植印刷检查操作；实现通过专用接口声明支持的码族。</summary>
+[VisionCapability("code.quality", "质量检查", "码印刷检查")]
 public interface IBarcodeQualityInspector
 {
     /// <summary>该实现是否要求在质量分析前成功读取码结构。</summary>

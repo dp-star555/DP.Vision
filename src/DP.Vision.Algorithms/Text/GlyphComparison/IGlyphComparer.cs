@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>可替换的单字测量接口；不负责选择业务参考，也不决定整张标签的放行。</summary>
+[VisionCapability("text.glyph-compare", "文字", "单字比较")]
 public interface IGlyphComparer
 {
     /// <summary>借用像素进行只读测量，返回独立拥有的证据；不支持的布局或证据不足使用显式状态，取消则抛出异常。</summary>

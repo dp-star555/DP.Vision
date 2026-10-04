@@ -6,6 +6,7 @@ namespace DP.Vision.Algorithms;
 using PixelRect = DP.Vision.Algorithms.PixelBounds;
 
 /// <summary>可替换的单行识别器；拥有者必须协调释放与正在执行的调用。</summary>
+[VisionCapability("text.recognize", "文字", "单行文字识别")]
 public interface ITextLineRecognizer : IDisposable
 {
     /// <summary>识别明确选择的水平单行。</summary>

@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>独立的码数据读取接口。</summary>
+[VisionCapability("code.read", "读码", "条码读取")]
 public interface IBarcodeReader
 {
     /// <summary>借用原始像素进行读取；返回前调用方必须保持输入有效。</summary>

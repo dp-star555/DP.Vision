@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>在参考图的一块固定内容上估计待检图的小平移（整图同一平移），用于固定相机下的ROI随动。</summary>
+[VisionCapability("location.translation", "定位", "平移配准")]
 public interface ITranslationRegistrar
 {
     /// <summary>在<paramref name = "bounds"/>内配准；掩码外（例如忽略区）的像素不参与。</summary>

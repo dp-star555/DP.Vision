@@ -19,9 +19,9 @@ public sealed class ColorAnalysisResult
         FrameId = frameId; PixelCount = pixelCount; Red = red; Green = green; Blue = blue;
     }
     /// <summary>本次检测使用的定位坐标系；统计值仍为原图像素统计。</summary>
-    public LocatedCoordinateSystem? CoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
     /// <summary>附加同帧定位来源，不修改原结果。</summary><param name="system">定位。</param><returns>独立结果。</returns>
-    public ColorAnalysisResult InCoordinates(LocatedCoordinateSystem system)
+    public ColorAnalysisResult InCoordinates(VisionCoordinateSystem system)
     {
         if (system == null) throw new ArgumentNullException(nameof(system));
         if (system.FrameId != FrameId) throw new InvalidOperationException("Result coordinate frame mismatch.");
@@ -43,6 +43,7 @@ public sealed class ColorAnalysisResult
 }
 
 /// <summary>矩形范围RGB编码值统计；Gray8按R=G=B处理，Alpha不参与加权。</summary>
+[VisionCapability("pixel.color", "像素处理", "RGB颜色统计")]
 public interface IColorAnalyzer
 {
     /// <summary>借用图像统计颜色，不支持Gray16且不隐式降位深。</summary>

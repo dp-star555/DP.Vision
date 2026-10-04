@@ -4,6 +4,8 @@
 
 通用视觉算法按 [ALGORITHM_MODULES.md](ALGORITHM_MODULES.md) 隔离：真实分割/配对、单字及整段质量、固定/空白、读码/1D/QR质量和ONNX识别已接入标签侧逐ROI流程；范围、验证与尚未迁移的辅助能力见 [ALGORITHM_MIGRATION.md](ALGORITHM_MIGRATION.md)。
 
+算法插件基础设施及 Workflow 现有 13 个算法节点已接入：共用包加载会话、引擎模块与工厂、节点配置绑定、准备事务及资源租约。后续已补结构化诊断、配方/机器资源路径、可取消的完整资源检查、显式配置升级、嵌套依赖的可视化配置与隔离节点工作台，并投放独立条码和水平单行 OCR 节点。两个示例按节点选择实现，编译期不引用具体引擎；文件夹清单与解码器分离。部署与扩展见 [ALGORITHM_PLUGINS.md](ALGORITHM_PLUGINS.md)，人工复核见 [vision-plugin-review.md](../DP.WorkFlow/docs/plugins/vision-plugin-review.md)。
+
 ## 工作流通用能力接入
 
 `DP.Vision.Algorithms/Calibration` 提供独立仿射标定、旋转中心拟合和坐标变换，中心化/尺度归一并拒绝退化观测；RMS不是产品合格判定。Workflow已直接使用新版强类型标定、文件/文件夹采集、Blob、RGB均值、线圆边缘拟合、平移定位和原生双平台ROI页面，旧Workflow视觉兼容已删除。相机通过独立 [DP.Vision.Halcon](src/DP.Vision.Halcon/README.md) 直接调用SDK并复制中立图像，不经过旧设备Adapter；一个绑定只有一个设备适配器、只持有一个已连接的SDK设备对象，主动单次采集与外部回调缓冲源共用它（外部回调缓冲源用长连接会话接管设备：自建采集线程、跨布防复用、停止等待有上界），两种模式互斥且设备只在释放时关闭。
@@ -14,9 +16,11 @@
 
 ### 模板定位坐标系
 
-`DP.Vision.Algorithms/Coordinates/LocatedCoordinateSystem` 提供模板定义身份、模板像素签名、本帧身份、正反矩阵、连续ROI正反转换及精确范围栅格化。Blob/卡尺/直线可同时表达原图点和模板局部点；Region保留原图游程，形态学/筛选保留定位来源。没有全局可变矩阵或上一帧回退。Workflow接入及限制见[定位坐标系与ROI随动](../DP.WorkFlow/docs/nodes/vision-coordinate-systems.md)。
+`DP.Vision.Algorithms/Coordinates` 将稳定业务定义VisionCoordinateDefinition与本帧映射VisionCoordinateSystem分开。VisionCoordinateBuilder支持姿态、双点、交线、父坐标、矩阵和标定点对；模板来源LocatedCoordinateSystem作为兼容子类保留。连续ROI精确转换并在本帧栅格化，Region保留原图游程。没有全局可变矩阵或上一帧回退。Workflow接入及限制见[业务坐标与ROI随动](../DP.WorkFlow/docs/nodes/vision-coordinate-systems.md)。
 
 ### 文件与区域分析
+
+2026-10-02增加VisionPoint、VisionLine、IGeometryMeasurer/GeometryMeasurer，支持生成直线、点点/点线/线线距离及有限线段模式。测量在所选原图或业务局部空间计算，支持一般仿射；单位为image-px/reference-px/兼容template-px或明确标定的mm。卡尺、拟合及模板父搜索需要相似变换。Workflow几何及坐标包10节点和双平台示例见[几何测量与复核](../DP.WorkFlow/docs/nodes/vision-geometry-measurement.md)。
 
 - `ImageFrame`：图像内容身份与独立租约，图像修改必须换身份。
 - `IImageFileReader` / `OpenCvImageFileReader`：真实文件解码，保持Gray8/BGR/BGRA/Gray16。
@@ -47,6 +51,8 @@
 |---|---|---|
 | `src/DP.Vision` | netstandard2.0 | 图像布局/只读租约/有界缓冲池、ROI/Region/XLD几何、图层、帧身份、预览邮箱、分块规划、LRU、显示LOD |
 | `src/DP.Vision.Algorithms` | netstandard2.0 | 中立采集、Blob/颜色、测量/定位、标定及既有业务算法契约 |
+| `src/DP.Plugins.Runtime` | netstandard2.0 / net8.0 | 采集、算法和 Workflow 共用的包加载会话、共享契约、包级依赖解析与诊断 |
+| `src/DP.Vision.Algorithms.Runtime` | netstandard2.0 | 算法目录、类型化工厂准备、资源租约、共享与并发调度 |
 | `src/DP.Vision.Acquisition.Abstractions` | netstandard2.0 | 采集公共契约：DriverModule/设备/逻辑源/请求/结果/错误、可选健康报告；只引用 `DP.Vision` |
 | `src/DP.Vision.Acquisition.Runtime` | netstandard2.0 | 不可变Provider组合、机器级逻辑源绑定、设备生命周期与按ResourceKey互斥、Driver Module 目录扫描与加载 |
 | `src/DP.Vision.Acquisition.Management` | netstandard2.0 | 采集配置/发现/监控快照与呈现模型（`AcquisitionManagementPresenter`）；**不引用任何 UI 套件** |

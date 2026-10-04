@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFrameworks>net48;net8.0-windows</TargetFrameworks><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/DP.Vision.Algorithms.Runtime/DP.Vision.Algorithms.Runtime.csproj" />
+    <ProjectReference Include="../../src/DP.Vision.OpenCv/DP.Vision.OpenCv.csproj" />
+    <ProjectReference Include="../../src/DP.Vision.Zxing/DP.Vision.Zxing.csproj" />
+    <PackageReference Include="MSTest.TestFramework" Version="4.1.0" />
+    <PackageReference Include="MSTest.TestAdapter" Version="4.1.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PluginFixtures/EngineV1/EngineV1.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="../PluginFixtures/EngineV2/EngineV2.csproj" ReferenceOutputAssembly="false" Private="false" />
+  </ItemGroup>
+  <Target Name="CleanupPluginTestRuns" BeforeTargets="Build"><RemoveDir Directories="$(OutDir)PluginTestRuns" /></Target>
+  <ItemGroup><Content Include="../DP.Vision.Algorithms.Tests/Assets/ppocrv4_det_backbone.onnx" Link="Assets/ppocrv4_det_backbone.onnx" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+</Project>

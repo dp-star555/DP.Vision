@@ -75,11 +75,13 @@ public sealed class BlobAnalysisResult
         FrameId = frameId; Blobs = Array.AsReadOnly(copy);
     }
     /// <summary>本次检测使用的定位坐标系；未绑定时为空，原有Region/质心始终为图像坐标。</summary>
-    public LocatedCoordinateSystem? CoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
+    /// <summary>同序质心事实，未绑定定位时也保留原图身份。</summary>
+    public IReadOnlyList<VisionPoint> MeasuredCentroids => Array.AsReadOnly(Blobs.Select(b => new VisionPoint(FrameId, b.Centroid, CoordinateSystem)).ToArray());
     /// <summary>与Blobs同序的双坐标质心；未绑定时为空。</summary>
     public IReadOnlyList<LocatedPoint>? LocatedCentroids { get; private set; }
     /// <summary>附加同帧定位表达，不改变原图证据或原结果。</summary><param name="system">定位。</param><returns>独立结果。</returns>
-    public BlobAnalysisResult InCoordinates(LocatedCoordinateSystem system)
+    public BlobAnalysisResult InCoordinates(VisionCoordinateSystem system)
     {
         if (system == null) throw new ArgumentNullException(nameof(system));
         if (system.FrameId != FrameId) throw new InvalidOperationException("Result coordinate frame mismatch.");
@@ -96,6 +98,7 @@ public sealed class BlobAnalysisResult
 }
 
 /// <summary>只读原图的连通域分析能力。</summary>
+[VisionCapability("pixel.blob", "像素处理", "连通域分析")]
 public interface IBlobAnalyzer
 {
     /// <summary>分析矩形范围；不支持的像素格式或范围明确抛错，不自动裁剪。</summary>

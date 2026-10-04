@@ -9,6 +9,7 @@ namespace DP.Vision.Algorithms;
 /// 字符按整行几何归一化后与同键良品比较，相邻字符与字符间距的变化互不影响；可选缺墨检查报告比所有良品都浅的笔画。
 /// 字符身份与分割由调用方提供（OCR、分割或显式等格）。
 /// </summary>
+[VisionCapability("anomaly.character", "异常检测", "字符异常检测")]
 public interface ICharacterAnomalyDetector
 {
     /// <summary>按模型键汇总各行样本并训练，每个键一个结果，按键的序数顺序。</summary>

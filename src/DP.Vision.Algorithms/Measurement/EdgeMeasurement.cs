@@ -56,17 +56,23 @@ public sealed class EdgeMeasurementResult
         FrameId = frameId; Model = model; A = a; B = b; Radius = radius; RmsError = rms; PointCount = pointCount;
     }
     /// <summary>测量范围的定位来源；既有点保持原图坐标。</summary>
-    public LocatedCoordinateSystem? CoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
+    /// <summary>端点或圆心，保留帧及定位来源。</summary>
+    public VisionPoint MeasuredA => new VisionPoint(FrameId, A, CoordinateSystem);
+    /// <summary>第二端点或圆上点，保留帧及定位来源。</summary>
+    public VisionPoint MeasuredB => new VisionPoint(FrameId, B, CoordinateSystem);
+    /// <summary>只有线拟合提供直线，圆模型不伪装成线。</summary>
+    public VisionLine? MeasuredLine => Model == EEdgeModel.Line ? new VisionLine(MeasuredA, MeasuredB) : null;
     /// <summary>第一点的双坐标。</summary>
     public LocatedPoint? LocatedA => CoordinateSystem?.Locate(A);
     /// <summary>第二点的双坐标。</summary>
     public LocatedPoint? LocatedB => CoordinateSystem?.Locate(B);
     /// <summary>局部像素半径。</summary>
-    public double? LocalRadius => CoordinateSystem == null ? (double?)null : Radius / CoordinateSystem.Pose.Scale;
+    public double? LocalRadius => CoordinateSystem is null || !CoordinateSystem.IsSimilarity ? (double?)null : Radius / CoordinateSystem.SimilarityScale;
     /// <summary>局部像素残差。</summary>
-    public double? LocalRmsError => CoordinateSystem == null ? (double?)null : RmsError / CoordinateSystem.Pose.Scale;
+    public double? LocalRmsError => CoordinateSystem is null || !CoordinateSystem.IsSimilarity ? (double?)null : RmsError / CoordinateSystem.SimilarityScale;
     /// <summary>附加同帧定位来源，不重复转换原图点。</summary><param name="system">坐标系。</param><returns>独立结果。</returns>
-    public EdgeMeasurementResult InCoordinates(LocatedCoordinateSystem system)
+    public EdgeMeasurementResult InCoordinates(VisionCoordinateSystem system)
     {
         if (system == null) throw new ArgumentNullException(nameof(system));
         if (system.FrameId != FrameId) throw new InvalidOperationException("Measurement frame mismatch.");
@@ -91,6 +97,7 @@ public sealed class EdgeMeasurementResult
 }
 
 /// <summary>从原图矩形中的实际边缘拟合线/圆，证据不足或退化时抛出明确错误。</summary>
+[VisionCapability("measurement.edges", "测量", "边缘线圆测量")]
 public interface IEdgeMeasurer
 {
     /// <summary>借用原图完成测量。</summary>

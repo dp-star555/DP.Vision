@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+        <!-- 独立部署引擎包必须携带 NuGet 托管及原生依赖，不能依赖宿主的静态引用。 -->
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../DP.Vision.Algorithms/DP.Vision.Algorithms.csproj" />

@@ -11,15 +11,21 @@ public sealed class RobustLineResult
     internal RobustLineResult(string frameId, PointD a, PointD b, int[] indices, double rms)
     { FrameId = frameId; A = a; B = b; InlierIndices = Array.AsReadOnly((int[])indices.Clone()); RmsError = rms; }
     /// <summary>定位来源；未绑定时为空。</summary>
-    public LocatedCoordinateSystem? CoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
+    /// <summary>始终保留帧和坐标来源的第一端点。</summary>
+    public VisionPoint MeasuredA => new VisionPoint(FrameId, A, CoordinateSystem);
+    /// <summary>始终保留帧和坐标来源的第二端点。</summary>
+    public VisionPoint MeasuredB => new VisionPoint(FrameId, B, CoordinateSystem);
+    /// <summary>带来源的拟合直线，可直接连接后续距离节点。</summary>
+    public VisionLine MeasuredLine => new VisionLine(MeasuredA, MeasuredB);
     /// <summary>A端的双坐标。</summary>
     public LocatedPoint? LocatedA => CoordinateSystem?.Locate(A);
     /// <summary>B端的双坐标。</summary>
     public LocatedPoint? LocatedB => CoordinateSystem?.Locate(B);
     /// <summary>模板局部像素单位RMS；未绑定时为空。</summary>
-    public double? LocalRmsError => CoordinateSystem is null ? (double?)null : RmsError / CoordinateSystem.Pose.Scale;
+    public double? LocalRmsError => CoordinateSystem is null || !CoordinateSystem.IsSimilarity ? (double?)null : RmsError / CoordinateSystem.SimilarityScale;
     /// <summary>附加同帧坐标表达。</summary><param name="system">定位。</param><returns>独立结果。</returns>
-    public RobustLineResult InCoordinates(LocatedCoordinateSystem system)
+    public RobustLineResult InCoordinates(VisionCoordinateSystem system)
     {
         if (system == null) throw new ArgumentNullException(nameof(system));
         if (system.FrameId != FrameId) throw new InvalidOperationException("Result coordinate frame mismatch.");
@@ -42,6 +48,7 @@ public sealed class RobustLineResult
 }
 
 /// <summary>确定性、有预算的RANSAC直线拟合能力。</summary>
+[VisionCapability("measurement.robust-line", "测量", "鲁棒直线拟合")]
 public interface IRobustLineFitter
 {
     /// <summary>两点采样RANSAC后正交TLS重拟合；拒绝重合、证据不足和不收敛的内点集合。</summary>
