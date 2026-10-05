@@ -155,6 +155,16 @@ internal static partial class Program
         Button("删除ROI", editor.DeleteSelected);
         Button("完成多边形", () => editor.Finish());
         Button(
+            "弹出涂抹编辑…",
+            () =>
+            {
+                if (_image != null && DP.Vision.Winform.RoiMaskEditorForm.Edit(canvas.FindForm(), _image, editor.Document) is { } edited)
+                {
+                    editor.Load(edited);
+                }
+            }
+        );
+        Button(
             "保存ROI",
             () =>
             {
@@ -312,6 +322,16 @@ internal static partial class Program
         Button("重做", editor.Redo);
         Button("删除ROI", editor.DeleteSelected);
         Button("完成多边形", () => editor.Finish());
+        Button(
+            "弹出涂抹编辑…",
+            () =>
+            {
+                if (_image != null && DP.Vision.WPF.RoiMaskEditorWindow.Edit(Wpf.Window.GetWindow(canvas), _image, editor.Document) is { } edited)
+                {
+                    editor.Load(edited);
+                }
+            }
+        );
         Button(
             "保存ROI",
             () =>

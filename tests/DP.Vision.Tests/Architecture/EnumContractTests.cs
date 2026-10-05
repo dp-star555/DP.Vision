@@ -19,7 +19,7 @@ public sealed class EnumContractTests
     [DataRow(typeof(ERoiPointerAction), "Down=0,Move=1,Up=2")]
     [DataRow(
         typeof(ERoiTool),
-        "Select=0,Rectangle=1,RotatedRectangle=2,Circle=3,Ellipse=4,Polygon=5,Polyline=6,Point=7,InsertVertex=8,DeleteVertex=9"
+        "Select=0,Rectangle=1,RotatedRectangle=2,Circle=3,Ellipse=4,Polygon=5,Polyline=6,Point=7,InsertVertex=8,DeleteVertex=9,Brush=10,Eraser=11"
     )]
     [DataRow(typeof(ERoiConstraint), "None=0,AxisAligned=1,Circle=2")]
     [DataRow(typeof(ERoiHandleKind), "Size=0,Rotation=1,Vertex=2,Radius=3")]

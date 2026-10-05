@@ -21,35 +21,8 @@ public static class InspectionMask
         if ((long)width * height > 16777216) throw new InvalidOperationException("Inspection mask exceeds 16M pixel budget.");
         var included = include.ToArray(); var excluded = exclude.ToArray();
         if (included.Length + excluded.Length > 512) throw new ArgumentException("Too many inspection shapes.");
-        // 先求全部包含形状的并集（没有包含形状时以整幅图为基底），再逐个扣除排除形状；
-        // 直接在游程上运算，不分配整幅图大小的临时掩码。
-        RegionGeometry? result = null;
-        if (included.Length == 0)
-        {
-            result = new RegionGeometry(FullRows(width, height));
-        }
-
-        foreach (var shape in included)
-        {
-            var region = RegionRasterizer.Rasterize(shape, width, height, 16777216, token);
-            result = result == null ? region : result.Union(region, token);
-        }
-
-        foreach (var shape in excluded)
-        {
-            var hole = RegionRasterizer.Rasterize(shape, width, height, 16777216, token);
-            result = result!.Subtract(hole, token);
-        }
-
-        return result!;
-    }
-
-    private static IEnumerable<RegionRun> FullRows(int width, int height)
-    {
-        for (int y = 0; y < height; y++)
-        {
-            yield return new RegionRun(y, 0, width);
-        }
+        // 合成规则（包含并集减排除并集、无包含时以全图为基底）与UI的ROI文档共用同一实现。
+        return RegionRasterizer.Compose(width, height, included, excluded, 16777216, token);
     }
 
     /// <summary>验证外部Region的每条游程都在原图内，不静默裁剪。</summary>

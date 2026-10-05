@@ -87,6 +87,23 @@ editor.Load(restored); // 完整校验完成后替换；清空旧Undo/Redo历史
 
 `ProcessRoiPointer(action, clientPoint)`是鼠标/触笔/宿主自动化的统一输入Seam：WinForms使用控件像素，WPF使用DIP；控件统一换算为原图坐标。程序化输入由宿主管理捕获，不需要全局鼠标注入。
 
+## 涂抹层与几何ROI的关系
+
+画笔/橡皮（`ERoiTool.Brush`/`Eraser`）编辑的是**涂抹层**：每种用途最多一个固定标识的Region ROI（`RoiEditor.PaintIncludeId`“涂抹-包含”、`PaintExcludeId`“涂抹-排除”），与几何ROI放在同一个`RoiDocument`里、同样随XML保存。两者同时存在时只有一条合成规则：
+
+```
+有效区域 = 全部启用的包含（几何ROI + 涂抹-包含）的并集 − 全部启用的排除（几何ROI + 涂抹-排除）的并集
+```
+
+- 排除始终优先，结果与绘制先后、文档顺序无关；没有任何ROI时为整幅图，全部禁用时报错而不回退全图。
+- `RoiDocument.ToRegion(w, h)`、后台`InspectionMask.Compose`都调用同一个`RegionRasterizer.Compose`，界面预览与后台结果一致。
+- 画笔写入当前`PaintPurpose`的涂抹层，并从另一涂抹层去掉同一批像素（后涂覆盖先涂）；橡皮同时擦两个涂抹层。二者都**不修改几何ROI**——要在几何包含区里挖洞，用“排除”画笔。
+- `InvertPaint`在原图范围内对一个涂抹层取反；`SwapPaintPurpose`互换两层；`ClearPaint`删除两层；`FlattenSelected`把选中的几何ROI按像素并入同用途涂抹层并删除原ROI。每个操作、每一笔都是一个撤销事务。
+- 涂抹层用途由标识决定，不能通过`SetSelectedMetadata`改用途，只能启用/禁用；它是像素Region，**不能跟随坐标系**，需要随定位移动的区域请用几何ROI。
+- 笔画超出原图的部分被裁去（与`Rasterize`拒绝越界不同）；涂抹需要原图尺寸，画布显示图像时自动调用`SetPaintArea`。
+
+弹出窗口`RoiMaskEditorForm.Edit(owner, image, document)`（WinForms）与`RoiMaskEditorWindow.Edit(owner, image, document)`（WPF）在同一画布上提供几何工具、画笔/橡皮、笔刷半径、涂抹用途及上述命令，实时叠加有效区域并显示像素数；确定返回新文档，取消返回null。两者共用`RoiMaskSession`。
+
 ## 帧与编辑的关系
 
 - `PostFrame`仍只保留最新预览。正在编辑时，控件暂缓从邮箱取帧，避免按下/松开对应不同图像；邮箱始终有界，并不是暂停检测算法。

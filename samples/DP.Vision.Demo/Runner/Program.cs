@@ -12,6 +12,8 @@ internal static partial class Program
 {
     private static long _sequence;
     private static string? _smokeOutput;
+    // 当前显示的样图，供弹出式“ROI与涂抹”窗口使用。
+    private static IImageSource? _image;
 
     [STAThread]
     private static void Main(string[] args)
@@ -298,6 +300,8 @@ internal static partial class Program
         long sequence = ++_sequence;
         string id = "demo-" + sequence;
         using var source = new PatternSource(width, height);
+        _image?.Dispose();
+        _image = source.Retain();
         var runs = new List<RegionRun>();
         for (int y = height / 8; y < height / 3; y++)
         {
