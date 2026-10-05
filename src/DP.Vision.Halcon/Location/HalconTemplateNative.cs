@@ -88,20 +88,28 @@ internal static class HalconTemplateNative
     }
 #if HALCON_SDK
     internal static byte[] GrayBytes(IImageSource source, CancellationToken token)
+        => GrayBytes(source, new PixelBounds(0, 0, source.Info.Width, source.Info.Height), token);
+
+    /// <summary>把原图中指定矩形转换为连续灰度字节；灰度图按行整块复制，彩色图逐像素加权。</summary>
+    internal static byte[] GrayBytes(IImageSource source, PixelBounds crop, CancellationToken token)
     {
         var info = source.Info;
         if (info.Layout != EPixelLayout.Gray8 && info.Layout != EPixelLayout.Bgr24 && info.Layout != EPixelLayout.Bgra32
             && info.Layout != EPixelLayout.Rgb24 && info.Layout != EPixelLayout.Rgba32)
             throw new NotSupportedException("HALCON模板仅支持8位灰度或RGB/BGR图像；16位图像需要显式转换。");
         if ((long)info.Width * info.Height > 16777216 || info.ByteLength > 64 * 1024 * 1024) throw new ArgumentException("HALCON模板图像超过16M像素或64MiB预算。");
-        var result = new byte[info.Width * info.Height]; var row = new byte[info.Stride];
+        if (!crop.Fits(info.Width, info.Height)) throw new ArgumentOutOfRangeException(nameof(crop));
         int channels = info.Layout == EPixelLayout.Gray8 ? 1 : info.Layout == EPixelLayout.Bgr24 || info.Layout == EPixelLayout.Rgb24 ? 3 : 4;
         bool rgb = info.Layout == EPixelLayout.Rgb24 || info.Layout == EPixelLayout.Rgba32;
-        for (int y = 0; y < info.Height; y++)
+        var result = new byte[crop.Width * crop.Height]; var row = channels == 1 ? null : new byte[crop.Width * channels];
+        for (int y = 0; y < crop.Height; y++)
         {
-            token.ThrowIfCancellationRequested(); source.CopyTo(y * info.Stride, row, 0, row.Length);
-            for (int x = 0; x < info.Width; x++) result[y * info.Width + x] = channels == 1 ? row[x]
-                : (byte)(((rgb ? 77 : 29) * row[x * channels] + 150 * row[x * channels + 1] + (rgb ? 29 : 77) * row[x * channels + 2] + 128) >> 8);
+            token.ThrowIfCancellationRequested();
+            int offset = checked((crop.Y + y) * info.Stride + crop.X * channels);
+            if (row == null) { source.CopyTo(offset, result, y * crop.Width, crop.Width); continue; }
+            source.CopyTo(offset, row, 0, row.Length);
+            for (int x = 0; x < crop.Width; x++) result[y * crop.Width + x] =
+                (byte)(((rgb ? 77 : 29) * row[x * channels] + 150 * row[x * channels + 1] + (rgb ? 29 : 77) * row[x * channels + 2] + 128) >> 8);
         }
         return result;
     }
@@ -184,8 +192,12 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
         var allowed = new RegionGeometry(Enumerable.Range(search.Y, search.Height).Select(y => new RegionRun(y, search.X, search.X + search.Width)));
         if (region != null) allowed = allowed.Intersect(region, token);
         if (allowed.AreaPixels == 0) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null);
-        using var image = HalconTemplateNative.Image(HalconTemplateNative.GrayBytes(frame.Image, token), frame.Image.Info.Width, frame.Image.Info.Height);
-        using var nativeRegion = HalconTemplateNative.Region(allowed.Runs);
+        // 只把允许区域外接框（外扩一圈边距并按64像素对齐，保持金字塔网格与原图一致）交给HALCON，
+        // 小ROI不再转换和建立整幅图金字塔；结果坐标加回裁剪原点。
+        var crop = Crop(allowed.Bounds, frame.Image.Info.Width, frame.Image.Info.Height);
+        var fit = new FitArea(allowed, search, region == null);
+        using var image = HalconTemplateNative.Image(HalconTemplateNative.GrayBytes(frame.Image, crop, token), crop.Width, crop.Height);
+        using var nativeRegion = HalconTemplateNative.Region(allowed.Runs.Select(r => new RegionRun(r.Row - crop.Y, r.Start - crop.X, r.EndExclusive - crop.X)));
         using var domain = image.ReduceDomain(nativeRegion);
         TemplatePoseTransform? best = null; double score = 0; long validationWork = 0;
         foreach (var interval in options.AngleIntervals())
@@ -207,22 +219,50 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
                     double actualAngle = -angles[i].D, actualScale = scales?[i].D ?? 1;
                     double c = Math.Cos(actualAngle), s = Math.Sin(actualAngle);
                     var pose = new TemplatePoseTransform(_definition.Width, _definition.Height,
-                        new PointD(columns[i].D + .5 * actualScale * (c - s), rows[i].D + .5 * actualScale * (s + c)), actualAngle, actualScale);
+                        new PointD(crop.X + columns[i].D + .5 * actualScale * (c - s), crop.Y + rows[i].D + .5 * actualScale * (s + c)), actualAngle, actualScale);
                     double value = Math.Max(0, Math.Min(1, scores[i].D));
-                    if (value < score || !FitsMask(pose, allowed, options.MaximumWork, ref validationWork, token)) continue;
+                    if (value < score || !FitsMask(pose, fit, options.MaximumWork, ref validationWork, token)) continue;
                     best = pose; score = value;
                 }
             }
         }
         return new TemplatePoseResult(frame.FrameId, ModelIdentity, score, best);
     }
+    // 外接框外扩32像素、原点按64对齐（最多6层金字塔），裁剪到原图内。
+    private static PixelBounds Crop(RectD bounds, int width, int height)
+    {
+        int x0 = Math.Max(0, ((int)bounds.X - 32) / 64 * 64), y0 = Math.Max(0, ((int)bounds.Y - 32) / 64 * 64);
+        int x1 = Math.Min(width, (int)(bounds.X + bounds.Width) + 32), y1 = Math.Min(height, (int)(bounds.Y + bounds.Height) + 32);
+        return new PixelBounds(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    /// <summary>候选验证用的允许区域：纯矩形时只比较角点，否则在外接框内建一次位图供所有候选查表。</summary>
+    private sealed class FitArea
+    {
+        internal FitArea(RegionGeometry allowed, PixelBounds search, bool rectangle)
+        {
+            Rectangle = rectangle; Search = search;
+            if (rectangle) return;
+            var b = allowed.Bounds; X = (int)b.X; Y = (int)b.Y; Width = (int)b.Width; Height = (int)b.Height;
+            Bits = new byte[Width * Height];
+            foreach (var run in allowed.Runs) for (int x = run.Start; x < run.EndExclusive; x++) Bits[(run.Row - Y) * Width + x - X] = 1;
+        }
+        internal readonly bool Rectangle; internal readonly PixelBounds Search;
+        internal readonly int X, Y, Width, Height; internal readonly byte[]? Bits;
+        internal bool Contains(int x, int y) => Rectangle
+            ? x >= Search.X && x < Search.X + Search.Width && y >= Search.Y && y < Search.Y + Search.Height
+            : x >= X && x < X + Width && y >= Y && y < Y + Height && Bits![(y - Y) * Width + x - X] != 0;
+    }
+
     // HALCON搜索domain只约束模型原点；共同契约要求整个有效模板落在搜索区域内。
-    private bool FitsMask(TemplatePoseTransform pose, RegionGeometry allowed, long budget, ref long work, CancellationToken token)
+    private bool FitsMask(TemplatePoseTransform pose, FitArea allowed, long budget, ref long work, CancellationToken token)
     {
         var corners = new[] { pose.ToImage(new Coordinate2D(0, 0)), pose.ToImage(new Coordinate2D(_definition.Width, 0)),
             pose.ToImage(new Coordinate2D(0, _definition.Height)), pose.ToImage(new Coordinate2D(_definition.Width, _definition.Height)) };
         int x0 = (int)Math.Floor(corners.Min(p => p.X) + 1e-6), y0 = (int)Math.Floor(corners.Min(p => p.Y) + 1e-6),
             x1 = (int)Math.Ceiling(corners.Max(p => p.X) - 1e-6), y1 = (int)Math.Ceiling(corners.Max(p => p.Y) - 1e-6);
+        // 纯矩形区域：模板外接框完全在矩形内即合法，不需要逐像素。
+        if (allowed.Rectangle && allowed.Contains(x0, y0) && allowed.Contains(x1 - 1, y1 - 1)) return true;
         work = checked(work + (long)(x1 - x0) * (y1 - y0));
         if (work > budget) throw new InvalidOperationException("HALCON候选ROI验证预算超限，请缩小搜索ROI或减少候选。");
         for (int y = y0; y < y1; y++)
@@ -233,7 +273,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
                 var point = pose.ToTemplate(new Coordinate2D(x + .5, y + .5));
                 int col = (int)Math.Floor(point.X + 1e-6), row = (int)Math.Floor(point.Y + 1e-6);
                 if (col >= 0 && col < _definition.Width && row >= 0 && row < _definition.Height && _mask[row * _definition.Width + col] != 0
-                    && !allowed.Contains(new PointD(x + .5, y + .5))) return false;
+                    && !allowed.Contains(x, y)) return false;
             }
         }
         return true;
