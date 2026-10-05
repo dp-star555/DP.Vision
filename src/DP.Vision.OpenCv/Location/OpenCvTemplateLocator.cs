@@ -20,7 +20,7 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
             if (templateBounds.X != 0 || templateBounds.Y != 0 || templateBounds.Width != template.Image.Info.Width || templateBounds.Height != template.Image.Info.Height)
                 throw new ArgumentException("Located translation search requires the complete template.");
             var pose = new OpenCvTemplatePoseLocator().Locate(frame, template, search,
-                new TemplatePoseOptions(new[] { searchCoordinates.RotationRadians }, new[] { searchCoordinates.SimilarityScale }, minimumScore), token, regionMask);
+                new TemplatePoseOptions(searchCoordinates.RotationRadians, searchCoordinates.RotationRadians, searchCoordinates.SimilarityScale, searchCoordinates.SimilarityScale, minimumScore), token, regionMask);
             return TemplateLocationResult.FromPose(pose, searchCoordinates);
         }
         if (!search.Fits(frame.Image) || !templateBounds.Fits(template.Image)

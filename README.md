@@ -34,7 +34,7 @@
 - `BlobObservation.Features` / `BlobSelector`：栅格周长、圆度、面积矩等效椭圆及确定性筛选。
 - `ICaliperMeasurer` / `CaliperMeasurer`：双线性带采样、灰度剖面、梯度峰抛物线亚像素插值及极性/间距控制。
 - `IRobustLineFitter` / `RobustLineFitter`：确定性RANSAC＋正交TLS，内点索引/RMS和退化拒绝。
-- `ITemplatePoseLocator` / `OpenCvTemplatePoseLocator`：有效掩码上的离散旋转/尺度搜索，独立姿态正反变换；不是连续形状模型。
+- `ITemplatePoseLocator` / `OpenCvTemplatePoseLocator`：显式角度/尺度上下限，OpenCV按步长采样并包含端点，使用有效模板掩码，输出独立姿态正反变换；HALCON资源模型直接使用原生范围搜索。旧候选列表接口已删除。
 
 这些算子已接入Workflow的8个新增节点与双宿主。用法和准确边界见[算子说明](../DP.WorkFlow/docs/nodes/vision-operators.md)。相机实机工作延期，不以合成边缘测试冒充现场精度验收。
 - 分析使用8位输入，越界/Gray16明确拒绝；测量和模板定位只接受声明的矩形范围，不自动取任意ROI外接框或降位深。
@@ -58,7 +58,7 @@
 | `src/DP.Vision.Acquisition.Management` | netstandard2.0 | 采集配置/发现/监控快照与呈现模型（`AcquisitionManagementPresenter`）；**不引用任何 UI 套件** |
 | `src/DP.Vision.Acquisition.WinForms` | net48 / net8.0-windows | 采集会话视图 `AcquisitionManagementControl`；**只依赖 Management** |
 | `src/DP.Vision.OpenCv` | net48 / net8.0-windows，x64 | 文件、Blob、测量、定位及既有业务算法的真实OpenCV实现 |
-| `src/DP.Vision.Halcon` | net48 / net8.0-windows，x64 | 独立SDK相机采集和Gray8/Gray16/RGB像素复制；可选SDK构建；作为采集 Driver Module 被目录扫描发现 |
+| `src/DP.Vision.Halcon` | net48 / net8.0-windows，x64 | 独立SDK采集、中立像素复制，以及NCC/尺度形状模板引擎；可选SDK构建；采集和算法入口共用同一包 |
 | `src/DP.Vision.Basler` | net48 / net8.0-windows，x64 | Basler pylon 相机采集（官方 NuGet 包 `Basler.Pylon.NET.x64`，免费）；显式像素格式映射；作为采集 Driver Module 被目录扫描发现 |
 | `src/DP.Vision.UI` | netstandard2.0 | ROI编辑、画布接口、共享结果浏览会话与呈现器 |
 | `src/DP.Vision.Winform` | net48 / net8.0-windows，x64 | `VisionCanvasControl`及`ResultBrowserControl`，GDI+ |

@@ -8,6 +8,21 @@
 
 没有 SDK 也可构建：`HalconStreamCameras.IsSdkEnabled == false`，造设备时明确抛出 `VisionProviderUnavailableException`，绝不生成模拟帧。此属性只描述构建能力，不证明设备在线、原生 DLL 或许可证可用。宿主不应注册不可用的实现。
 
+## 模板算法引擎
+
+同一个`DP.Vision.Halcon.dll`现在提供`HalconVisionAlgorithmModule`算法入口，以及原有采集入口。发现阶段只登记描述，不检查许可或加载模型；未装配SDK时仍可查看算法元数据，显式制作/准备会报不可用。
+
+| 匹配实现 | 制作实现 | 能力 |
+|---|---|---|
+| `halcon.template-ncc-model` | `halcon.template-ncc-model.build` | 灰度NCC，平移/旋转、精确制作掩码，尺度固定1 |
+| `halcon.template-shape-model` | `halcon.template-shape-model.build` | 原生尺度形状匹配，平移/旋转/尺度、精确制作掩码 |
+
+工厂提供金字塔、角度/尺度范围和步长、极性、对比度等制作参数；样图支持8位灰度/RGB/BGR，16位需先显式转换。模板只使用裁剪范围与有效掩码交集。资源通过共同`VisionTemplateStore`管理不可变版本、内容校验、样图和参考几何；原生序列化模型存放`variants/halcon/model.bin`，不能直接读取OpenCV模型或旧工程的shm/ncm。准备时解码并验证原生环境，同内容资源共享串行实例，最后租约退出后清理SDK模型句柄。
+
+部署包包含`DP.Vision.Halcon.dll`、`halcondotnet.dll`、私有托管依赖，以及net8构建的`DP.Vision.Halcon.deps.json`；运行环境和许可由HALCON安装提供。宿主共享`DP.Vision.dll`、`DP.Vision.Algorithms.dll`、`DP.Vision.Acquisition.Abstractions.dll`，不重复投放。net48同进程依赖版本一致，框架已经提供的`System.ValueTuple.dll`不放入引擎包。共用加载器跳过仅依赖框架的SDK模块候选，避免为纯算法扫描HALCON的WPF/WinForms控件。
+
+运行直接按节点角度/尺度上下限调用原生范围搜索。共同顺时针角度[a,b]转换为HALCON起始角度−b、跨度b−a；跨越±180°时拆成两段，整周范围保持360°。制作范围必须覆盖运行区间；NCC尺度须固定为1。模型制作采样及原生插值影响实际返回角度/尺度，运行不使用OpenCV采样步长。NCC和形状分数各有含义，阈值需分别确认。完整有效模板必须在搜索ROI中，保留排除孔洞；原生位置转换为共同像素边界坐标后构建业务坐标系。每段最多1024个检出，共同工作预算约束ROI验证，不估算HALCON内部计算量；取消不能中断单次原生调用。旧候选列表接口已删除，配置不迁移，宿主与引擎需同步重建。
+
 ## 相机
 
 工作流侧只通过中立采集入口使用本Provider：

@@ -26,9 +26,13 @@ public sealed class TemplateModelResourceTests
             var mask = new RegionGeometry(new[] { new RegionRun(1, 1, 4), new RegionRun(2, 1, 3), new RegionRun(3, 1, 4) });
             var build = await new OpenCvTemplateModelBuilder("opencv.template-model").BuildAsync(new VisionTemplateBuildRequest(frame, definition, mask, new Dictionary<string, string>()));
             var templateId = Guid.NewGuid().ToString("N");
-            var relative = VisionTemplateStore.Publish(root, templateId, build);
-            var sameContentRevision = VisionTemplateStore.Publish(root, templateId, build);
+            var relative = VisionTemplateStore.Publish(root, templateId, build, default);
+            var sameContentRevision = VisionTemplateStore.Publish(root, templateId, build, " 标签定位 ", CancellationToken.None);
             var manifestPath = Path.Combine(root, relative);
+            Assert.IsNull(VisionTemplateStore.Inspect(manifestPath).DisplayName);
+            Assert.IsFalse(File.ReadAllText(manifestPath).Contains("DisplayName"));
+            Assert.AreEqual("标签定位", VisionTemplateStore.Inspect(Path.Combine(root, sameContentRevision)).DisplayName);
+            Assert.AreEqual(VisionTemplateStore.Capture(manifestPath).Identity, VisionTemplateStore.Capture(Path.Combine(root, sameContentRevision)).Identity);
             using var runtime = new VisionAlgorithmRuntime(VisionAlgorithmCatalog.Compose(new[] { new OpenCvVisionAlgorithmModule() }));
             using var plan = await runtime.PrepareAsync(new[] { Request("a", relative), Request("b", sameContentRevision) }, new VisionAlgorithmResourceContext(root), CancellationToken.None);
             var instance = plan.Invoke<IPreparedVisionTemplateMatcher, object>("a", m => m);
@@ -37,12 +41,12 @@ public sealed class TemplateModelResourceTests
             for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) bytes[(y + 4) * 10 + x + 3] = (byte)(20 + (x + 1) * 19 + (y + 1) * 13);
             bytes[5 * 10 + 5] = 255; // 被模板排除的像素不能影响分数。
             using var sceneImage = VisionImage.CopyFrom(new ImageInfo(10, 10, EPixelLayout.Gray8), bytes); using var scene = new ImageFrame("scene", sceneImage);
-            var result = plan.Invoke<IPreparedVisionTemplateMatcher, TemplatePoseResult>("a", m => m.Match(scene, new PixelBounds(0, 0, 10, 10), new TemplatePoseOptions(new[] { 0d }, new[] { 1d }, .999))
+            var result = plan.Invoke<IPreparedVisionTemplateMatcher, TemplatePoseResult>("a", m => m.Match(scene, new PixelBounds(0, 0, 10, 10), new TemplatePoseOptions(0d, 0d, 1d, 1d, .999))
                 .InReferenceCoordinates("reference", scene, m.Definition, m.ModelIdentity));
             Assert.IsTrue(result.Found); Assert.AreEqual(4d, result.CoordinateSystem!.LocalToImage.Tx, 1e-6); Assert.AreEqual(5d, result.CoordinateSystem.LocalToImage.Ty, 1e-6);
             Assert.AreEqual(0d, result.CoordinateSystem.LocalToImage.M11, 1e-6); Assert.AreEqual(1d, result.CoordinateSystem.LocalToImage.M21, 1e-6);
             var dataFile = Path.Combine(Path.GetDirectoryName(manifestPath)!, "variants/opencv-gray/model.bin"); File.WriteAllBytes(dataFile, new byte[] { 0 });
-            var stillFound = plan.Invoke<IPreparedVisionTemplateMatcher, bool>("a", m => m.Match(scene, new PixelBounds(0, 0, 10, 10), new TemplatePoseOptions(new[] { 0d }, new[] { 1d }, .999)).Found);
+            var stillFound = plan.Invoke<IPreparedVisionTemplateMatcher, bool>("a", m => m.Match(scene, new PixelBounds(0, 0, 10, 10), new TemplatePoseOptions(0d, 0d, 1d, 1d, .999)).Found);
             Assert.IsTrue(stillFound);
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareAsync(new[] { Request("broken", relative) }, new VisionAlgorithmResourceContext(root), CancellationToken.None));
         }
@@ -83,9 +87,9 @@ public sealed class TemplateModelResourceTests
         var build = await builder.BuildAsync(new VisionTemplateBuildRequest(frame, d, null, new Dictionary<string, string> { ["minimumAngle"] = "0", ["maximumAngle"] = "0", ["minimumScale"] = "1", ["maximumScale"] = "1" }));
         using var resource = await new OpenCvTemplateModelFactory(true).PreparePreviewAsync(build);
         var matcher = (IPreparedVisionTemplateMatcher)resource.Instance;
-        Assert.ThrowsExactly<ArgumentException>(() => matcher.Match(frame, new PixelBounds(0, 0, 4, 4), new TemplatePoseOptions(new[] { .2 }, new[] { 1d })));
+        Assert.ThrowsExactly<ArgumentException>(() => matcher.Match(frame, new PixelBounds(0, 0, 4, 4), new TemplatePoseOptions(0, .2, 1d, 1d)));
         var mask = new RegionGeometry(Array.Empty<RegionRun>());
-        Assert.IsFalse(matcher.Match(frame, new PixelBounds(0, 0, 4, 4), new TemplatePoseOptions(new[] { 0d }, new[] { 1d }), mask).Found);
+        Assert.IsFalse(matcher.Match(frame, new PixelBounds(0, 0, 4, 4), new TemplatePoseOptions(0d, 0d, 1d, 1d), mask).Found);
     }
 
     /// <summary>真实旋转模型在冻结资源上检出，并转换参考原点。</summary>
@@ -101,12 +105,15 @@ public sealed class TemplateModelResourceTests
         var pixels = new byte[8 * 8]; byte[] rotated = { 220, 10, 30, 60, 120, 180 };
         for (int y = 0; y < 3; y++) for (int x = 0; x < 2; x++) pixels[(y + 2) * 8 + x + 3] = rotated[y * 2 + x];
         using var sceneImage = VisionImage.CopyFrom(new ImageInfo(8, 8, EPixelLayout.Gray8), pixels); using var scene = new ImageFrame("scene", sceneImage);
-        var result = matcher.Match(scene, new PixelBounds(0, 0, 8, 8), new TemplatePoseOptions(new[] { Math.PI / 2 }, new[] { 1d }, .999))
+        var result = matcher.Match(scene, new PixelBounds(0, 0, 8, 8), new TemplatePoseOptions(80 * Math.PI / 180, 100 * Math.PI / 180, 1d, 1d, .999, angleStepRadians: 10 * Math.PI / 180))
             .InReferenceCoordinates("coordinate", scene, matcher.Definition, matcher.ModelIdentity);
         Assert.IsTrue(result.Found); Assert.AreEqual(Math.PI / 2, result.Transform!.AngleRadians, 1e-10);
         Assert.AreEqual(5d, result.CoordinateSystem!.LocalToImage.Tx, 1e-6); Assert.AreEqual(2d, result.CoordinateSystem.LocalToImage.Ty, 1e-6);
         var back = result.CoordinateSystem.ImageToLocal.Map(result.CoordinateSystem.LocalToImage.Map(new Coordinate2D(.2, .4)));
         Assert.AreEqual(.2, back.X, 1e-6); Assert.AreEqual(.4, back.Y, 1e-6);
+        var endpoint = matcher.Match(scene, new PixelBounds(0, 0, 8, 8),
+            new TemplatePoseOptions(80 * Math.PI / 180, Math.PI / 2, 1, 1, .999, angleStepRadians: 7 * Math.PI / 180));
+        Assert.IsTrue(endpoint.Found); Assert.AreEqual(Math.PI / 2, endpoint.Transform!.AngleRadians, 1e-10);
     }
 
     private static IImageSource Image(int width, int height, Func<int, int, byte> value) => VisionImage.CopyFrom(new ImageInfo(width, height, EPixelLayout.Gray8),

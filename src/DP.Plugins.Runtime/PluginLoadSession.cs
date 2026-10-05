@@ -161,6 +161,13 @@ public sealed class PluginLoadSession
     {
         lock (_gate)
         {
+            // 只有框架引用的SDK不可能实现应用自己的模块契约。避免为了扫描无关依赖
+            // 解析其全部公开UI类型（例如HALCON同时声明WinForms/WPF控件）。
+            // 含自定义基类/中间契约的程序集仍完整检查，保留间接实现接口的入口。
+            var contract = typeof(T).Assembly.GetName();
+            if (!IsFrameworkReference(contract) && assembly.GetName().Name != contract.Name
+                && assembly.GetReferencedAssemblies().All(reference => reference.Name != contract.Name && IsFrameworkReference(reference)))
+                return Array.Empty<T>();
             Type[] types;
             try { types = assembly.GetExportedTypes(); }
             catch (ReflectionTypeLoadException failure)
@@ -178,6 +185,16 @@ public sealed class PluginLoadSession
             }
             return modules.AsReadOnly();
         }
+    }
+
+    private static bool IsFrameworkReference(AssemblyName reference)
+    {
+        var name = reference.Name ?? "";
+        if (name != "mscorlib" && name != "netstandard" && name != "System" && !name.StartsWith("System.", StringComparison.Ordinal)
+            && name != "WindowsBase" && name != "PresentationCore" && name != "PresentationFramework") return false;
+        var token = string.Concat((reference.GetPublicKeyToken() ?? Array.Empty<byte>()).Select(b => b.ToString("x2")));
+        return token == "b77a5c561934e089" || token == "b03f5f7f11d50a3a" || token == "31bf3856ad364e35"
+            || token == "cc7b13ffcd2ddd51" || token == "7cec85d7bea7798e";
     }
 
     /// <summary>无需 Manifest，递归扫描目录中的模块；原生依赖跳过，托管失败报告。</summary>

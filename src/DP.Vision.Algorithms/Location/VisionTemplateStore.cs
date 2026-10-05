@@ -29,6 +29,8 @@ public sealed class VisionTemplateManifest
     [DataMember] public int SchemaVersion { get; set; } = 1;
     /// <summary>模板身份。</summary>
     [DataMember] public string TemplateId { get; set; } = "";
+    /// <summary>用户可读名称；旧资源缺少此项时仍使用原有身份。</summary>
+    [DataMember(EmitDefaultValue = false)] public string? DisplayName { get; set; }
     /// <summary>不可变修订。</summary>
     [DataMember] public string RevisionId { get; set; } = "";
     /// <summary>配套匹配实现。</summary>
@@ -84,9 +86,15 @@ public static class VisionTemplateStore
 
     /// <summary>发布新版本，返回相对于配方目录的清单路径；取消不会更新节点引用。</summary>
     public static string Publish(string recipeDirectory, string templateId, VisionTemplateBuild build, CancellationToken token = default)
+        => Publish(recipeDirectory, templateId, build, null, token);
+
+    /// <summary>按可读名称发布新版本；名称不改变资源身份或原生模型内容身份。</summary>
+    public static string Publish(string recipeDirectory, string templateId, VisionTemplateBuild build, string? displayName, CancellationToken token)
     {
         if (string.IsNullOrWhiteSpace(recipeDirectory) || !Path.IsPathRooted(recipeDirectory)) throw new ArgumentException("请先保存配方，确定资源目录。");
         if (!Guid.TryParseExact(templateId, "N", out _)) throw new ArgumentException("模板身份必须是稳定GUID。");
+        displayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName!.Trim();
+        if (displayName != null && (displayName.Length > 100 || displayName.Any(char.IsControl))) throw new ArgumentException("模板名称最多100个字符，不能包含控制字符。", nameof(displayName));
         token.ThrowIfCancellationRequested();
         build.Definition.Validate();
         if (string.IsNullOrWhiteSpace(build.ImplementationId) || string.IsNullOrWhiteSpace(build.Format)) throw new ArgumentException("模板实现和格式不能为空。");
@@ -96,7 +104,7 @@ public static class VisionTemplateStore
         Directory.CreateDirectory(parent); CheckDirectory(parent);
         var stage = Path.Combine(parent, ".draft-" + revision);
         var destination = Path.Combine(recipeDirectory, relative);
-        var manifest = new VisionTemplateManifest { TemplateId = templateId, RevisionId = revision,
+        var manifest = new VisionTemplateManifest { TemplateId = templateId, RevisionId = revision, DisplayName = displayName,
             ImplementationId = build.ImplementationId, ModelFormat = build.Format, Definition = CopyDefinition(build.Definition),
             BuildSettings = build.Settings.ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal) };
         if (string.IsNullOrWhiteSpace(manifest.Definition.ReferenceIdentity)) manifest.Definition.ReferenceIdentity = templateId;
@@ -141,6 +149,7 @@ public static class VisionTemplateStore
             || manifest.Definition == null || manifest.Files == null || manifest.BuildSettings == null)
             throw new InvalidDataException("不支持的模板清单或身份缺失。");
         manifest.Definition.Validate();
+        if (manifest.DisplayName != null && (manifest.DisplayName.Length > 100 || manifest.DisplayName.Any(char.IsControl))) throw new InvalidDataException("模板名称无效。");
         if (manifest.Files.Count == 0 || manifest.Files.Count > 64 || manifest.Files.Sum(f => (long)f.Length) > 2L * Limit)
             throw new InvalidDataException("模板清单超过资源预算。");
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

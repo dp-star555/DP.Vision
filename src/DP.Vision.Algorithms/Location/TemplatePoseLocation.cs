@@ -5,26 +5,52 @@ using System.Threading;
 
 namespace DP.Vision.Algorithms;
 
-/// <summary>明确离散角度/尺度候选，不宣称连续形状匹配。</summary>
+/// <summary>角度和尺度的搜索区间；原生引擎直接搜索，采样引擎按步长离散化。</summary>
 public sealed class TemplatePoseOptions
 {
-    /// <summary>复制候选并验证预算。</summary>
-    /// <param name="anglesRadians">图像坐标顺时针弧度，最多181项。</param><param name="scales">正尺度0.1..10，最多32项；组合不超过512。</param>
-    /// <param name="minimumScore">最小1-归一化均方差，0..1，非概率。</param><param name="maximumWork">位置数×模板面积累计预算，最多20亿。</param>
-    public TemplatePoseOptions(IEnumerable<double> anglesRadians, IEnumerable<double> scales, double minimumScore = .9, long maximumWork = 200000000)
+    /// <summary>创建搜索区间并验证参数。</summary>
+    /// <param name="minimumAngleRadians">相对样图的顺时针角度下限，弧度。</param>
+    /// <param name="maximumAngleRadians">角度上限；跨度不超过一周，允许区间跨越±π。</param>
+    /// <param name="minimumScale">最小尺度，0.1至10。</param><param name="maximumScale">最大尺度。</param>
+    /// <param name="minimumScore">引擎定义的最小分数，0..1，非概率；不同引擎不能直接比较。</param><param name="maximumWork">引擎工作预算，最多20亿；像素比较或候选ROI验证。</param>
+    /// <param name="angleStepRadians">采样引擎的角度步长；HALCON原生搜索不使用此参数。</param>
+    /// <param name="scaleStep">采样引擎的尺度步长；HALCON原生搜索不使用此参数。</param>
+    public TemplatePoseOptions(double minimumAngleRadians, double maximumAngleRadians, double minimumScale = 1, double maximumScale = 1,
+        double minimumScore = .9, long maximumWork = 200000000, double angleStepRadians = Math.PI / 180, double scaleStep = .01)
     {
-        var angles = (anglesRadians ?? throw new ArgumentNullException(nameof(anglesRadians))).Take(182).ToArray();
-        var factors = (scales ?? throw new ArgumentNullException(nameof(scales))).Take(33).ToArray();
-        if (angles.Length < 1 || angles.Length > 181 || factors.Length < 1 || factors.Length > 32 || angles.Length * factors.Length > 512
-            || angles.Any(a => double.IsNaN(a) || double.IsInfinity(a) || Math.Abs(a) > Math.PI * 2)
-            || factors.Any(s => double.IsNaN(s) || s < .1 || s > 10) || double.IsNaN(minimumScore) || minimumScore < 0 || minimumScore > 1
-            || maximumWork < 1 || maximumWork > 2000000000) throw new ArgumentException("Invalid pose search candidates or budget.");
-        AnglesRadians = Array.AsReadOnly(angles); Scales = Array.AsReadOnly(factors); MinimumScore = minimumScore; MaximumWork = maximumWork;
+        if (new[] { minimumAngleRadians, maximumAngleRadians, minimumScale, maximumScale, minimumScore, angleStepRadians, scaleStep }
+                .Any(v => double.IsNaN(v) || double.IsInfinity(v))
+            || minimumAngleRadians > maximumAngleRadians || maximumAngleRadians - minimumAngleRadians > 2 * Math.PI + 1e-10
+            || minimumScale < .1 || maximumScale > 10 || minimumScale > maximumScale
+            || minimumScore < 0 || minimumScore > 1 || maximumWork < 1 || maximumWork > 2000000000
+            || angleStepRadians <= 0 || angleStepRadians > 2 * Math.PI || scaleStep <= 0 || scaleStep > 10)
+            throw new ArgumentException("搜索区间或预算无效：角度下限不能大于上限、跨度不能超过360°，尺度须为0.1至10，采样步长必须为正数。");
+        MinimumAngleRadians = minimumAngleRadians; MaximumAngleRadians = maximumAngleRadians;
+        MinimumScale = minimumScale; MaximumScale = maximumScale; MinimumScore = minimumScore; MaximumWork = maximumWork;
+        AngleStepRadians = angleStepRadians; ScaleStep = scaleStep;
     }
-    /// <summary>离散角度。</summary>
-    public IReadOnlyList<double> AnglesRadians { get; }
-    /// <summary>离散尺度。</summary>
-    public IReadOnlyList<double> Scales { get; }
+    /// <summary>顺时针角度下限。</summary>
+    public double MinimumAngleRadians { get; }
+    /// <summary>顺时针角度上限。</summary>
+    public double MaximumAngleRadians { get; }
+    /// <summary>尺度下限。</summary>
+    public double MinimumScale { get; }
+    /// <summary>尺度上限。</summary>
+    public double MaximumScale { get; }
+    /// <summary>采样引擎的角度步长。</summary>
+    public double AngleStepRadians { get; }
+    /// <summary>采样引擎的尺度步长。</summary>
+    public double ScaleStep { get; }
+    /// <summary>将搜索区间拆成[-π,π]内的一至两个连续区间，保留跨界范围及整周搜索。</summary>
+    /// <returns>顺时针弧度的起止区间。</returns>
+    public IReadOnlyList<(double Minimum, double Maximum)> AngleIntervals()
+    {
+        double extent = MaximumAngleRadians - MinimumAngleRadians;
+        if (extent >= 2 * Math.PI - 1e-10) return new[] { (-Math.PI, Math.PI) };
+        double start = Math.Atan2(Math.Sin(MinimumAngleRadians), Math.Cos(MinimumAngleRadians)), end = start + extent;
+        return end <= Math.PI + 1e-10 ? new[] { (start, Math.Min(end, Math.PI)) }
+            : new[] { (start, Math.PI), (-Math.PI, end - 2 * Math.PI) };
+    }
     /// <summary>最小分数。</summary>
     public double MinimumScore { get; }
     /// <summary>保守比较工作量上限。</summary>
@@ -124,12 +150,12 @@ public sealed class TemplatePoseResult : IVisionCoordinateResult
     public EAlgorithmStatus Status => EAlgorithmStatus.Completed;
 }
 
-/// <summary>有界离散旋转/尺度模板定位。</summary>
+/// <summary>按角度和尺度区间搜索模板位置。</summary>
 [VisionCapability("location.template-pose", "定位", "旋转尺度模板定位")]
 public interface ITemplatePoseLocator
 {
     /// <summary>借用图像和模板；8位灰度或显式灰度转换的彩色，拒绝Gray16。</summary>
-    /// <param name="frame">图像。</param><param name="template">模板。</param><param name="bounds">搜索矩形。</param><param name="options">候选/分数/预算。</param><param name="token">取消。</param><returns>同帧位姿事实。</returns>
+    /// <param name="frame">图像。</param><param name="template">模板。</param><param name="bounds">搜索矩形。</param><param name="options">搜索区间、分数、预算及采样步长。</param><param name="token">取消。</param><returns>同帧位姿事实。</returns>
     /// <param name="regionMask">候选模板有效采样足迹必须完全包含于此原图掩码。</param>
     TemplatePoseResult Locate(ImageFrame frame, ImageFrame template, PixelBounds bounds, TemplatePoseOptions options, CancellationToken token = default, RegionGeometry? regionMask = null);
 }

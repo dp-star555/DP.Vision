@@ -120,6 +120,8 @@ public sealed class VisionAlgorithmParameter
     public double? Maximum { get; }
     /// <summary>文件资源路径，供编辑器选择文件；存在性由工厂最终验证。</summary>
     public bool IsFilePath { get; }
+    /// <summary>数值按弧度存储；编辑器以度显示和提交，数值范围及默认值仍为弧度。</summary>
+    public bool DisplayRadiansAsDegrees { get; set; }
 }
 
 /// <summary>算法工厂，明确解释设置、依赖和资源身份。</summary>

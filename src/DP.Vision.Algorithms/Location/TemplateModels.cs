@@ -147,6 +147,18 @@ public interface IVisionTemplatePreviewFactory
     Task<VisionAlgorithmResource> PreparePreviewAsync(VisionTemplateBuild build, CancellationToken token = default);
 }
 
+/// <summary>可选的轻量搜索校验；编辑界面在创建原生模型前提示范围或预算问题。</summary>
+public interface IVisionTemplateSearchValidator
+{
+    /// <summary>根据模板几何、制作参数与搜索条件验证，不读取模型或申请原生资源。</summary>
+    /// <param name="definition">已生成模板的参考几何。</param>
+    /// <param name="settings">该模型的制作参数。</param>
+    /// <param name="search">本次图像中的搜索范围。</param>
+    /// <param name="options">本次候选及工作量上限。</param>
+    /// <returns>问题列表；空集合表示轻量检查通过。</returns>
+    IReadOnlyList<string> ValidateSearch(VisionTemplateDefinition definition, IReadOnlyDictionary<string, string> settings, PixelBounds search, TemplatePoseOptions options);
+}
+
 /// <summary>工厂可提供解析后的轻量资源检查；只有显式资源检查时调用。</summary>
 public interface IVisionAlgorithmResourceInspector
 {

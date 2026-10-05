@@ -67,7 +67,12 @@ public sealed class OpenCvTemplateModelBuilder : IVisionTemplateBuilder
     internal static (int Kernel, double MinimumAngle, double MaximumAngle, double MinimumScale, double MaximumScale) Parse(IReadOnlyDictionary<string, string> settings)
     {
         if (settings.Keys.Any(k => !new[] { "blurKernel", "minimumAngle", "maximumAngle", "minimumScale", "maximumScale" }.Contains(k))) throw new ArgumentException("未知的模板制作参数。");
-        double Read(string key, double fallback) => settings.TryGetValue(key, out var text) ? double.Parse(text, CultureInfo.InvariantCulture) : fallback;
+        double Read(string key, double fallback)
+        {
+            if (!settings.TryGetValue(key, out var text)) return fallback;
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)) throw new ArgumentException("模板制作参数不是有效数字：" + key);
+            return value;
+        }
         double kernel = Read("blurKernel", 1), lo = Read("minimumAngle", -Math.PI), hi = Read("maximumAngle", Math.PI), s0 = Read("minimumScale", .1), s1 = Read("maximumScale", 10);
         if (new[] { kernel, lo, hi, s0, s1 }.Any(v => double.IsNaN(v) || double.IsInfinity(v)) || kernel != (int)kernel || kernel < 1 || kernel > 9 || (int)kernel % 2 != 1
             || lo < -Math.PI || hi > Math.PI || lo > hi || s0 < .1 || s1 > 10 || s0 > s1) throw new ArgumentException("制作参数无效：模糊核须为1..9奇数，角度为[-π,π]，尺度为[0.1,10]。");
@@ -76,7 +81,7 @@ public sealed class OpenCvTemplateModelBuilder : IVisionTemplateBuilder
 }
 
 /// <summary>配套制作描述和资源准备；读取时校验实现与格式。</summary>
-public sealed class OpenCvTemplateModelFactory : IVisionAlgorithmFactory, IVisionAlgorithmConfigurationValidator, IVisionTemplateFactoryDescription, IVisionTemplatePreviewFactory, IVisionAlgorithmResourceInspector
+public sealed class OpenCvTemplateModelFactory : IVisionAlgorithmFactory, IVisionAlgorithmConfigurationValidator, IVisionTemplateFactoryDescription, IVisionTemplatePreviewFactory, IVisionAlgorithmResourceInspector, IVisionTemplateSearchValidator
 {
     internal const string Format = "opencv.gray-sqdiff.v1";
     internal const string ModelFile = "variants/opencv-gray/model.bin";
@@ -88,15 +93,22 @@ public sealed class OpenCvTemplateModelFactory : IVisionAlgorithmFactory, IVisio
     /// <inheritdoc/>
     public string BuilderImplementationId => ImplementationId + ".build";
     /// <inheritdoc/>
-    public string MethodDisplayName => _pose ? "灰度平方差（离散旋转尺度）" : "灰度平方差（固定姿态平移）";
+    public string MethodDisplayName => _pose ? "灰度平方差（范围采样）" : "灰度平方差（固定姿态平移）";
     /// <inheritdoc/>
     public Type ContractType => typeof(IPreparedVisionTemplateMatcher);
+    /// <inheritdoc/>
+    public IReadOnlyList<string> ValidateSearch(VisionTemplateDefinition definition, IReadOnlyDictionary<string, string> settings, PixelBounds search, TemplatePoseOptions options)
+    {
+        try { OpenCvTemplateSearch.Check(definition, OpenCvTemplateModelBuilder.Parse(settings), search, options, _pose); return Array.Empty<string>(); }
+        catch (ArgumentException ex) { return new[] { ex.Message }; }
+        catch (InvalidOperationException ex) { return new[] { ex.Message }; }
+    }
     /// <inheritdoc/>
     public IReadOnlyList<VisionAlgorithmParameter> BuildParameters => new[]
     {
         new VisionAlgorithmParameter("blurKernel", "灰度平滑核", typeof(int), "1", "1表示不平滑；仅接受1..9奇数。匹配图像使用同样平滑。", 1, 9),
-        new VisionAlgorithmParameter("minimumAngle", "模型最小角度", typeof(double), (-Math.PI).ToString("R", CultureInfo.InvariantCulture), "顺时针弧度。", -Math.PI, Math.PI),
-        new VisionAlgorithmParameter("maximumAngle", "模型最大角度", typeof(double), Math.PI.ToString("R", CultureInfo.InvariantCulture), "顺时针弧度。", -Math.PI, Math.PI),
+        new VisionAlgorithmParameter("minimumAngle", "模型最小角度", typeof(double), (-Math.PI).ToString("R", CultureInfo.InvariantCulture), "相对制作样图的顺时针旋转下限；修改后需重新生成模型。", -Math.PI, Math.PI) { DisplayRadiansAsDegrees = true },
+        new VisionAlgorithmParameter("maximumAngle", "模型最大角度", typeof(double), Math.PI.ToString("R", CultureInfo.InvariantCulture), "相对制作样图的顺时针旋转上限；运行搜索区间由节点另行设置。", -Math.PI, Math.PI) { DisplayRadiansAsDegrees = true },
         new VisionAlgorithmParameter("minimumScale", "模型最小尺度", typeof(double), "0.1", minimum: .1, maximum: 10),
         new VisionAlgorithmParameter("maximumScale", "模型最大尺度", typeof(double), "10", minimum: .1, maximum: 10)
     };
@@ -177,30 +189,20 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
         if (!searchBounds.Fits(frame.Image) || !CvPixels.Supports(frame.Image)) throw new ArgumentException("匹配范围越界或图像格式不支持。");
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216) throw new ArgumentException("匹配图像超过像素预算。");
         InspectionMask.Validate(region, frame.Image);
-        if (!_pose && (options.AnglesRadians.Count != 1 || options.Scales.Count != 1)) throw new ArgumentException("平移模型只能使用一个固定姿态。");
-        var angles = options.AnglesRadians.Select(a => Math.Atan2(Math.Sin(a), Math.Cos(a))).Distinct().ToArray();
-        long work = 0;
-        foreach (double angle in angles) foreach (double scale in options.Scales)
-        {
-            if (angle < _settings.MinimumAngle - 1e-10 || angle > _settings.MaximumAngle + 1e-10 || scale < _settings.MinimumScale - 1e-10 || scale > _settings.MaximumScale + 1e-10) throw new ArgumentException("搜索角度或尺度超出模型制作范围。");
-            var size = SizeFor(angle, scale);
-            if (size.Width > searchBounds.Width || size.Height > searchBounds.Height) continue;
-            long cost = (long)(searchBounds.Width - size.Width + 1) * (searchBounds.Height - size.Height + 1) * size.Width * size.Height;
-            if (cost > options.MaximumWork - work) throw new InvalidOperationException("模板比较预算超限，请缩小搜索区域或候选数量。"); work += cost;
-        }
+        var (angles, scales) = OpenCvTemplateSearch.Check(_definition, _settings, searchBounds, options, _pose);
         token.ThrowIfCancellationRequested();
-        if (_candidates.Count + options.AnglesRadians.Count * options.Scales.Count > 512) ClearCandidates();
+        if (_candidates.Count + angles.Length * scales.Length > 512) ClearCandidates();
         using var gray = CvPixels.Gray(frame.Image);
         if (_settings.Kernel > 1) Cv2.GaussianBlur(gray, gray, new Size(_settings.Kernel, _settings.Kernel), 0);
         using var search = new Mat(gray, new Rect(searchBounds.X, searchBounds.Y, searchBounds.Width, searchBounds.Height));
         double best = -1; TemplatePoseTransform? transform = null;
-        foreach (double angle in angles) foreach (double scale in options.Scales)
+        foreach (double angle in angles) foreach (double scale in scales)
         {
             token.ThrowIfCancellationRequested(); var size = SizeFor(angle, scale);
             if (size.Width > searchBounds.Width || size.Height > searchBounds.Height) continue;
             if (!_candidates.TryGetValue((angle, scale), out var candidate))
             {
-                if (_candidateBytes + 2L * size.Width * size.Height > 64L * 1024 * 1024) ClearCandidates();
+                if (_candidates.Count >= 512 || _candidateBytes + 2L * size.Width * size.Height > 64L * 1024 * 1024) ClearCandidates();
                 using var matrix = new Mat(2, 3, MatType.CV_64FC1);
                 double a = scale * Math.Cos(angle), b = -scale * Math.Sin(angle);
                 matrix.Set(0, 0, a); matrix.Set(0, 1, b); matrix.Set(0, 2, (size.Width - 1) / 2d - a * (_gray.Cols - 1) / 2d - b * (_gray.Rows - 1) / 2d);
@@ -227,4 +229,50 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
         Math.Max(1, (int)Math.Ceiling(scale * (Math.Abs(Math.Sin(angle)) * _gray.Cols + Math.Abs(Math.Cos(angle)) * _gray.Rows) - 1e-10)));
     private void ClearCandidates() { foreach (var c in _candidates.Values) { c.Image.Dispose(); c.Mask.Dispose(); } _candidates.Clear(); _candidateBytes = 0; }
     public void Dispose() { ClearCandidates(); _gray.Dispose(); _mask.Dispose(); }
+}
+
+internal static class OpenCvTemplateSearch
+{
+    internal static (double[] Angles, double[] Scales) Sample(TemplatePoseOptions options)
+    {
+        var angles = Axis(options.MinimumAngleRadians, options.MaximumAngleRadians, options.AngleStepRadians)
+            .Select(a => Math.Atan2(Math.Sin(a), Math.Cos(a))).Distinct().ToArray();
+        var scales = Axis(options.MinimumScale, options.MaximumScale, options.ScaleStep);
+        if ((long)angles.Length * scales.Length > 4096)
+            throw new ArgumentException("OpenCV范围采样超过4096组，请缩小搜索范围或增大采样步长。");
+        return (angles, scales);
+    }
+    private static double[] Axis(double minimum, double maximum, double step)
+    {
+        double segments = Math.Ceiling((maximum - minimum) / step - 1e-10);
+        if (segments > 4095) throw new ArgumentException("OpenCV单轴采样超过4096项，请缩小搜索范围或增大采样步长。");
+        int count = Math.Max(0, (int)segments);
+        var values = new double[count + 1];
+        for (int i = 0; i < count; i++) values[i] = minimum + i * step;
+        values[count] = maximum;
+        return values;
+    }
+    internal static (double[] Angles, double[] Scales) Check(VisionTemplateDefinition definition,
+        (int Kernel, double MinimumAngle, double MaximumAngle, double MinimumScale, double MaximumScale) settings,
+        PixelBounds bounds, TemplatePoseOptions options, bool pose)
+    {
+        if (!pose && (options.MinimumAngleRadians != options.MaximumAngleRadians || options.MinimumScale != options.MaximumScale)) throw new ArgumentException("平移模型只能使用一个固定姿态，搜索区间的上下限须相同。");
+        foreach (var interval in options.AngleIntervals())
+            if (interval.Minimum < settings.MinimumAngle - 1e-10 || interval.Maximum > settings.MaximumAngle + 1e-10)
+                throw new ArgumentException("搜索角度超出模型制作范围。");
+        if (options.MinimumScale < settings.MinimumScale - 1e-10 || options.MaximumScale > settings.MaximumScale + 1e-10)
+            throw new ArgumentException("搜索尺度超出模型制作范围。");
+        var (angles, scales) = Sample(options);
+        long work = 0;
+        foreach (double angle in angles) foreach (double scale in scales)
+        {
+            int width = Math.Max(1, (int)Math.Ceiling(scale * (Math.Abs(Math.Cos(angle)) * definition.Width + Math.Abs(Math.Sin(angle)) * definition.Height) - 1e-10));
+            int height = Math.Max(1, (int)Math.Ceiling(scale * (Math.Abs(Math.Sin(angle)) * definition.Width + Math.Abs(Math.Cos(angle)) * definition.Height) - 1e-10));
+            if (width > bounds.Width || height > bounds.Height) continue;
+            long cost = (long)(bounds.Width - width + 1) * (bounds.Height - height + 1) * width * height;
+            work = checked(work + cost);
+        }
+        if (work > options.MaximumWork) throw new InvalidOperationException($"模板比较预算超限：预计 {work:N0}，上限 {options.MaximumWork:N0}；搜索 {bounds.Width}×{bounds.Height}，模板 {definition.Width}×{definition.Height}。请缩小搜索ROI、角度/尺度范围或增大采样步长；模型自检可选择制作区域。");
+        return (angles, scales);
+    }
 }

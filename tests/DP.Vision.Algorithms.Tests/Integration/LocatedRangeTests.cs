@@ -25,13 +25,13 @@ public sealed class LocatedRangeTests
         var search = new PixelBounds(0, 0, 40, 30);
         var translation = new OpenCvTemplateLocator().Locate(frame, search, template, new PixelBounds(0, 0, 5, 3), .9999, regionMask: mask);
         Assert.IsTrue(translation.Found); Assert.AreEqual(22, translation.Bounds!.Value.X); Assert.AreEqual(12, translation.Bounds.Value.Y);
-        var pose = new OpenCvTemplatePoseLocator().Locate(frame, template, search, new TemplatePoseOptions(new[] { 0d }, new[] { 1d }, .9999), regionMask: mask);
+        var pose = new OpenCvTemplatePoseLocator().Locate(frame, template, search, new TemplatePoseOptions(0d, 0d, 1d, 1d, .9999), regionMask: mask);
         Assert.IsTrue(pose.Found); Assert.AreEqual(24.5, pose.Transform!.Center.X, 1e-6);
         var empty = new RegionGeometry(Array.Empty<RegionRun>());
         Assert.IsFalse(new OpenCvTemplateLocator().Locate(frame, search, template, new PixelBounds(0, 0, 5, 3), 0, regionMask: empty).Found);
-        Assert.IsFalse(new OpenCvTemplatePoseLocator().Locate(frame, template, search, new TemplatePoseOptions(new[] { 0d }, new[] { 1d }, 0), regionMask: empty).Found);
+        Assert.IsFalse(new OpenCvTemplatePoseLocator().Locate(frame, template, search, new TemplatePoseOptions(0d, 0d, 1d, 1d, 0), regionMask: empty).Found);
         Assert.ThrowsExactly<OperationCanceledException>(() => new OpenCvTemplatePoseLocator().Locate(frame, template, search,
-            new TemplatePoseOptions(new[] { 0d }, new[] { 1d }), new CancellationToken(true), mask));
+            new TemplatePoseOptions(0d, 0d, 1d, 1d), new CancellationToken(true), mask));
     }
 
     /// <summary>父姿态下的平移搜索保留实际旋转轮廓，不把外接框冒充模板。</summary>
