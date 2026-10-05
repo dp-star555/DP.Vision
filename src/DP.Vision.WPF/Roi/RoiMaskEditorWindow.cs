@@ -1,8 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using DP.Vision.UI;
 
 namespace DP.Vision.WPF;
@@ -15,7 +13,7 @@ public sealed class RoiMaskEditorWindow : Window
 {
     private readonly RoiMaskSession _session;
     private readonly VisionCanvasControl _canvas = new VisionCanvasControl();
-    private readonly Dictionary<ERoiTool, ToggleButton> _tools = new Dictionary<ERoiTool, ToggleButton>();
+    private readonly ComboBox _tool = new ComboBox { Width = 150, Margin = new Thickness(4) };
     private readonly ComboBox _purpose = new ComboBox { Width = 70, Margin = new Thickness(4) };
     private readonly Slider _radius = new Slider
     {
@@ -50,28 +48,17 @@ public sealed class RoiMaskEditorWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var tools = Row();
-        foreach (var (tool, text) in RoiMaskSession.Tools)
+        tools.Children.Add(Caption("区域类型"));
+        _tool.ItemsSource = RoiToolChoice.Areas;
+        _tool.SelectionChanged += (_, __) =>
         {
-            var button = new ToggleButton { Content = text, Margin = new Thickness(2), Padding = new Thickness(8, 2, 8, 2) };
-            button.Checked += (_, __) =>
+            if (!_syncing && _tool.SelectedItem is RoiToolChoice choice)
             {
-                if (!_syncing)
-                {
-                    _session.Editor.Tool = tool;
-                }
-            };
-            // 工具是单选：再次点击已选中的工具保持选中。
-            button.Unchecked += (_, __) =>
-            {
-                if (!_syncing)
-                {
-                    Sync();
-                }
-            };
-            _tools.Add(tool, button);
-            tools.Children.Add(button);
-        }
-
+                _session.Editor.Tool = choice.Tool;
+                _canvas.Focus();
+            }
+        };
+        tools.Children.Add(_tool);
         tools.Children.Add(Caption("涂抹用途"));
         _purpose.Items.Add("包含");
         _purpose.Items.Add("排除");
@@ -230,10 +217,10 @@ public sealed class RoiMaskEditorWindow : Window
         try
         {
             var editor = _session.Editor;
-            foreach (var pair in _tools)
-            {
-                pair.Value.IsChecked = pair.Key == editor.Tool;
-            }
+            var choice = RoiToolChoice.Find(RoiToolChoice.Areas, editor.Tool);
+            _tool.SelectedItem = choice;
+            // 笔刷半径与涂抹用途只对画笔/橡皮有意义。
+            _purpose.IsEnabled = _radius.IsEnabled = choice?.IsPaint == true;
 
             _purpose.SelectedIndex = editor.PaintPurpose == ERoiPurpose.Exclude ? 1 : 0;
             _radius.Value = Math.Max(_radius.Minimum, Math.Min(_radius.Maximum, editor.BrushRadius));

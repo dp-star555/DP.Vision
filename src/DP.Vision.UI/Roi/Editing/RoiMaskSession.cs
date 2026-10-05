@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace DP.Vision.UI;
 
@@ -72,20 +71,6 @@ public sealed class RoiMaskSession : IDisposable
             FrameChanged?.Invoke(this, EventArgs.Empty);
         }
     }
-
-    /// <summary>窗口工具栏的工具及显示文字。</summary>
-    internal static IReadOnlyList<(ERoiTool Tool, string Text)> Tools { get; } =
-        new[]
-        {
-            (ERoiTool.Select, "选择"),
-            (ERoiTool.Rectangle, "矩形"),
-            (ERoiTool.RotatedRectangle, "旋转矩形"),
-            (ERoiTool.Circle, "圆"),
-            (ERoiTool.Ellipse, "椭圆"),
-            (ERoiTool.Polygon, "多边形"),
-            (ERoiTool.Brush, "画笔"),
-            (ERoiTool.Eraser, "橡皮"),
-        };
 
     /// <summary>编辑器显示状态变化（含指针预览）。</summary>
     public event EventHandler? Changed;

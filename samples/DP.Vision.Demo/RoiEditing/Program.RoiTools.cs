@@ -10,23 +10,6 @@ namespace DP.Vision.Demo;
 
 internal static partial class Program
 {
-    private static ToolChoice[] Choices()
-    {
-        return new[]
-        {
-            new ToolChoice(ERoiTool.Select, "选择 / 编辑"),
-            new ToolChoice(ERoiTool.Rectangle, "矩形"),
-            new ToolChoice(ERoiTool.RotatedRectangle, "旋转矩形"),
-            new ToolChoice(ERoiTool.Circle, "圆（中心→半径）"),
-            new ToolChoice(ERoiTool.Ellipse, "椭圆"),
-            new ToolChoice(ERoiTool.Polygon, "多边形"),
-            new ToolChoice(ERoiTool.Polyline, "折线 / XLD"),
-            new ToolChoice(ERoiTool.Point, "点"),
-            new ToolChoice(ERoiTool.InsertVertex, "选中轮廓：插入顶点"),
-            new ToolChoice(ERoiTool.DeleteVertex, "选中轮廓：删除顶点"),
-        };
-    }
-
     private static Forms.Control AttachFormsEditor(
         DP.Vision.Winform.VisionCanvasControl canvas,
         Forms.FlowLayoutPanel toolbar,
@@ -35,9 +18,9 @@ internal static partial class Program
     {
         var editor = new RoiEditor();
         canvas.Editor = editor;
-        var choices = Choices();
+        var choices = RoiToolChoice.All;
         var tool = new Forms.ComboBox { DropDownStyle = Forms.ComboBoxStyle.DropDownList, Width = 150 };
-        tool.Items.AddRange(choices);
+        tool.Items.AddRange(choices.ToArray<object>());
         tool.SelectedIndex = 0;
         toolbar.Controls.Add(tool);
         var list = new Forms.ListBox
@@ -61,7 +44,7 @@ internal static partial class Program
             syncing = true;
             try
             {
-                tool.SelectedItem = choices.First(c => c.Tool == editor.Tool);
+                tool.SelectedItem = RoiToolChoice.Find(choices, editor.Tool);
                 list.SelectedItem = editor.Document.Rois.FirstOrDefault(r => r.Id == editor.SelectedId);
                 var selected = list.SelectedItem as RoiDefinition;
                 enabled.Enabled = exclude.Enabled = selected != null;
@@ -94,7 +77,7 @@ internal static partial class Program
         };
         tool.SelectedIndexChanged += (_, __) =>
         {
-            if (!syncing && tool.SelectedItem is ToolChoice choice)
+            if (!syncing && tool.SelectedItem is RoiToolChoice choice)
             {
                 editor.Tool = choice.Tool;
                 canvas.Focus();
@@ -204,7 +187,7 @@ internal static partial class Program
     {
         var editor = new RoiEditor();
         canvas.Editor = editor;
-        var choices = Choices();
+        var choices = RoiToolChoice.All;
         var tool = new Controls.ComboBox
         {
             ItemsSource = choices,
@@ -229,7 +212,7 @@ internal static partial class Program
             syncing = true;
             try
             {
-                tool.SelectedItem = choices.First(c => c.Tool == editor.Tool);
+                tool.SelectedItem = RoiToolChoice.Find(choices, editor.Tool);
                 list.SelectedItem = editor.Document.Rois.FirstOrDefault(r => r.Id == editor.SelectedId);
                 var selected = list.SelectedItem as RoiDefinition;
                 enabled.IsEnabled = exclude.IsEnabled = selected != null;
@@ -262,7 +245,7 @@ internal static partial class Program
         };
         tool.SelectionChanged += (_, __) =>
         {
-            if (!syncing && tool.SelectedItem is ToolChoice choice)
+            if (!syncing && tool.SelectedItem is RoiToolChoice choice)
             {
                 editor.Tool = choice.Tool;
                 canvas.Focus();

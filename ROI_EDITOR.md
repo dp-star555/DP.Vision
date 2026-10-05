@@ -104,6 +104,8 @@ editor.Load(restored); // 完整校验完成后替换；清空旧Undo/Redo历史
 
 弹出窗口`RoiMaskEditorForm.Edit(owner, image, document)`（WinForms）与`RoiMaskEditorWindow.Edit(owner, image, document)`（WPF）在同一画布上提供几何工具、画笔/橡皮、笔刷半径、涂抹用途及上述命令，实时叠加有效区域并显示像素数；确定返回新文档，取消返回null。两者共用`RoiMaskSession`。
 
+工具选择统一用一个“区域类型”下拉框，不再每种区域排一个按钮。下拉项来自`RoiToolChoice`：`All`含全部工具，`Areas`去掉折线和点（只保留能构成面积区域的工具）；`IsPaint`标记画笔/橡皮，窗口据此只在涂抹工具下启用笔刷半径和涂抹用途。宿主（如WorkFlow帧编辑页）可直接绑定同一列表，用`RoiToolChoice.Find(list, editor.Tool)`同步选中项。
+
 ## 帧与编辑的关系
 
 - `PostFrame`仍只保留最新预览。正在编辑时，控件暂缓从邮箱取帧，避免按下/松开对应不同图像；邮箱始终有界，并不是暂停检测算法。

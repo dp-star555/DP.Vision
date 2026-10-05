@@ -302,4 +302,19 @@ public sealed class RoiPaintTests
         Assert.IsTrue(editor.PaintRegion(ERoiPurpose.Include)!.Contains(new PointD(15.5, 10.5)));
         Assert.IsTrue(editor.CanUndo);
     }
+
+    /// <summary>工具下拉列表覆盖每个工具恰好一次；面积列表不含折线和点；画笔/橡皮标记为涂抹工具。</summary>
+    [TestMethod]
+    public void ToolChoicesCoverEveryTool()
+    {
+        CollectionAssert.AreEquivalent(
+            Enum.GetValues(typeof(ERoiTool)).Cast<ERoiTool>().ToList(),
+            RoiToolChoice.All.Select(c => c.Tool).ToList()
+        );
+        Assert.IsNull(RoiToolChoice.Find(RoiToolChoice.Areas, ERoiTool.Polyline));
+        Assert.IsNull(RoiToolChoice.Find(RoiToolChoice.Areas, ERoiTool.Point));
+        Assert.IsTrue(RoiToolChoice.Find(RoiToolChoice.Areas, ERoiTool.Brush)!.IsPaint);
+        Assert.IsFalse(RoiToolChoice.Find(RoiToolChoice.Areas, ERoiTool.Polygon)!.IsPaint);
+        Assert.AreEqual("多边形", RoiToolChoice.Find(RoiToolChoice.All, ERoiTool.Polygon)!.ToString());
+    }
 }
