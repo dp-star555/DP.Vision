@@ -17,6 +17,9 @@ public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
         InspectionMask.Validate(regionMask, frame.Image);
         var info = template.Image.Info;
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216 || (long)info.Width * info.Height > 16777216) throw new ArgumentException("Pose image budget exceeded.");
+        // 模板必须整体落在区域内：搜索矩形收缩到区域外接框，结果不变、比较面积更小。
+        if (RegionMatchMinimum.Narrow(bounds, regionMask) is not { } narrowed) return new TemplatePoseResult(frame.FrameId, template.FrameId, 0, null);
+        bounds = narrowed;
         token.ThrowIfCancellationRequested(); long work = 0;
         var (angles, scales) = OpenCvTemplateSearch.Sample(options);
         // 搜索前验证累计预算，避免运行一部分后返回被截断的“最佳”结果。
@@ -32,6 +35,7 @@ public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
         using var image = CvPixels.Gray(frame.Image); using var original = CvPixels.Gray(template.Image);
         using var search = new Mat(image, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
         using var fullMask = new Mat(info.Height, info.Width, MatType.CV_8UC1, Scalar.All(255));
+        using var window = RegionWindow.Create(regionMask, frame, bounds, token);
         double best = -1; TemplatePoseTransform? transform = null;
         foreach (double angle in angles) foreach (double scale in scales)
         {
@@ -47,7 +51,7 @@ public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
             Cv2.WarpAffine(fullMask, mask, matrix, size, InterpolationFlags.Nearest, BorderTypes.Constant, Scalar.All(0));
             int area = Cv2.CountNonZero(mask); if (area == 0) continue;
             using var scores = new Mat(); Cv2.MatchTemplate(search, warped, scores, TemplateMatchModes.SqDiff, mask);
-            if (!RegionMatchMinimum.Find(scores, regionMask, frame, bounds, size.Width, size.Height, mask, token, out double minimum, out Point location)) continue;
+            if (!RegionMatchMinimum.Find(scores, window, size.Width, size.Height, mask, token, out double minimum, out Point location)) continue;
             if (double.IsNaN(minimum) || double.IsInfinity(minimum)) throw new InvalidOperationException("Non-finite pose score.");
             double score = Math.Max(0, Math.Min(1, 1 - minimum / (65025d * area)));
             if (score > best)

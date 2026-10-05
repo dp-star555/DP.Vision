@@ -29,6 +29,11 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
         if (double.IsNaN(minimumScore) || minimumScore < 0 || minimumScore > 1) throw new ArgumentOutOfRangeException(nameof(minimumScore));
         if (!CvPixels.Supports(frame.Image) || !CvPixels.Supports(template.Image)) throw new NotSupportedException("Explicit Gray16 conversion required.");
         token.ThrowIfCancellationRequested();
+        // 模板必须整体落在区域内：搜索矩形收缩到区域外接框，结果不变、比较面积更小。
+        if (RegionMatchMinimum.Narrow(search, regionMask) is not { } narrowed || narrowed.Width < templateBounds.Width || narrowed.Height < templateBounds.Height)
+            return new TemplateLocationResult(frame.FrameId, template.FrameId, false, 0, null);
+        search = narrowed;
+        using var window = RegionWindow.Create(regionMask, frame, search, token);
         using var image = CvPixels.Gray(frame.Image);
         using var reference = CvPixels.Gray(template.Image);
         using var roi = new Mat(image, CvPixels.Rect(search));
@@ -36,7 +41,7 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
         using var scores = new Mat();
         Cv2.MatchTemplate(roi, pattern, scores, TemplateMatchModes.SqDiff);
         token.ThrowIfCancellationRequested();
-        if (!RegionMatchMinimum.Find(scores, regionMask, frame, search, templateBounds.Width, templateBounds.Height, null, token, out double min, out var location))
+        if (!RegionMatchMinimum.Find(scores, window, templateBounds.Width, templateBounds.Height, null, token, out double min, out var location))
             return new TemplateLocationResult(frame.FrameId, template.FrameId, false, 0, null);
         double score = Math.Max(0, Math.Min(1, 1 - min / (65025d * templateBounds.Width * templateBounds.Height)));
         bool found = score >= minimumScore;

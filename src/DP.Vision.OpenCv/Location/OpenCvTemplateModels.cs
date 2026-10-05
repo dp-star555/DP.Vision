@@ -189,7 +189,12 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
         if (!searchBounds.Fits(frame.Image) || !CvPixels.Supports(frame.Image)) throw new ArgumentException("匹配范围越界或图像格式不支持。");
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216) throw new ArgumentException("匹配图像超过像素预算。");
         InspectionMask.Validate(region, frame.Image);
-        var (angles, scales) = OpenCvTemplateSearch.Check(_definition, _settings, searchBounds, options, _pose);
+        // 模板必须整体落在区域内：先把搜索矩形收缩到区域外接框（工作量预算也按收缩后计算），区域窗口只建一次供所有角度/缩放候选共用。
+        var narrowed = RegionMatchMinimum.Narrow(searchBounds, region);
+        var (angles, scales) = OpenCvTemplateSearch.Check(_definition, _settings, narrowed ?? searchBounds, options, _pose);
+        if (narrowed is not { } effective) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null);
+        searchBounds = effective;
+        using var window = RegionWindow.Create(region, frame, searchBounds, token);
         token.ThrowIfCancellationRequested();
         if (_candidates.Count + angles.Length * scales.Length > 512) ClearCandidates();
         using var gray = CvPixels.Gray(frame.Image);
@@ -215,7 +220,7 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
             }
             int area = Cv2.CountNonZero(candidate.Mask); if (area == 0) continue;
             using var scores = new Mat(); Cv2.MatchTemplate(search, candidate.Image, scores, TemplateMatchModes.SqDiff, candidate.Mask);
-            if (!RegionMatchMinimum.Find(scores, region, frame, searchBounds, size.Width, size.Height, candidate.Mask, token, out var minimum, out var location)) continue;
+            if (!RegionMatchMinimum.Find(scores, window, size.Width, size.Height, candidate.Mask, token, out var minimum, out var location)) continue;
             if (double.IsNaN(minimum) || double.IsInfinity(minimum)) throw new InvalidOperationException("模板匹配分数非有限值。");
             double score = Math.Max(0, Math.Min(1, 1 - minimum / (65025d * area)));
             if (score > best) { best = score; transform = new TemplatePoseTransform(_gray.Cols, _gray.Rows,
