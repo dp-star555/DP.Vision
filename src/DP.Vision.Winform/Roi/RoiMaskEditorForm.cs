@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Linq;
 using System.Drawing;
 using System.Windows.Forms;
 using DP.Vision.UI;
@@ -14,7 +14,7 @@ public sealed class RoiMaskEditorForm : Form
 {
     private readonly RoiMaskSession _session;
     private readonly VisionCanvasControl _canvas = new VisionCanvasControl { Dock = DockStyle.Fill };
-    private readonly Dictionary<ERoiTool, RadioButton> _tools = new Dictionary<ERoiTool, RadioButton>();
+    private readonly ComboBox _tool = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
     private readonly ComboBox _purpose = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 70 };
     private readonly NumericUpDown _radius = new NumericUpDown
     {
@@ -43,26 +43,17 @@ public sealed class RoiMaskEditorForm : Form
         MinimumSize = new Size(640, 420);
 
         var tools = Row();
-        foreach (var (tool, text) in RoiMaskSession.Tools)
+        tools.Controls.Add(Caption("区域类型"));
+        _tool.Items.AddRange(RoiToolChoice.Areas.ToArray<object>());
+        _tool.SelectedIndexChanged += (_, __) =>
         {
-            var button = new RadioButton
+            if (!_syncing && _tool.SelectedItem is RoiToolChoice choice)
             {
-                Text = text,
-                Appearance = Appearance.Button,
-                AutoSize = true,
-                Tag = tool,
-            };
-            button.CheckedChanged += (_, __) =>
-            {
-                if (!_syncing && button.Checked)
-                {
-                    _session.Editor.Tool = tool;
-                }
-            };
-            _tools.Add(tool, button);
-            tools.Controls.Add(button);
-        }
-
+                _session.Editor.Tool = choice.Tool;
+                _canvas.Focus();
+            }
+        };
+        tools.Controls.Add(_tool);
         tools.Controls.Add(Caption("涂抹用途"));
         _purpose.Items.AddRange(new object[] { "包含", "排除" });
         _purpose.SelectedIndexChanged += (_, __) =>
@@ -189,10 +180,10 @@ public sealed class RoiMaskEditorForm : Form
         try
         {
             var editor = _session.Editor;
-            if (_tools.TryGetValue(editor.Tool, out var button) && !button.Checked)
-            {
-                button.Checked = true;
-            }
+            var choice = RoiToolChoice.Find(RoiToolChoice.Areas, editor.Tool);
+            _tool.SelectedItem = choice;
+            // 笔刷半径与涂抹用途只对画笔/橡皮有意义。
+            _purpose.Enabled = _radius.Enabled = choice?.IsPaint == true;
 
             _purpose.SelectedIndex = editor.PaintPurpose == ERoiPurpose.Exclude ? 1 : 0;
             _radius.Value = Math.Max(_radius.Minimum, Math.Min(_radius.Maximum, (decimal)editor.BrushRadius));
