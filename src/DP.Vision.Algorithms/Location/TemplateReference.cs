@@ -37,12 +37,11 @@ public sealed class TemplateReference
 
     /// <summary>把业务坐标定义和本参考绑定：签名随参考变化，下游按旧参考制作的ROI会被拒绝。</summary>
     /// <param name="definition">业务坐标定义。</param>
-    /// <returns>原点约定附加了参考签名的定义。</returns>
+    /// <returns>参考签名为本参考的定义。</returns>
     public VisionCoordinateDefinition Bind(VisionCoordinateDefinition definition)
     {
         if (definition == null) throw new ArgumentNullException(nameof(definition));
-        return new VisionCoordinateDefinition(definition.Id, definition.Name, definition.Version, definition.Unit,
-            definition.OriginDescription + "｜模板参考 " + Signature, definition.AxisDescription);
+        return new VisionCoordinateDefinition(definition.Id, definition.Name, definition.Version, definition.Unit, Signature);
     }
 
     /// <summary>以图像模板的一块矩形为模板时的参考：原点在矩形中心，X轴沿模板X轴，签名来自矩形内像素。</summary>

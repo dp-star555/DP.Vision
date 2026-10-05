@@ -35,7 +35,7 @@ public sealed class GeneralCoordinateSystemTests
         Assert.AreEqual(definition.Signature, new VisionCoordinateDefinition("fixture", "新的显示名称").Signature);
         Assert.AreNotEqual(definition.Signature, new VisionCoordinateDefinition("fixture", "夹具", 2).Signature);
         Assert.AreNotEqual(definition.Signature, new VisionCoordinateDefinition("fixture", "夹具", unit: EVisionCoordinateUnit.Millimeter).Signature);
-        Assert.AreNotEqual(definition.Signature, new VisionCoordinateDefinition("fixture", "夹具", originDescription: "孔中心").Signature);
+        Assert.AreNotEqual(definition.Signature, new VisionCoordinateDefinition("fixture", "夹具", reference: "template:a").Signature);
         var matrix = CoordinateMatrix2D.FromAffine(1, 0, -20, 0, 1, -10);
         var a = new VisionCoordinateSystem(definition, "frame", 50, 50, matrix, "template");
         var b = new VisionCoordinateSystem(definition, "frame", 50, 50, matrix, "lines");
