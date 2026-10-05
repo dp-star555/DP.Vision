@@ -41,10 +41,9 @@ public sealed class TemplateModelResourceTests
             for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) bytes[(y + 4) * 10 + x + 3] = (byte)(20 + (x + 1) * 19 + (y + 1) * 13);
             bytes[5 * 10 + 5] = 255; // 被模板排除的像素不能影响分数。
             using var sceneImage = VisionImage.CopyFrom(new ImageInfo(10, 10, EPixelLayout.Gray8), bytes); using var scene = new ImageFrame("scene", sceneImage);
-            var result = plan.Invoke<IPreparedVisionTemplateMatcher, TemplatePoseResult>("a", m => m.Match(scene, new PixelBounds(0, 0, 10, 10), new TemplatePoseOptions(0d, 0d, 1d, 1d, .999))
-                .InReferenceCoordinates("reference", scene, m.Definition, m.ModelIdentity));
-            Assert.IsTrue(result.Found); Assert.AreEqual(4d, result.CoordinateSystem!.LocalToImage.Tx, 1e-6); Assert.AreEqual(5d, result.CoordinateSystem.LocalToImage.Ty, 1e-6);
-            Assert.AreEqual(0d, result.CoordinateSystem.LocalToImage.M11, 1e-6); Assert.AreEqual(1d, result.CoordinateSystem.LocalToImage.M21, 1e-6);
+            var result = plan.Invoke<IPreparedVisionTemplateMatcher, TemplatePoseResult>("a", m => m.Match(scene, new PixelBounds(0, 0, 10, 10), new TemplatePoseOptions(0d, 0d, 1d, 1d, .999)));
+            Assert.IsTrue(result.Found); Assert.AreEqual(4d, result.ReferenceX, 1e-6); Assert.AreEqual(5d, result.ReferenceY, 1e-6);
+            Assert.AreEqual(0d, result.AngleDegrees, 1e-6); Assert.AreEqual(90d, result.ReferenceAngleDegrees, 1e-6);
             var dataFile = Path.Combine(Path.GetDirectoryName(manifestPath)!, "variants/opencv-gray/model.bin"); File.WriteAllBytes(dataFile, new byte[] { 0 });
             var stillFound = plan.Invoke<IPreparedVisionTemplateMatcher, bool>("a", m => m.Match(scene, new PixelBounds(0, 0, 10, 10), new TemplatePoseOptions(0d, 0d, 1d, 1d, .999)).Found);
             Assert.IsTrue(stillFound);
@@ -105,11 +104,10 @@ public sealed class TemplateModelResourceTests
         var pixels = new byte[8 * 8]; byte[] rotated = { 220, 10, 30, 60, 120, 180 };
         for (int y = 0; y < 3; y++) for (int x = 0; x < 2; x++) pixels[(y + 2) * 8 + x + 3] = rotated[y * 2 + x];
         using var sceneImage = VisionImage.CopyFrom(new ImageInfo(8, 8, EPixelLayout.Gray8), pixels); using var scene = new ImageFrame("scene", sceneImage);
-        var result = matcher.Match(scene, new PixelBounds(0, 0, 8, 8), new TemplatePoseOptions(80 * Math.PI / 180, 100 * Math.PI / 180, 1d, 1d, .999, angleStepRadians: 10 * Math.PI / 180))
-            .InReferenceCoordinates("coordinate", scene, matcher.Definition, matcher.ModelIdentity);
-        Assert.IsTrue(result.Found); Assert.AreEqual(Math.PI / 2, result.Transform!.AngleRadians, 1e-10);
-        Assert.AreEqual(5d, result.CoordinateSystem!.LocalToImage.Tx, 1e-6); Assert.AreEqual(2d, result.CoordinateSystem.LocalToImage.Ty, 1e-6);
-        var back = result.CoordinateSystem.ImageToLocal.Map(result.CoordinateSystem.LocalToImage.Map(new Coordinate2D(.2, .4)));
+        var result = matcher.Match(scene, new PixelBounds(0, 0, 8, 8), new TemplatePoseOptions(80 * Math.PI / 180, 100 * Math.PI / 180, 1d, 1d, .999, angleStepRadians: 10 * Math.PI / 180));
+        Assert.IsTrue(result.Found); Assert.AreEqual(90d, result.AngleDegrees, 1e-8);
+        Assert.AreEqual(5d, result.ReferenceX, 1e-6); Assert.AreEqual(2d, result.ReferenceY, 1e-6);
+        var back = result.ReferenceToImage!.Inverse().Map(result.ReferenceToImage.Map(new Coordinate2D(.2, .4)));
         Assert.AreEqual(.2, back.X, 1e-6); Assert.AreEqual(.4, back.Y, 1e-6);
         var endpoint = matcher.Match(scene, new PixelBounds(0, 0, 8, 8),
             new TemplatePoseOptions(80 * Math.PI / 180, Math.PI / 2, 1, 1, .999, angleStepRadians: 7 * Math.PI / 180));

@@ -9,7 +9,7 @@ namespace DP.Vision.OpenCv;
 public sealed class OpenCvTemplateLocator : ITemplateLocator
 {
     /// <inheritdoc/>
-    public TemplateLocationResult Locate(ImageFrame frame, PixelBounds search, ImageFrame template,
+    public TemplatePoseResult Locate(ImageFrame frame, PixelBounds search, ImageFrame template,
         PixelBounds templateBounds, double minimumScore = .9, CancellationToken token = default, RegionGeometry? regionMask = null, VisionCoordinateSystem? searchCoordinates = null)
     {
         if (frame == null || template == null) throw new ArgumentNullException(nameof(frame));
@@ -19,9 +19,8 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
             searchCoordinates.ValidateFrame(frame);
             if (templateBounds.X != 0 || templateBounds.Y != 0 || templateBounds.Width != template.Image.Info.Width || templateBounds.Height != template.Image.Info.Height)
                 throw new ArgumentException("Located translation search requires the complete template.");
-            var pose = new OpenCvTemplatePoseLocator().Locate(frame, template, search,
+            return new OpenCvTemplatePoseLocator().Locate(frame, template, search,
                 new TemplatePoseOptions(searchCoordinates.RotationRadians, searchCoordinates.RotationRadians, searchCoordinates.SimilarityScale, searchCoordinates.SimilarityScale, minimumScore), token, regionMask);
-            return TemplateLocationResult.FromPose(pose, searchCoordinates);
         }
         if (!search.Fits(frame.Image) || !templateBounds.Fits(template.Image)
             || templateBounds.Width > search.Width || templateBounds.Height > search.Height)
@@ -29,9 +28,10 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
         if (double.IsNaN(minimumScore) || minimumScore < 0 || minimumScore > 1) throw new ArgumentOutOfRangeException(nameof(minimumScore));
         if (!CvPixels.Supports(frame.Image) || !CvPixels.Supports(template.Image)) throw new NotSupportedException("Explicit Gray16 conversion required.");
         token.ThrowIfCancellationRequested();
+        var templateReference = TemplateReference.FromImage(template.Image, templateBounds, token);
         // 模板必须整体落在区域内：搜索矩形收缩到区域外接框，结果不变、比较面积更小。
         if (RegionMatchMinimum.Narrow(search, regionMask) is not { } narrowed || narrowed.Width < templateBounds.Width || narrowed.Height < templateBounds.Height)
-            return new TemplateLocationResult(frame.FrameId, template.FrameId, false, 0, null);
+            return new TemplatePoseResult(frame.FrameId, template.FrameId, 0, null, templateReference);
         search = narrowed;
         using var window = RegionWindow.Create(regionMask, frame, search, token);
         using var image = CvPixels.Gray(frame.Image);
@@ -42,10 +42,10 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
         Cv2.MatchTemplate(roi, pattern, scores, TemplateMatchModes.SqDiff);
         token.ThrowIfCancellationRequested();
         if (!RegionMatchMinimum.Find(scores, window, templateBounds.Width, templateBounds.Height, null, token, out double min, out var location))
-            return new TemplateLocationResult(frame.FrameId, template.FrameId, false, 0, null);
+            return new TemplatePoseResult(frame.FrameId, template.FrameId, 0, null, templateReference);
         double score = Math.Max(0, Math.Min(1, 1 - min / (65025d * templateBounds.Width * templateBounds.Height)));
-        bool found = score >= minimumScore;
-        PixelBounds? bounds = found ? new PixelBounds(search.X + location.X, search.Y + location.Y, templateBounds.Width, templateBounds.Height) : (PixelBounds?)null;
-        return new TemplateLocationResult(frame.FrameId, template.FrameId, found, score, bounds);
+        var transform = score >= minimumScore ? new TemplatePoseTransform(templateBounds.Width, templateBounds.Height,
+            new PointD(search.X + location.X + templateBounds.Width / 2d, search.Y + location.Y + templateBounds.Height / 2d), 0, 1) : null;
+        return new TemplatePoseResult(frame.FrameId, template.FrameId, score, transform, templateReference);
     }
 }

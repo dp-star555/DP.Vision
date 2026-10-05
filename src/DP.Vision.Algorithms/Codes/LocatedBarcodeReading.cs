@@ -11,8 +11,8 @@ public static class LocatedBarcodeReading
     /// <param name="reader">支持精确区域的读码器。</param>
     /// <param name="frame">带身份的当前原图租约。</param>
     /// <param name="coordinates">同一帧成功定位得到的坐标系。</param>
-    /// <param name="include">在模板局部坐标中的包含形状。</param>
-    /// <param name="exclude">在模板局部坐标中的排除形状。</param>
+    /// <param name="include">在局部坐标中的包含形状。</param>
+    /// <param name="exclude">在局部坐标中的排除形状。</param>
     /// <param name="token">协作式取消标记。</param>
     /// <returns>原图坐标的读取证据；空区域返回未取得证据，不回退到整图。</returns>
     public static BarcodeReadResult ReadLocated(

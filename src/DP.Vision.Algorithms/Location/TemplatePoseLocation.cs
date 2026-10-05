@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 
@@ -93,61 +94,95 @@ public sealed class TemplatePoseTransform
     }
 }
 
-/// <summary>单个最佳姿态候选；未找到时Transform为空，不能伪装成零位姿。</summary>
-public sealed class TemplatePoseResult : IVisionCoordinateResult
+/// <summary>
+/// 模板匹配结果：找到的位姿（中心、角度、缩放）和模板参考点在本帧的位置与方向。
+/// 只描述测量值，不产生坐标系；坐标系由下游构建节点用这些数值或整个结果生成。
+/// 角度单位为度，顺时针为正（图像Y轴向下），与搜索区间、参考方向的约定一致。
+/// 未找到时Transform为空，各数值输出为NaN，不能伪装成零位姿。
+/// </summary>
+public sealed class TemplatePoseResult : IVisionGeometryFact
 {
-    /// <summary>创建同帧事实。</summary><param name="frameId">图像身份。</param><param name="templateFrameId">模板身份。</param><param name="score">最佳候选分数。</param><param name="transform">达标变换，未检出为空。</param>
-    public TemplatePoseResult(string frameId, string templateFrameId, double score, TemplatePoseTransform? transform)
+    /// <summary>创建同帧匹配结果。</summary>
+    /// <param name="frameId">图像身份。</param><param name="templateFrameId">模板身份。</param><param name="score">最佳候选分数。</param>
+    /// <param name="transform">达标变换，未检出为空。</param><param name="reference">所用模板的参考。</param>
+    public TemplatePoseResult(string frameId, string templateFrameId, double score, TemplatePoseTransform? transform, TemplateReference reference)
     {
         if (string.IsNullOrWhiteSpace(frameId) || string.IsNullOrWhiteSpace(templateFrameId) || double.IsNaN(score) || score < 0 || score > 1) throw new ArgumentException("Invalid pose evidence.");
         FrameId = frameId; TemplateFrameId = templateFrameId; Score = score; Transform = transform;
+        Reference = reference ?? throw new ArgumentNullException(nameof(reference));
     }
-    /// <summary>可选搜索父坐标系，区别于本节点产生的子坐标系。</summary>
-    public VisionCoordinateSystem? SearchCoordinateSystem { get; private set; }
-    /// <summary>记录同帧搜索来源；结果姿态已是原图坐标，不再次乘父矩阵。</summary>
-    /// <param name="parent">父定位。</param><returns>独立结果。</returns>
-    public TemplatePoseResult WithSearchCoordinates(VisionCoordinateSystem parent)
-    {
-        if (parent == null) throw new ArgumentNullException(nameof(parent));
-        if (parent.FrameId != FrameId) throw new InvalidOperationException("Parent coordinate frame mismatch.");
-        var copy = (TemplatePoseResult)MemberwiseClone(); copy.SearchCoordinateSystem = parent; return copy;
-    }
-    /// <summary>成功定位的共享坐标系；普通算法输出或未检出时为空。</summary>
-    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
-    VisionCoordinateSystem? IVisionCoordinateResult.CoordinateSystem => CoordinateSystem;
-    /// <summary>同帧匹配中心，供几何测量绑定。</summary>
-    public VisionPoint? MeasuredCenter => Transform is { } pose ? new VisionPoint(FrameId, pose.Center, CoordinateSystem) : null;
-    /// <summary>为资源模型定位附加与模型像素无关的参考定义。</summary>
-    public TemplatePoseResult InReferenceCoordinates(string id, ImageFrame frame, VisionTemplateDefinition definition, string identity)
-    {
-        if (FrameId != frame.FrameId || TemplateFrameId != identity) throw new InvalidOperationException("模型定位结果身份不一致。");
-        var copy = (TemplatePoseResult)MemberwiseClone();
-        copy.CoordinateSystem = Transform == null ? null : definition.Locate(id, frame, Transform, identity);
-        return copy;
-    }
-    /// <summary>为成功定位附加稳定模板定义；不修改原结果。</summary>
-    /// <param name="definitionId">持久化定义ID。</param><param name="frame">当前图像。</param><param name="template">本次模板。</param><param name="token">取消。</param><returns>独立结果。</returns>
-    public TemplatePoseResult InCoordinateSystem(string definitionId, ImageFrame frame, ImageFrame template, CancellationToken token = default)
-    {
-        if (frame == null || template == null) throw new ArgumentNullException(nameof(frame));
-        if (FrameId != frame.FrameId || TemplateFrameId != template.FrameId) throw new InvalidOperationException("Pose frame identity mismatch.");
-        if (Transform == null) return new TemplatePoseResult(FrameId, TemplateFrameId, Score, null);
-        if (Transform.TemplateWidth != template.Image.Info.Width || Transform.TemplateHeight != template.Image.Info.Height) throw new InvalidOperationException("Template dimensions mismatch.");
-        return new TemplatePoseResult(FrameId, TemplateFrameId, Score, Transform) { CoordinateSystem = new LocatedCoordinateSystem(definitionId,
-            LocatedCoordinateSystem.ComputeTemplateSignature(template.Image, token), FrameId, frame.Image.Info.Width, frame.Image.Info.Height, Transform) };
-    }
-    /// <summary>图像身份。</summary>
-    public string FrameId { get; }
-    /// <summary>模板身份。</summary>
-    public string TemplateFrameId { get; }
-    /// <summary>最佳候选分数，不是概率。</summary>
-    public double Score { get; }
     /// <summary>是否达到最小分数。</summary>
     public bool Found => Transform != null;
-    /// <summary>达标候选的精确坐标变换。</summary>
-    public TemplatePoseTransform? Transform { get; }
+    /// <summary>最佳候选分数，由引擎定义，不是概率。</summary>
+    public double Score { get; }
+    /// <summary>匹配中心X，原图像素。</summary>
+    public double CenterX => Transform?.Center.X ?? double.NaN;
+    /// <summary>匹配中心Y，原图像素。</summary>
+    public double CenterY => Transform?.Center.Y ?? double.NaN;
+    /// <summary>相对模板样图的旋转角度，度，顺时针为正，范围(-180,180]。</summary>
+    public double AngleDegrees => Transform is { } pose ? Degrees(pose.AngleRadians) : double.NaN;
+    /// <summary>相对模板样图的缩放。</summary>
+    public double Scale => Transform?.Scale ?? double.NaN;
+    /// <summary>模板参考原点在本帧的X，原图像素。</summary>
+    public double ReferenceX => ReferenceToImage?.Tx ?? double.NaN;
+    /// <summary>模板参考原点在本帧的Y，原图像素。</summary>
+    public double ReferenceY => ReferenceToImage?.Ty ?? double.NaN;
+    /// <summary>模板参考X轴在本帧的方向，度，顺时针为正，范围(-180,180]。</summary>
+    public double ReferenceAngleDegrees => Transform is { } pose ? Degrees(pose.AngleRadians + Reference.AxisAngleRadians) : double.NaN;
+    /// <inheritdoc/>
+    public string Summary => Transform is { } pose
+        ? FormattableString.Invariant($"找到 · 分数 {Score:F4} · 中心 ({pose.Center.X:F2}, {pose.Center.Y:F2}) · 角度 {AngleDegrees:F2}° · 缩放 {pose.Scale:F4} · 参考点 ({ReferenceX:F2}, {ReferenceY:F2}) 方向 {ReferenceAngleDegrees:F2}°")
+        : FormattableString.Invariant($"未找到 · 最佳分数 {Score:F4}");
+
+    /// <summary>图像身份。</summary>
+    [Browsable(false)] public string FrameId { get; }
+    /// <summary>模板身份。</summary>
+    [Browsable(false)] public string TemplateFrameId { get; }
+    /// <summary>达标候选的模板到原图变换。</summary>
+    [Browsable(false)] public TemplatePoseTransform? Transform { get; }
+    /// <summary>所用模板的参考。</summary>
+    [Browsable(false)] public TemplateReference Reference { get; }
+    /// <summary>匹配中心视觉点，供几何测量绑定。</summary>
+    [Browsable(false)] public VisionPoint? CenterPoint => Transform is { } pose ? new VisionPoint(FrameId, pose.Center) : null;
+    /// <summary>模板参考原点视觉点，供双点等构建方式绑定。</summary>
+    [Browsable(false)] public VisionPoint? ReferencePoint => ReferenceToImage is { } m ? new VisionPoint(FrameId, new PointD(m.Tx, m.Ty)) : null;
+    /// <summary>参考坐标（原点在参考点、X轴沿参考方向、单位为模板像素）到原图的映射；未找到为空。</summary>
+    [Browsable(false)]
+    public CoordinateMatrix2D? ReferenceToImage
+    {
+        get
+        {
+            if (Transform is not { } pose) return null;
+            var origin = pose.ToImage(new Coordinate2D(Reference.OriginX, Reference.OriginY));
+            return VisionCoordinateBuilder.PoseMatrix(new PointD(origin.X, origin.Y), pose.AngleRadians + Reference.AxisAngleRadians, pose.Scale);
+        }
+    }
+    /// <summary>实际匹配轮廓，原图坐标；未找到为空。</summary>
+    [Browsable(false)]
+    public Geometry? MatchGeometry => Transform is { } p ? new RectangleGeometry(p.Center, p.TemplateWidth * p.Scale, p.TemplateHeight * p.Scale, p.AngleRadians) : null;
+    /// <inheritdoc/>
+    [Browsable(false)]
+    public IReadOnlyList<Geometry> DisplayGeometry
+    {
+        get
+        {
+            if (Transform is not { } pose || ReferenceToImage is not { } m) return Array.Empty<Geometry>();
+            var origin = new PointD(m.Tx, m.Ty);
+            double length = Math.Max(8, Math.Min(pose.TemplateWidth, pose.TemplateHeight) * pose.Scale / 3);
+            PointD Axis(double x, double y) { double norm = Math.Sqrt(x * x + y * y); return new PointD(origin.X + length * x / norm, origin.Y + length * y / norm); }
+            return Array.AsReadOnly(new Geometry[] { MatchGeometry!, new EllipseGeometry(origin, 2, 2),
+                new ContourGeometry(new[] { origin, Axis(m.M11, m.M21) }, false, false),
+                new ContourGeometry(new[] { origin, Axis(m.M12, m.M22) }, false, false) });
+        }
+    }
     /// <summary>正常空检出也完成。</summary>
-    public EAlgorithmStatus Status => EAlgorithmStatus.Completed;
+    [Browsable(false)] public EAlgorithmStatus Status => EAlgorithmStatus.Completed;
+
+    private static double Degrees(double radians)
+    {
+        double degrees = Math.IEEERemainder(radians * 180 / Math.PI, 360);
+        return degrees <= -180 ? degrees + 360 : degrees;
+    }
 }
 
 /// <summary>按角度和尺度区间搜索模板位置。</summary>
@@ -155,7 +190,7 @@ public sealed class TemplatePoseResult : IVisionCoordinateResult
 public interface ITemplatePoseLocator
 {
     /// <summary>借用图像和模板；8位灰度或显式灰度转换的彩色，拒绝Gray16。</summary>
-    /// <param name="frame">图像。</param><param name="template">模板。</param><param name="bounds">搜索矩形。</param><param name="options">搜索区间、分数、预算及采样步长。</param><param name="token">取消。</param><returns>同帧位姿事实。</returns>
+    /// <param name="frame">图像。</param><param name="template">模板。</param><param name="bounds">搜索矩形。</param><param name="options">搜索区间、分数、预算及采样步长。</param><param name="token">取消。</param><returns>同帧位姿事实；模板参考取整张模板中心。</returns>
     /// <param name="regionMask">候选模板有效采样足迹必须完全包含于此原图掩码。</param>
     TemplatePoseResult Locate(ImageFrame frame, ImageFrame template, PixelBounds bounds, TemplatePoseOptions options, CancellationToken token = default, RegionGeometry? regionMask = null);
 }

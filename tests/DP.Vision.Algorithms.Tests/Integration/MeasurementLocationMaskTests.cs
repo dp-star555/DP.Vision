@@ -49,11 +49,12 @@ public sealed class MeasurementLocationMaskTests
         using var frame = new ImageFrame("image", image); using var reference = new ImageFrame("template", pattern);
         var locator = new OpenCvTemplateLocator();
         var result = locator.Locate(frame, new PixelBounds(3, 2, 16, 16), reference, new PixelBounds(0, 0, 5, 5), .999);
-        Assert.IsTrue(result.Found); Assert.AreEqual(8, result.Bounds!.Value.X); Assert.AreEqual(7, result.Bounds.Value.Y);
+        Assert.IsTrue(result.Found); Assert.AreEqual(10.5, result.CenterX); Assert.AreEqual(9.5, result.CenterY);
+        Assert.AreEqual(0, result.AngleDegrees); Assert.AreEqual(1, result.Scale); Assert.AreEqual(result.CenterX, result.ReferenceX);
         using var blankImage = VisionImage.CopyFrom(new ImageInfo(20, 20, EPixelLayout.Gray8), new byte[400]);
         using var blank = new ImageFrame("blank", blankImage);
         var empty = locator.Locate(blank, new PixelBounds(0, 0, 20, 20), reference, new PixelBounds(0, 0, 5, 5), .99);
-        Assert.IsFalse(empty.Found); Assert.IsNull(empty.Bounds); Assert.AreEqual(EAlgorithmStatus.Completed, empty.Status);
+        Assert.IsFalse(empty.Found); Assert.IsNull(empty.Transform); Assert.IsTrue(double.IsNaN(empty.CenterX)); Assert.AreEqual(EAlgorithmStatus.Completed, empty.Status);
         Assert.ThrowsExactly<OperationCanceledException>(() => locator.Locate(frame, new PixelBounds(0, 0, 20, 20), reference,
             new PixelBounds(0, 0, 5, 5), token: new CancellationToken(true)));
     }
