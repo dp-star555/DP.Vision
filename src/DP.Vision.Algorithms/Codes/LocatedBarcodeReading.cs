@@ -18,7 +18,7 @@ public static class LocatedBarcodeReading
     public static BarcodeReadResult ReadLocated(
         this IMaskedBarcodeReader reader,
         ImageFrame frame,
-        LocatedCoordinateSystem coordinates,
+        VisionCoordinateSystem coordinates,
         IEnumerable<Geometry> include,
         IEnumerable<Geometry> exclude,
         CancellationToken token = default)

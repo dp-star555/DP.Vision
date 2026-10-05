@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <TargetFramework>netstandard2.0</TargetFramework>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+        <GenerateDependencyFile>true</GenerateDependencyFile>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../DP.Vision.Algorithms/DP.Vision.Algorithms.csproj" />

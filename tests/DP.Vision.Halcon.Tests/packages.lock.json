@@ -203,6 +203,9 @@
         "resolved": "4.5.0",
         "contentHash": "okurQJO6NRE/apDIP23ajJ0hpiNmJ+f0BwOlB/cSqTLQlw5upkf+5+96+iG2Jw40G1fCVCyPz/FhIABUjMR+RQ=="
       },
+      "dp.plugins.runtime": {
+        "type": "Project"
+      },
       "dp.vision": {
         "type": "Project"
       },
@@ -216,6 +219,7 @@
       "dp.vision.acquisition.runtime": {
         "type": "Project",
         "dependencies": {
+          "DP.Plugins.Runtime": "[0.1.0-preview.2, )",
           "DP.Vision.Acquisition.Abstractions": "[0.1.0-preview.2, )",
           "System.Text.Json": "[8.0.5, )"
         }
@@ -224,6 +228,13 @@
         "type": "Project",
         "dependencies": {
           "DP.Vision": "[0.1.0-preview.2, )"
+        }
+      },
+      "dp.vision.algorithms.runtime": {
+        "type": "Project",
+        "dependencies": {
+          "DP.Plugins.Runtime": "[0.1.0-preview.2, )",
+          "DP.Vision.Algorithms": "[0.1.0-preview.2, )"
         }
       },
       "dp.vision.halcon": {
@@ -375,6 +386,9 @@
         "resolved": "8.0.5",
         "contentHash": "0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg=="
       },
+      "dp.plugins.runtime": {
+        "type": "Project"
+      },
       "dp.vision": {
         "type": "Project"
       },
@@ -388,6 +402,7 @@
       "dp.vision.acquisition.runtime": {
         "type": "Project",
         "dependencies": {
+          "DP.Plugins.Runtime": "[0.1.0-preview.2, )",
           "DP.Vision.Acquisition.Abstractions": "[0.1.0-preview.2, )",
           "System.Text.Json": "[8.0.5, )"
         }
@@ -396,6 +411,13 @@
         "type": "Project",
         "dependencies": {
           "DP.Vision": "[0.1.0-preview.2, )"
+        }
+      },
+      "dp.vision.algorithms.runtime": {
+        "type": "Project",
+        "dependencies": {
+          "DP.Plugins.Runtime": "[0.1.0-preview.2, )",
+          "DP.Vision.Algorithms": "[0.1.0-preview.2, )"
         }
       },
       "dp.vision.halcon": {

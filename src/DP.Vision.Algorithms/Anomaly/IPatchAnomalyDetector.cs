@@ -7,6 +7,7 @@ namespace DP.Vision.Algorithms;
 /// 仅用良品训练的局部块异常检测（PatchCore式）：把良品图的局部块存入记忆库，
 /// 检测时每个块到最近良品块的距离即异常得分。块与位置无关，可变内容（序列号等）只要笔画形态在良品中出现过即可。
 /// </summary>
+[VisionCapability("anomaly.patch", "异常检测", "块异常检测")]
 public interface IPatchAnomalyDetector
 {
     /// <summary>用良品图训练模型并按留一法（或增强）标定阈值。</summary>

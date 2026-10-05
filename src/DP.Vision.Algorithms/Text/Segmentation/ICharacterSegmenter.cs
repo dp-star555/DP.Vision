@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>可替换的物理字符提取接口；借用输入，返回结果的所有权交给调用方。</summary>
+[VisionCapability("text.segment", "文字", "字符分割")]
 public interface ICharacterSegmenter
 {
     /// <summary>使用字符身份提示，但不强制把图像切成提示数量；支持协作式取消。</summary>

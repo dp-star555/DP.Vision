@@ -48,6 +48,7 @@ public sealed class ImagePreprocessingOptions
 }
 
 /// <summary>不改变尺寸/坐标系的显式像素操作。</summary>
+[VisionCapability("image.preprocess", "预处理", "图像预处理")]
 public interface IImagePreprocessor
 {
     /// <summary>借用输入，返回调用者拥有的新像素源；包装帧时必须产生新FrameId。</summary>

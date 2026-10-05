@@ -18,9 +18,9 @@ public sealed class RegionAnalysisResult
         FrameId = frameId; Width = width; Height = height;
     }
     /// <summary>可选定位来源；Region始终是当前图像栅格，不伪造局部栅格。</summary>
-    public LocatedCoordinateSystem? CoordinateSystem { get; private set; }
+    public VisionCoordinateSystem? CoordinateSystem { get; private set; }
     /// <summary>附加同帧同尺寸定位来源。</summary><param name="system">定位。</param><returns>独立结果。</returns>
-    public RegionAnalysisResult InCoordinates(LocatedCoordinateSystem system)
+    public RegionAnalysisResult InCoordinates(VisionCoordinateSystem system)
     {
         if (system == null) throw new ArgumentNullException(nameof(system));
         if (system.FrameId != FrameId || system.ImageWidth != Width || system.ImageHeight != Height) throw new InvalidOperationException("Result coordinate frame mismatch.");
@@ -83,6 +83,7 @@ public enum ERegionKernel
 }
 
 /// <summary>中立阈值和精确Region处理。</summary>
+[VisionCapability("region.process", "区域", "区域处理")]
 public interface IRegionProcessor
 {
     /// <summary>8位灰度闭区间分割；彩色显式按标准灰度转换，Gray16拒绝隐式降位深。</summary>

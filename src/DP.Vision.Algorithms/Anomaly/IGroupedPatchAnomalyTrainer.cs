@@ -7,6 +7,7 @@ namespace DP.Vision.Algorithms;
 /// 按来源分组标定阈值的局部块异常训练：留一法每次排除同一来源（例如同一张标签图、同一次印刷）的全部样本。
 /// 同一来源的重复样本几乎一样，按单个样本留一时它仍被自己的“孪生”样本解释，阈值会被压得过紧。
 /// </summary>
+[VisionCapability("anomaly.patch-grouped-training", "异常检测", "分组良品训练")]
 public interface IGroupedPatchAnomalyTrainer
 {
     /// <summary>用良品训练模型，阈值按来源留一标定；来源少于2个时按单个样本留一（与普通训练相同）。</summary>

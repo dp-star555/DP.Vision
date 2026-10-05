@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../DP.Vision.Algorithms/DP.Vision.Algorithms.csproj" />

@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/DP.Vision.Halcon/DP.Vision.Halcon.csproj" />
     <ProjectReference Include="../../src/DP.Vision.Acquisition.Runtime/DP.Vision.Acquisition.Runtime.csproj" />
+    <ProjectReference Include="../../src/DP.Vision.Algorithms.Runtime/DP.Vision.Algorithms.Runtime.csproj" />
     <PackageReference Include="MSTest.TestFramework" Version="4.1.0" />
     <PackageReference Include="MSTest.TestAdapter" Version="4.1.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />

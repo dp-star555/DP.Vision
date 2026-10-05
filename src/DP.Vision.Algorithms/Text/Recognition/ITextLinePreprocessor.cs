@@ -5,6 +5,7 @@ namespace DP.Vision.Algorithms;
 using PixelRect = DP.Vision.Algorithms.PixelBounds;
 
 /// <summary>任务级预处理接口，与具体原生视觉库无关。</summary>
+[VisionCapability("text.preprocess", "文字", "文字识别预处理")]
 public interface ITextLinePreprocessor
 {
     /// <summary>预处理明确选定的水平单行，不执行文本检测，也不注入预期文本。</summary>

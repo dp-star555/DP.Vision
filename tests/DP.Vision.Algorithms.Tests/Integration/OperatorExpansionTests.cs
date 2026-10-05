@@ -161,14 +161,22 @@ public sealed class OperatorExpansionTests
         }
         using var source = VisionImage.CopyFrom(new ImageInfo(32, 32, EPixelLayout.Gray8), image); using var frame = new ImageFrame("scene", source);
         var locator = new OpenCvTemplatePoseLocator();
-        var result = locator.Locate(frame, template, new PixelBounds(0, 0, 32, 32), new TemplatePoseOptions(new[] { 0d, Math.PI / 2, Math.PI / 4 }, new[] { 1d, 2d }, .999));
+        var result = locator.Locate(frame, template, new PixelBounds(0, 0, 32, 32), new TemplatePoseOptions(0, Math.PI / 2, 1, 2, .999, angleStepRadians: Math.PI / 4, scaleStep: 1));
         Assert.IsTrue(result.Found); Assert.AreEqual(angle, result.Transform!.AngleRadians, 1e-10); Assert.AreEqual(scale, result.Transform.Scale, 1e-10);
         Assert.AreEqual(expected.Center.X, result.Transform.Center.X, 1e-10); Assert.AreEqual(expected.Center.Y, result.Transform.Center.Y, 1e-10);
+        if (angle == Math.PI / 2)
+        {
+            var endpoint = locator.Locate(frame, template, new PixelBounds(0, 0, 32, 32),
+                new TemplatePoseOptions(0, Math.PI / 2, 1, 2, .999, angleStepRadians: Math.PI / 3, scaleStep: .6));
+            Assert.IsTrue(endpoint.Found, "非整步长的角度/尺度上限也必须参与搜索。");
+            Assert.AreEqual(angle, endpoint.Transform!.AngleRadians, 1e-10);
+            Assert.AreEqual(scale, endpoint.Transform.Scale, 1e-10);
+        }
         var point = new Coordinate2D(1.25, .75); var restored = result.Transform.ToTemplate(result.Transform.ToImage(point));
         Assert.AreEqual(point.X, restored.X, 1e-10); Assert.AreEqual(point.Y, restored.Y, 1e-10);
         Assert.ThrowsExactly<InvalidOperationException>(() => locator.Locate(frame, template, new PixelBounds(0, 0, 32, 32),
-            new TemplatePoseOptions(new[] { 0d }, new[] { 1d }, maximumWork: 1)));
-        var absent = locator.Locate(frame, template, new PixelBounds(0, 0, 6, 6), new TemplatePoseOptions(new[] { 0d }, new[] { 1d }, .999));
+            new TemplatePoseOptions(0d, 0d, 1d, 1d, maximumWork: 1)));
+        var absent = locator.Locate(frame, template, new PixelBounds(0, 0, 6, 6), new TemplatePoseOptions(0d, 0d, 1d, 1d, .999));
         Assert.IsFalse(absent.Found); Assert.IsNull(absent.Transform);
     }
 

@@ -3,6 +3,7 @@
         <TargetFramework>netstandard2.0</TargetFramework>
     </PropertyGroup>
     <ItemGroup>
+        <ProjectReference Include="../DP.Plugins.Runtime/DP.Plugins.Runtime.csproj" />
         <ProjectReference Include="../DP.Vision.Acquisition.Abstractions/DP.Vision.Acquisition.Abstractions.csproj" />
     </ItemGroup>
     <ItemGroup>

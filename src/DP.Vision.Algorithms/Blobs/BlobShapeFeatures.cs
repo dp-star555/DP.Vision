@@ -72,6 +72,7 @@ public sealed class BlobSelectionOptions
 }
 
 /// <summary>Blob事实选择能力。</summary>
+[VisionCapability("pixel.blob-select", "像素处理", "连通域筛选")]
 public interface IBlobSelector
 {
     /// <summary>选择已有事实，保持输入顺序和FrameId，空选集正常完成。</summary>

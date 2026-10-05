@@ -5,7 +5,7 @@ using OpenCvSharp;
 
 namespace DP.Vision.OpenCv;
 
-/// <summary>旋转/尺度候选的有效模板掩码SqDiff搜索；不把旋转后的空白角当模板证据。</summary>
+/// <summary>按角度/尺度区间采样，执行有效模板掩码SqDiff搜索。</summary>
 public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
 {
     /// <inheritdoc/>
@@ -18,21 +18,22 @@ public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
         var info = template.Image.Info;
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216 || (long)info.Width * info.Height > 16777216) throw new ArgumentException("Pose image budget exceeded.");
         token.ThrowIfCancellationRequested(); long work = 0;
+        var (angles, scales) = OpenCvTemplateSearch.Sample(options);
         // 搜索前验证累计预算，避免运行一部分后返回被截断的“最佳”结果。
-        foreach (double angle in options.AnglesRadians) foreach (double scale in options.Scales)
+        foreach (double angle in angles) foreach (double scale in scales)
         {
             var size = RotatedSize(info.Width, info.Height, angle, scale);
             if (size.Width > bounds.Width || size.Height > bounds.Height) continue;
             long positions = (long)(bounds.Width - size.Width + 1) * (bounds.Height - size.Height + 1);
             long cost = positions * size.Width * size.Height;
-            if (cost > options.MaximumWork - work) throw new InvalidOperationException("Pose comparison budget exceeded; narrow the ROI or candidates.");
+            if (cost > options.MaximumWork - work) throw new InvalidOperationException("模板比较预算超限，请缩小搜索ROI、角度/尺度范围或增大采样步长。");
             work += cost;
         }
         using var image = CvPixels.Gray(frame.Image); using var original = CvPixels.Gray(template.Image);
         using var search = new Mat(image, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
         using var fullMask = new Mat(info.Height, info.Width, MatType.CV_8UC1, Scalar.All(255));
         double best = -1; TemplatePoseTransform? transform = null;
-        foreach (double angle in options.AnglesRadians) foreach (double scale in options.Scales)
+        foreach (double angle in angles) foreach (double scale in scales)
         {
             token.ThrowIfCancellationRequested();
             var size = RotatedSize(info.Width, info.Height, angle, scale);

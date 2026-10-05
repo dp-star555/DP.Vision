@@ -3,6 +3,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>支持在原图上用精确像素区域限制读码的可选能力；不要求调用方先将斜ROI重采样。</summary>
+[VisionCapability("code.read.masked", "读码", "掩码读码特征")]
 public interface IMaskedBarcodeReader : IBarcodeReader
 {
     /// <summary>在搜索矩形和原图掩膜的交集中读取；掩膜外像素不参与解码。具体实现须声明是否支持掩膜模式下的修复预处理。</summary>

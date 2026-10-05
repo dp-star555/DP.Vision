@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 namespace DP.Vision.Algorithms;
 
 /// <summary>文件解码能力，与相机采集和文件夹游标分离。</summary>
+[VisionCapability("image.read", "采集", "图像文件读取")]
 public interface IImageFileReader
 {
     /// <summary>读取并解码单张图像，不自动降位深或更换后端。</summary>
