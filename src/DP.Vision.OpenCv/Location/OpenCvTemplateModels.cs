@@ -152,13 +152,14 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
     private readonly Mat _gray, _mask;
     private readonly bool _pose;
     private readonly VisionTemplateDefinition _definition;
+    private readonly TemplateReference _reference;
     private readonly (int Kernel, double MinimumAngle, double MaximumAngle, double MinimumScale, double MaximumScale) _settings;
     private readonly Dictionary<(double Angle, double Scale), (Mat Image, Mat Mask)> _candidates = new Dictionary<(double, double), (Mat, Mat)>();
     private long _candidateBytes;
     internal OpenCvPreparedTemplateMatcher(VisionTemplateSnapshot snapshot, ModelData data, bool pose)
     {
         _definition = VisionTemplateStore.CopyDefinition(snapshot.Manifest.Definition); ModelIdentity = snapshot.Identity; _pose = pose;
-        _settings = data.Settings;
+        _reference = _definition.Reference(); _settings = data.Settings;
         _gray = new Mat(_definition.Height, _definition.Width, MatType.CV_8UC1);
         try { _mask = new Mat(_definition.Height, _definition.Width, MatType.CV_8UC1); }
         catch { _gray.Dispose(); throw; }
@@ -192,7 +193,7 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
         // 模板必须整体落在区域内：先把搜索矩形收缩到区域外接框（工作量预算也按收缩后计算），区域窗口只建一次供所有角度/缩放候选共用。
         var narrowed = RegionMatchMinimum.Narrow(searchBounds, region);
         var (angles, scales) = OpenCvTemplateSearch.Check(_definition, _settings, narrowed ?? searchBounds, options, _pose);
-        if (narrowed is not { } effective) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null);
+        if (narrowed is not { } effective) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null, _reference);
         searchBounds = effective;
         using var window = RegionWindow.Create(region, frame, searchBounds, token);
         token.ThrowIfCancellationRequested();
@@ -227,7 +228,7 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
                 new PointD(searchBounds.X + location.X + size.Width / 2d, searchBounds.Y + location.Y + size.Height / 2d), angle, scale); }
         }
         token.ThrowIfCancellationRequested();
-        return new TemplatePoseResult(frame.FrameId, ModelIdentity, Math.Max(0, best), best >= options.MinimumScore ? transform : null);
+        return new TemplatePoseResult(frame.FrameId, ModelIdentity, Math.Max(0, best), best >= options.MinimumScore ? transform : null, _reference);
     }
     private Size SizeFor(double angle, double scale) => new Size(
         Math.Max(1, (int)Math.Ceiling(scale * (Math.Abs(Math.Cos(angle)) * _gray.Cols + Math.Abs(Math.Sin(angle)) * _gray.Rows) - 1e-10)),

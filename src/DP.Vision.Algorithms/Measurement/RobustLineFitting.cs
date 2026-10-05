@@ -22,7 +22,7 @@ public sealed class RobustLineResult
     public LocatedPoint? LocatedA => CoordinateSystem?.Locate(A);
     /// <summary>B端的双坐标。</summary>
     public LocatedPoint? LocatedB => CoordinateSystem?.Locate(B);
-    /// <summary>模板局部像素单位RMS；未绑定时为空。</summary>
+    /// <summary>局部坐标单位RMS；未绑定时为空。</summary>
     public double? LocalRmsError => CoordinateSystem is null || !CoordinateSystem.IsSimilarity ? (double?)null : RmsError / CoordinateSystem.SimilarityScale;
     /// <summary>附加同帧坐标表达。</summary><param name="system">定位。</param><returns>独立结果。</returns>
     public RobustLineResult InCoordinates(VisionCoordinateSystem system)

@@ -34,7 +34,7 @@ public sealed class VisionPoint : IVisionGeometryFact
     {
         ValidatePosition(position);
         if (!Enum.IsDefined(typeof(EVisionCoordinateSpace), space)) throw new ArgumentException("坐标空间无效。");
-        if (space == EVisionCoordinateSpace.TemplateLocal)
+        if (space == EVisionCoordinateSpace.Local)
         {
             if (coordinates == null) throw new InvalidOperationException("局部点必须明确绑定成功定位。");
             var image = coordinates.LocalToImage.Map(new Coordinate2D(position.X, position.Y));
@@ -50,7 +50,7 @@ public sealed class VisionPoint : IVisionGeometryFact
     public PointD Position(EVisionCoordinateSpace space)
     {
         if (space == EVisionCoordinateSpace.Image) return ImagePosition;
-        if (space != EVisionCoordinateSpace.TemplateLocal) throw new ArgumentException("坐标空间无效。");
+        if (space != EVisionCoordinateSpace.Local) throw new ArgumentException("坐标空间无效。");
         var local = LocalPosition ?? throw new InvalidOperationException("此点没有局部坐标来源。");
         return new PointD(local.X, local.Y);
     }

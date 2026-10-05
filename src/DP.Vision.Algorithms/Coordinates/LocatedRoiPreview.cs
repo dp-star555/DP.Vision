@@ -23,19 +23,16 @@ public sealed class LocatedRoiPreview : IDisposable
     /// <summary>在局部坐标中裁取轴对齐矩形，用最近邻采样生成展示副本；不替代原图检测证据。</summary>
     /// <param name="frame">原图及其帧身份。</param>
     /// <param name="coordinates">同帧的局部到原图定位坐标系。</param>
-    /// <param name="localBounds">局部整数像素边界矩形。</param>
+    /// <param name="localBounds">局部整数边界矩形，单位为局部坐标单位，每单位采样一个预览像素。</param>
     /// <param name="token">协作式取消。</param>
     /// <returns>调用方负责释放的摆正图像。</returns>
-    public static LocatedRoiPreview Create(ImageFrame frame, LocatedCoordinateSystem coordinates,
+    public static LocatedRoiPreview Create(ImageFrame frame, VisionCoordinateSystem coordinates,
         PixelBounds localBounds, CancellationToken token = default)
     {
         if (frame == null) throw new ArgumentNullException(nameof(frame));
         if (coordinates == null) throw new ArgumentNullException(nameof(coordinates));
-        coordinates.Validate(frame, coordinates.CoordinateSystemId, coordinates.TemplateSignature);
-        if (localBounds.X < 0 || localBounds.Y < 0 || localBounds.Width < 1 || localBounds.Height < 1
-            || (long)localBounds.X + localBounds.Width > coordinates.Pose.TemplateWidth
-            || (long)localBounds.Y + localBounds.Height > coordinates.Pose.TemplateHeight)
-            throw new ArgumentOutOfRangeException(nameof(localBounds));
+        coordinates.ValidateFrame(frame);
+        if (localBounds.Width < 1 || localBounds.Height < 1) throw new ArgumentOutOfRangeException(nameof(localBounds));
         var matrix = coordinates.LocalToImage;
         var origin = matrix.Map(new Coordinate2D(localBounds.X, localBounds.Y));
         var previewToImage = CoordinateMatrix2D.FromAffine(matrix.M11, matrix.M12, origin.X,

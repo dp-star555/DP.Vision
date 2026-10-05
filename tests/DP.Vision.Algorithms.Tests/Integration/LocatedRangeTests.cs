@@ -24,7 +24,7 @@ public sealed class LocatedRangeTests
         var mask = InspectionMask.Compose(image, Array.Empty<Geometry>(), new Geometry[] { new RectangleGeometry(new PointD(2.5, 2.5), 1, 1) });
         var search = new PixelBounds(0, 0, 40, 30);
         var translation = new OpenCvTemplateLocator().Locate(frame, search, template, new PixelBounds(0, 0, 5, 3), .9999, regionMask: mask);
-        Assert.IsTrue(translation.Found); Assert.AreEqual(22, translation.Bounds!.Value.X); Assert.AreEqual(12, translation.Bounds.Value.Y);
+        Assert.IsTrue(translation.Found); Assert.AreEqual(24.5, translation.CenterX); Assert.AreEqual(13.5, translation.CenterY);
         var pose = new OpenCvTemplatePoseLocator().Locate(frame, template, search, new TemplatePoseOptions(0d, 0d, 1d, 1d, .9999), regionMask: mask);
         Assert.IsTrue(pose.Found); Assert.AreEqual(24.5, pose.Transform!.Center.X, 1e-6);
         var empty = new RegionGeometry(Array.Empty<RegionRun>());
@@ -43,14 +43,15 @@ public sealed class LocatedRangeTests
         using var image = VisionImage.CopyFrom(new ImageInfo(40, 30, EPixelLayout.Gray8), pixels);
         using var templateImage = VisionImage.CopyFrom(new ImageInfo(5, 3, EPixelLayout.Gray8), Pattern);
         using var frame = new ImageFrame("scene", image); using var template = new ImageFrame("template", templateImage);
-        var parent = new LocatedCoordinateSystem("parent", "signature", frame.FrameId, 40, 30, new TemplatePoseTransform(20, 20, new PointD(20, 15), Math.PI / 2, 1));
+        var parent = TestCoordinates.FromPose("parent", frame.FrameId, 40, 30, new TemplatePoseTransform(20, 20, new PointD(20, 15), Math.PI / 2, 1));
         var region = InspectionMask.Compose(image, new Geometry[] { new RectangleGeometry(new PointD(28.5, 12.5), 3, 5) }, Array.Empty<Geometry>());
         var result = new OpenCvTemplateLocator().Locate(frame, new PixelBounds(0, 0, 40, 30), template, new PixelBounds(0, 0, 5, 3), .9999,
             regionMask: region, searchCoordinates: parent);
         Assert.IsTrue(result.Found); Assert.AreEqual(Math.PI / 2, result.Transform!.AngleRadians, 1e-8);
         var geometry = (RectangleGeometry)result.MatchGeometry!;
-        Assert.AreEqual(5d, geometry.Width); Assert.AreEqual(3d, geometry.Height); Assert.AreEqual(3, result.Bounds!.Value.Width);
-        Assert.AreEqual(7.5, result.LocatedCenter!.LocalPosition.X, 1e-8); Assert.AreEqual(1.5, result.LocatedCenter.LocalPosition.Y, 1e-8);
+        Assert.AreEqual(5d, geometry.Width); Assert.AreEqual(3d, geometry.Height);
+        var local = parent.ImageToLocal.Map(new Coordinate2D(result.CenterX, result.CenterY));
+        Assert.AreEqual(7.5, local.X, 1e-8); Assert.AreEqual(1.5, local.Y, 1e-8);
     }
 
     /// <summary>部分圆弧来自真实圆边缘，输出原图和局部半径。</summary>
@@ -63,7 +64,7 @@ public sealed class LocatedRangeTests
         using var image = VisionImage.CopyFrom(new ImageInfo(64, 64, EPixelLayout.Gray8), pixels);
         using var frame = new ImageFrame("circle", image);
         var mask = InspectionMask.Compose(image, Array.Empty<Geometry>(), new Geometry[] { new RectangleGeometry(new PointD(15, 32), 30, 64) });
-        var system = new LocatedCoordinateSystem("parent", "signature", frame.FrameId, 64, 64, new TemplatePoseTransform(20, 20, new PointD(32, 32), .7, 1.5));
+        var system = TestCoordinates.FromPose("parent", frame.FrameId, 64, 64, new TemplatePoseTransform(20, 20, new PointD(32, 32), .7, 1.5));
         var result = new OpenCvEdgeMeasurer().Measure(frame, new PixelBounds(0, 0, 64, 64), new EdgeMeasurementOptions(EEdgeModel.Circle), regionMask: mask).InCoordinates(system);
         Assert.AreEqual(32, result.A.X, .7); Assert.AreEqual(32, result.A.Y, .7); Assert.AreEqual(12, result.Radius, .7);
         Assert.AreEqual(result.Radius / 1.5, result.LocalRadius!.Value, 1e-10);
@@ -81,7 +82,7 @@ public sealed class LocatedRangeTests
         var mask = InspectionMask.Compose(image, new Geometry[] { include }, new Geometry[] { new RectangleGeometry(new PointD(32, 32), 30, 4) });
         var measured = new OpenCvEdgeMeasurer().Measure(frame, new PixelBounds(0, 0, 64, 64), new EdgeMeasurementOptions(EEdgeModel.Line), regionMask: mask);
         Assert.AreEqual(31.5, measured.A.X, 1e-8); Assert.AreEqual(31.5, measured.B.X, 1e-8); Assert.IsTrue(measured.PointCount < 30);
-        var parent = new LocatedCoordinateSystem("parent", "signature", frame.FrameId, 64, 64, new TemplatePoseTransform(64, 64, new PointD(32, 32), .5, 2));
+        var parent = TestCoordinates.FromPose("parent", frame.FrameId, 64, 64, new TemplatePoseTransform(64, 64, new PointD(32, 32), .5, 2));
         var located = measured.InCoordinates(parent); Assert.AreEqual(measured.A.X, located.LocatedA!.ImagePosition.X);
         using var blankImage = VisionImage.CopyFrom(new ImageInfo(64, 64, EPixelLayout.Gray8), new byte[4096]);
         using var blank = new ImageFrame("blank", blankImage);

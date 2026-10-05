@@ -71,7 +71,7 @@ public sealed class GeometryMeasurer : IGeometryMeasurer
         if (a.FrameId != b.FrameId) throw new InvalidOperationException("禁止混合不同帧的几何事实。");
         if (!VisionPoint.SameCoordinates(a.CoordinateSystem, b.CoordinateSystem))
             throw new InvalidOperationException("几何事实的坐标来源不同，请先显式转换。");
-        if (space == EVisionCoordinateSpace.TemplateLocal && a.CoordinateSystem == null)
+        if (space == EVisionCoordinateSpace.Local && a.CoordinateSystem == null)
             throw new InvalidOperationException("局部距离必须有共同的定位坐标系。");
     }
     private static GeometricDistanceResult Result(PointD a, PointD b, VisionPoint source, EVisionCoordinateSpace space, EVisionLineDistanceMode mode,

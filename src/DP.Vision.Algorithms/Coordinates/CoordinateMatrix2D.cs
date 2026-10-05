@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Threading;
 
 namespace DP.Vision.Algorithms;
 
@@ -91,69 +88,15 @@ public sealed class CoordinateMatrix2D
 public sealed class LocatedPoint
 {
     internal LocatedPoint(VisionCoordinateSystem system, PointD image)
-    { FrameId = system.FrameId; CoordinateSystemId = system.CoordinateSystemId; TemplateSignature = (system as LocatedCoordinateSystem)?.TemplateSignature ?? ""; ImagePosition = new Coordinate2D(image.X, image.Y); LocalPosition = system.ImageToLocal.Map(ImagePosition); Definition = system.Definition; }
+    { FrameId = system.FrameId; CoordinateSystemId = system.CoordinateSystemId; ImagePosition = new Coordinate2D(image.X, image.Y); LocalPosition = system.ImageToLocal.Map(ImagePosition); Definition = system.Definition; }
     /// <summary>通用业务定义与单位。</summary>
     public VisionCoordinateDefinition Definition { get; }
     /// <summary>图像内容身份。</summary>
     public string FrameId { get; }
     /// <summary>业务坐标定义身份。</summary>
     public string CoordinateSystemId { get; }
-    /// <summary>模板兼容来源的内容签名；通用来源为空。</summary>
-    public string TemplateSignature { get; }
     /// <summary>当前原图像素边界坐标。</summary>
     public Coordinate2D ImagePosition { get; }
     /// <summary>业务局部坐标，单位由Definition决定。</summary>
     public Coordinate2D LocalPosition { get; }
-}
-
-/// <summary>一次成功定位产生的不可变坐标系；只描述本帧，不保存上一帧回退状态。</summary>
-public sealed class LocatedCoordinateSystem : VisionCoordinateSystem
-{
-    /// <summary>模板定位兼容来源；通用业务坐标请使用VisionCoordinateBuilder。</summary>
-    /// <param name="coordinateSystemId">模板定义。</param><param name="templateSignature">模型签名。</param><param name="frameId">本帧。</param>
-    /// <param name="imageWidth">宽。</param><param name="imageHeight">高。</param><param name="pose">定位姿态。</param>
-    public LocatedCoordinateSystem(string coordinateSystemId, string templateSignature, string frameId, int imageWidth, int imageHeight, TemplatePoseTransform pose)
-        : base(new VisionCoordinateDefinition(coordinateSystemId, coordinateSystemId, 1, EVisionCoordinateUnit.TemplatePixel,
-            "template:" + RequireSignature(templateSignature), "模板X右/Y下"), frameId, imageWidth, imageHeight, PoseMatrix(pose), "template:" + templateSignature)
-    {
-        if (pose.Scale < .1 || pose.Scale > 10 || pose.Center.X < 0 || pose.Center.Y < 0 || pose.Center.X > imageWidth || pose.Center.Y > imageHeight)
-            throw new ArgumentException("Located template pose is outside supported bounds.");
-        TemplateSignature = templateSignature; Pose = pose;
-    }
-    private static string RequireSignature(string value) => !string.IsNullOrWhiteSpace(value) ? value : throw new ArgumentException("Template signature is required.");
-    private static CoordinateMatrix2D PoseMatrix(TemplatePoseTransform pose)
-    {
-        if (pose == null) throw new ArgumentNullException(nameof(pose));
-        var origin = pose.ToImage(new Coordinate2D(0, 0));
-        double a = pose.Scale * Math.Cos(pose.AngleRadians), b = pose.Scale * Math.Sin(pose.AngleRadians);
-        return CoordinateMatrix2D.FromAffine(a, -b, origin.X, b, a, origin.Y);
-    }
-    /// <summary>模板定位证据签名，仅供兼容绑定及来源校验。</summary>
-    public string TemplateSignature { get; }
-    /// <summary>原始模板姿态证据。</summary>
-    public TemplatePoseTransform Pose { get; }
-    /// <summary>兼容旧模板定义和模型签名校验。</summary>
-    /// <param name="frame">本帧。</param><param name="expectedId">定义。</param><param name="expectedSignature">模型签名。</param>
-    public void Validate(ImageFrame frame, string expectedId, string expectedSignature)
-    {
-        ValidateFrame(frame);
-        if (CoordinateSystemId != expectedId || TemplateSignature != expectedSignature)
-            throw new InvalidOperationException("Coordinate definition or template content differs from the authored ROI.");
-    }
-    /// <summary>计算模板布局/像素签名，不绑定读取产生的临时FrameId；最大64MiB。</summary>
-    /// <param name="image">借用模板。</param><param name="token">取消。</param><returns>SHA256大写十六进制。</returns>
-    public static string ComputeTemplateSignature(IImageSource image, CancellationToken token = default)
-    {
-        if (image == null) throw new ArgumentNullException(nameof(image));
-        if (image.Info.ByteLength > 64 * 1024 * 1024) throw new ArgumentException("Template signature budget exceeded.");
-        using var hash = SHA256.Create(); using var header = new MemoryStream();
-        using (var writer = new BinaryWriter(header, System.Text.Encoding.UTF8, true))
-        { writer.Write(image.Info.Width); writer.Write(image.Info.Height); writer.Write((int)image.Info.Layout); }
-        var bytes = header.ToArray(); hash.TransformBlock(bytes, 0, bytes.Length, bytes, 0);
-        var row = new byte[image.Info.Stride];
-        for (int y = 0; y < image.Info.Height; y++)
-        { token.ThrowIfCancellationRequested(); image.CopyTo(y * row.Length, row, 0, row.Length); hash.TransformBlock(row, 0, row.Length, row, 0); }
-        hash.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-        return BitConverter.ToString(hash.Hash!).Replace("-", "");
-    }
 }

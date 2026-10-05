@@ -61,9 +61,9 @@ public sealed class RegionTemplateSearchTests
                 if (at == null) { Assert.AreEqual(0, result.Score, "trial " + trial); continue; }
                 double expected = Math.Max(0, Math.Min(1, 1 - best / (65025d * 63)));
                 Assert.AreEqual(expected, result.Score, 1e-6, "trial " + trial); // 全图与裁剪窗口的SqDiff浮点噪声不同，位置必须相同。
-                Assert.IsNotNull(result.Bounds, "trial " + trial);
-                Assert.AreEqual(at.Value.X, result.Bounds!.Value.X, "trial " + trial);
-                Assert.AreEqual(at.Value.Y, result.Bounds.Value.Y, "trial " + trial);
+                Assert.IsTrue(result.Found, "trial " + trial);
+                Assert.AreEqual(at.Value.X + 4.5, result.CenterX, "trial " + trial);
+                Assert.AreEqual(at.Value.Y + 3.5, result.CenterY, "trial " + trial);
             }
         }
     }
@@ -93,7 +93,7 @@ public sealed class RegionTemplateSearchTests
             var both = Rects(120, 60, (0, 0, 40, 60), (70, 10, 40, 40));
             var found = locator.Locate(frame, new PixelBounds(0, 0, 120, 60), frame, template, .99, regionMask: both);
             Assert.IsTrue(found.Found);
-            Assert.AreEqual(80, found.Bounds!.Value.X);
+            Assert.AreEqual(86, found.CenterX);
 
             // 目标(80..92)跨过两块之间的空隙(30..86)：区域外的像素让该位置不合法。
             var split = Rects(120, 60, (0, 0, 86, 60), (90, 0, 30, 60));

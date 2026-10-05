@@ -55,19 +55,9 @@ public sealed class VisionTemplateDefinition
           writer.Write(OriginX); writer.Write(OriginY); writer.Write(AxisAngleRadians); }
         return VisionTemplateStore.Hash(stream.ToArray());
     }
-    /// <summary>创建节点使用的稳定参考定义，沿用节点身份。</summary>
-    public VisionCoordinateDefinition CoordinateDefinition(string id) => new VisionCoordinateDefinition(id, "模板参考", ReferenceVersion,
-        EVisionCoordinateUnit.ReferencePixel, "template-reference:" + ReferenceIdentity + ":" + GeometrySignature(), "X按参考方向，Y顺时针90度");
-    /// <summary>将引擎的裁剪模板姿态转换为共同的参考到原图坐标。</summary>
-    public VisionCoordinateSystem Locate(string id, ImageFrame frame, TemplatePoseTransform pose, string evidence)
-    {
-        Validate();
-        if (pose.TemplateWidth != Width || pose.TemplateHeight != Height) throw new InvalidOperationException("模型定位尺寸与模板定义不一致。");
-        var origin = pose.ToImage(new Coordinate2D(OriginX - X, OriginY - Y));
-        double angle = pose.AngleRadians + AxisAngleRadians, a = pose.Scale * Math.Cos(angle), b = pose.Scale * Math.Sin(angle);
-        return new VisionCoordinateSystem(CoordinateDefinition(id), frame.FrameId, frame.Image.Info.Width, frame.Image.Info.Height,
-            CoordinateMatrix2D.FromAffine(a, -b, origin.X, b, a, origin.Y), evidence);
-    }
+    /// <summary>匹配结果使用的参考：原点换算到裁剪模板坐标；签名包含参考身份、版本和几何，不含模型像素。</summary>
+    public TemplateReference Reference() => new TemplateReference(OriginX - X, OriginY - Y, AxisAngleRadians,
+        "template:" + ReferenceIdentity + ":v" + ReferenceVersion + ":" + GeometrySignature());
 }
 
 /// <summary>引擎输出的文件；文件名必须是资源目录内的相对路径。</summary>
@@ -174,6 +164,6 @@ public interface IPreparedVisionTemplateMatcher
     VisionTemplateDefinition Definition { get; }
     /// <summary>本模型内容身份。</summary>
     string ModelIdentity { get; }
-    /// <summary>使用准备好的模型搜索，输出裁剪模板到原图姿态。</summary>
+    /// <summary>使用准备好的模型搜索，输出裁剪模板到原图姿态；结果参考取<see cref="VisionTemplateDefinition.Reference"/>。</summary>
     TemplatePoseResult Match(ImageFrame frame, PixelBounds search, TemplatePoseOptions options, RegionGeometry? region = null, CancellationToken token = default);
 }

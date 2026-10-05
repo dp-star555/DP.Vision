@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -18,18 +17,18 @@ public sealed class GeometryMeasurementTests
     public void DistancesRespectCoordinateSpaceAndPose(double angle, double scale)
     {
         var system = System("part", angle, scale);
-        VisionPoint P(double x, double y) => VisionPoint.Create("frame", new PointD(x, y), EVisionCoordinateSpace.TemplateLocal, system);
+        VisionPoint P(double x, double y) => VisionPoint.Create("frame", new PointD(x, y), EVisionCoordinateSpace.Local, system);
         var algorithm = new GeometryMeasurer();
         var line = algorithm.GenerateLine(P(0, 0), P(10, 0)); var point = P(12, 3);
-        var local = algorithm.PointToLine(point, line, EVisionCoordinateSpace.TemplateLocal);
-        Assert.AreEqual(3, local.Distance, 1e-9); Assert.AreEqual("template-px", local.Unit);
+        var local = algorithm.PointToLine(point, line, EVisionCoordinateSpace.Local);
+        Assert.AreEqual(3, local.Distance, 1e-9); Assert.AreEqual("reference-px", local.Unit);
         Assert.AreEqual(12, local.B.LocalPosition!.Value.X, 1e-9); Assert.AreEqual(0, local.B.LocalPosition.Value.Y, 1e-9);
         Assert.AreEqual(3 * scale, algorithm.PointToLine(point, line).Distance, 1e-9);
-        Assert.AreEqual(Math.Sqrt(13), algorithm.PointToLine(point, line, EVisionCoordinateSpace.TemplateLocal, EVisionLineDistanceMode.Segments).Distance, 1e-9);
+        Assert.AreEqual(Math.Sqrt(13), algorithm.PointToLine(point, line, EVisionCoordinateSpace.Local, EVisionLineDistanceMode.Segments).Distance, 1e-9);
         var parallel = algorithm.GenerateLine(P(2, 5), P(12, 5));
-        Assert.AreEqual(5, algorithm.LineToLine(line, parallel, EVisionCoordinateSpace.TemplateLocal).Distance, 1e-9);
+        Assert.AreEqual(5, algorithm.LineToLine(line, parallel, EVisionCoordinateSpace.Local).Distance, 1e-9);
         Assert.AreEqual(5 * scale, algorithm.LineToLine(line, parallel).Distance, 1e-9);
-        Assert.AreEqual(5, algorithm.PointToPoint(P(0, 0), P(3, 4), EVisionCoordinateSpace.TemplateLocal).Distance, 1e-9);
+        Assert.AreEqual(5, algorithm.PointToPoint(P(0, 0), P(3, 4), EVisionCoordinateSpace.Local).Distance, 1e-9);
         Assert.AreEqual("frame", local.FrameId); Assert.AreSame(system, local.CoordinateSystem);
         Assert.AreEqual(EVisionDistanceKind.PointToLine, local.Kind);
     }
@@ -60,11 +59,11 @@ public sealed class GeometryMeasurementTests
         Assert.ThrowsExactly<ArgumentException>(() => algorithm.GenerateLine(a, a));
         Assert.ThrowsExactly<InvalidOperationException>(() => algorithm.GenerateLine(a, new VisionPoint("other", new PointD(10, 0))));
         Assert.ThrowsExactly<InvalidOperationException>(() => algorithm.PointToLine(new VisionPoint("other", new PointD(3, 4)), line));
-        Assert.ThrowsExactly<InvalidOperationException>(() => algorithm.PointToLine(a, line, EVisionCoordinateSpace.TemplateLocal));
+        Assert.ThrowsExactly<InvalidOperationException>(() => algorithm.PointToLine(a, line, EVisionCoordinateSpace.Local));
         var systemA = System("A"); var systemB = System("B");
         var located = line.InCoordinates(systemA); var point = a.InCoordinates(systemB);
         Assert.ThrowsExactly<InvalidOperationException>(() => algorithm.PointToLine(point, located));
-        var changed = new LocatedCoordinateSystem("A", "signature", "frame", 100, 100, new TemplatePoseTransform(20, 16, new PointD(51, 50), 0, 1));
+        var changed = TestCoordinates.FromPose("A", "frame", 100, 100, new TemplatePoseTransform(20, 16, new PointD(51, 50), 0, 1));
         Assert.ThrowsExactly<InvalidOperationException>(() => algorithm.GenerateLine(located.A, b.InCoordinates(changed)));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new VisionPoint("frame", new PointD(double.NaN, 0)));
         Assert.ThrowsExactly<OperationCanceledException>(() => algorithm.GenerateLine(a, b, new CancellationToken(true)));
@@ -74,7 +73,7 @@ public sealed class GeometryMeasurementTests
     public void ExplicitConversionPreservesImageAndOriginalEvidence()
     {
         var a = System("A", .3, 2); var b = System("B", -.6, .7);
-        var original = VisionPoint.Create("frame", new PointD(3, 4), EVisionCoordinateSpace.TemplateLocal, a);
+        var original = VisionPoint.Create("frame", new PointD(3, 4), EVisionCoordinateSpace.Local, a);
         var changed = original.InCoordinates(b);
         Assert.AreEqual(original.ImagePosition, changed.ImagePosition);
         Assert.AreSame(a, original.CoordinateSystem); Assert.AreSame(b, changed.CoordinateSystem);
@@ -88,29 +87,6 @@ public sealed class GeometryMeasurementTests
         var circle = new EdgeMeasurementResult("frame", EEdgeModel.Circle, new PointD(20, 20), new PointD(22, 20), 2, 0, 6);
         Assert.IsNull(circle.MeasuredLine);
     }
-    /// <summary>平移定位也能创建独立于父搜索坐标系的下游坐标系。</summary>
-    [TestMethod]
-    public void TranslationMatchingPublishesOwnCoordinateSystemAndRejectsWrongFrames()
-    {
-        using var image = VisionImage.CopyFrom(new ImageInfo(64, 64, EPixelLayout.Gray8), new byte[4096]);
-        using var frame = new ImageFrame("current", image);
-        using var patch = VisionImage.CopyFrom(new ImageInfo(4, 3, EPixelLayout.Gray8), Enumerable.Range(0, 12).Select(x => (byte)x).ToArray());
-        using var template = new ImageFrame("template", patch);
-        var result = new TemplateLocationResult(frame.FrameId, template.FrameId, true, 1, new PixelBounds(10, 20, 4, 3))
-            .InCoordinateSystem("part", frame, template);
-        var origin = result.CoordinateSystem!.LocalToImage.Map(new Coordinate2D(0, 0));
-        Assert.AreEqual(10, origin.X, 1e-12); Assert.AreEqual(20, origin.Y, 1e-12);
-        Assert.AreEqual("part", result.CoordinateSystem.CoordinateSystemId); Assert.IsNotNull(result.MeasuredCenter);
-        var empty = new TemplateLocationResult(frame.FrameId, template.FrameId, false, 0, null).InCoordinateSystem("part", frame, template);
-        Assert.IsNull(empty.CoordinateSystem); Assert.IsNull(empty.MeasuredCenter);
-        Assert.ThrowsExactly<InvalidOperationException>(() => new TemplateLocationResult("other", template.FrameId, true, 1, new PixelBounds(10, 20, 4, 3)).InCoordinateSystem("part", frame, template));
-        var parent = new LocatedCoordinateSystem("parent", "signature", frame.FrameId, 64, 64, new TemplatePoseTransform(4, 3, new PointD(20, 30), .5, 2));
-        var child = TemplateLocationResult.FromPose(new TemplatePoseResult(frame.FrameId, template.FrameId, 1, parent.Pose), parent).InCoordinateSystem("child", frame, template);
-        Assert.AreSame(parent, child.SearchCoordinateSystem);
-        Assert.AreEqual("child", child.CoordinateSystem!.CoordinateSystemId);
-        Assert.AreEqual(parent.Pose.Center, child.Transform!.Center);
-        Assert.AreEqual(parent.Pose.AngleRadians, child.Transform.AngleRadians, 1e-12);
-    }
-    private static LocatedCoordinateSystem System(string id, double angle = 0, double scale = 1) =>
-        new LocatedCoordinateSystem(id, "signature", "frame", 100, 100, new TemplatePoseTransform(20, 16, new PointD(50, 50), angle, scale));
+    private static VisionCoordinateSystem System(string id, double angle = 0, double scale = 1) =>
+        TestCoordinates.FromPose(id, "frame", 100, 100, new TemplatePoseTransform(20, 16, new PointD(50, 50), angle, scale));
 }

@@ -17,8 +17,9 @@ public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
         InspectionMask.Validate(regionMask, frame.Image);
         var info = template.Image.Info;
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216 || (long)info.Width * info.Height > 16777216) throw new ArgumentException("Pose image budget exceeded.");
+        var reference = TemplateReference.FromImage(template.Image, new PixelBounds(0, 0, info.Width, info.Height), token);
         // 模板必须整体落在区域内：搜索矩形收缩到区域外接框，结果不变、比较面积更小。
-        if (RegionMatchMinimum.Narrow(bounds, regionMask) is not { } narrowed) return new TemplatePoseResult(frame.FrameId, template.FrameId, 0, null);
+        if (RegionMatchMinimum.Narrow(bounds, regionMask) is not { } narrowed) return new TemplatePoseResult(frame.FrameId, template.FrameId, 0, null, reference);
         bounds = narrowed;
         token.ThrowIfCancellationRequested(); long work = 0;
         var (angles, scales) = OpenCvTemplateSearch.Sample(options);
@@ -62,7 +63,7 @@ public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
             }
         }
         token.ThrowIfCancellationRequested();
-        return new TemplatePoseResult(frame.FrameId, template.FrameId, Math.Max(0, best), best >= options.MinimumScore ? transform : null);
+        return new TemplatePoseResult(frame.FrameId, template.FrameId, Math.Max(0, best), best >= options.MinimumScore ? transform : null, reference);
     }
 
     private static Size RotatedSize(int width, int height, double angle, double scale) => new Size(

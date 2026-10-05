@@ -160,6 +160,7 @@ internal static class HalconTemplateNative
 internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMatcher
 {
     private readonly VisionTemplateDefinition _definition;
+    private readonly TemplateReference _reference;
     private readonly HalconTemplateSettings _settings;
     private readonly byte[] _mask;
     private readonly HShapeModel? _shape;
@@ -167,7 +168,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
     private bool _disposed;
     internal HalconPreparedTemplateMatcher(VisionTemplateSnapshot snapshot, bool shape, CancellationToken token)
     {
-        _definition = VisionTemplateStore.CopyDefinition(snapshot.Manifest.Definition); _definition.Validate();
+        _definition = VisionTemplateStore.CopyDefinition(snapshot.Manifest.Definition); _definition.Validate(); _reference = _definition.Reference();
         _settings = HalconTemplateSettings.Parse(snapshot.Manifest.BuildSettings, shape); ModelIdentity = snapshot.Identity;
         using var mask = VisionTemplateSource.Decode(snapshot.Read("source/mask.bin"));
         if (mask.Info.Layout != EPixelLayout.Gray8 || mask.Info.Width != _definition.SourceWidth || mask.Info.Height != _definition.SourceHeight) throw new InvalidDataException("HALCON模板掩码尺寸不一致。");
@@ -191,7 +192,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
         _settings.ValidateSearch(options, _shape != null); InspectionMask.Validate(region, frame.Image);
         var allowed = new RegionGeometry(Enumerable.Range(search.Y, search.Height).Select(y => new RegionRun(y, search.X, search.X + search.Width)));
         if (region != null) allowed = allowed.Intersect(region, token);
-        if (allowed.AreaPixels == 0) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null);
+        if (allowed.AreaPixels == 0) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null, _reference);
         // 只把允许区域外接框（外扩一圈边距并按64像素对齐，保持金字塔网格与原图一致）交给HALCON，
         // 小ROI不再转换和建立整幅图金字塔；结果坐标加回裁剪原点。
         var crop = Crop(allowed.Bounds, frame.Image.Info.Width, frame.Image.Info.Height);
@@ -226,7 +227,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
                 }
             }
         }
-        return new TemplatePoseResult(frame.FrameId, ModelIdentity, score, best);
+        return new TemplatePoseResult(frame.FrameId, ModelIdentity, score, best, _reference);
     }
     // 外接框外扩32像素、原点按64对齐（最多6层金字塔），裁剪到原图内。
     private static PixelBounds Crop(RectD bounds, int width, int height)

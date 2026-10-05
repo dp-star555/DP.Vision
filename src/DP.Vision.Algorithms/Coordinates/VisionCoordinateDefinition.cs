@@ -5,15 +5,13 @@ using System.Text;
 
 namespace DP.Vision.Algorithms;
 
-/// <summary>坐标单位；参考像素与模板兼容像素均不代表毫米。</summary>
+/// <summary>坐标单位；参考像素不代表毫米。</summary>
 public enum EVisionCoordinateUnit
 {
     /// <summary>独立参考坐标的像素单位。</summary>
     ReferencePixel = 0,
     /// <summary>由明确标定关系建立的毫米单位。</summary>
-    Millimeter = 1,
-    /// <summary>旧模板坐标兼容单位。</summary>
-    TemplatePixel = 2
+    Millimeter = 1
 }
 
 /// <summary>稳定业务坐标定义；不含定位模型和运行图像。</summary>
@@ -51,6 +49,6 @@ public sealed class VisionCoordinateDefinition
     /// <summary>语义签名，与模板像素无关。</summary>
     public string Signature { get; }
     /// <summary>输出单位名称。</summary>
-    public string UnitName => Unit == EVisionCoordinateUnit.Millimeter ? "mm" : Unit == EVisionCoordinateUnit.TemplatePixel ? "template-px" : "reference-px";
+    public string UnitName => Unit == EVisionCoordinateUnit.Millimeter ? "mm" : "reference-px";
 }
 

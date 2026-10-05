@@ -14,13 +14,13 @@
 
 **当前形态、不变式、验收状态与待办统一收在 [ACQUISITION_STATUS.md](ACQUISITION_STATUS.md)**（唯一现状入口）；逐阶段提交号与测试证据见 [ACQUISITION_CONNECTION_V2_STATUS.md](ACQUISITION_CONNECTION_V2_STATUS.md)，设计归档见 [ACQUISITION_RUNTIME_V1.md](ACQUISITION_RUNTIME_V1.md) 与 [ACQUISITION_CONNECTION_V2_PLAN.md](ACQUISITION_CONNECTION_V2_PLAN.md)，Provider 化改造的动机与验收矩阵见 [图像采集Provider实施基线](../DP.WorkFlow/docs/vision-acquisition-providers.md)。既有Workflow接入记录见 `../DP.WorkFlow/docs/dp-vision-integration-plan.md`。
 
-### 模板定位坐标系
+### 模板定位与坐标系
 
-`DP.Vision.Algorithms/Coordinates` 将稳定业务定义VisionCoordinateDefinition与本帧映射VisionCoordinateSystem分开。VisionCoordinateBuilder支持姿态、双点、交线、父坐标、矩阵和标定点对；模板来源LocatedCoordinateSystem作为兼容子类保留。连续ROI精确转换并在本帧栅格化，Region保留原图游程。没有全局可变矩阵或上一帧回退。Workflow接入及限制见[业务坐标与ROI随动](../DP.WorkFlow/docs/nodes/vision-coordinate-systems.md)。
+`DP.Vision.Algorithms/Coordinates` 将稳定业务定义VisionCoordinateDefinition与本帧映射VisionCoordinateSystem分开。VisionCoordinateBuilder支持姿态、双点、交线、父坐标、矩阵和标定点对。模板匹配只输出位姿测量值TemplatePoseResult（中心、角度°、缩放、模板参考点及方向，角度顺时针为正），不产生坐标系；坐标系由下游构建，TemplateReference.Bind把模板参考签名并入坐标定义，模板变化时下游ROI会被拒绝。连续ROI精确转换并在本帧栅格化，Region保留原图游程。没有全局可变矩阵或上一帧回退。Workflow接入及限制见[业务坐标与ROI随动](../DP.WorkFlow/docs/nodes/vision-coordinate-systems.md)。
 
 ### 文件与区域分析
 
-2026-10-02增加VisionPoint、VisionLine、IGeometryMeasurer/GeometryMeasurer，支持生成直线、点点/点线/线线距离及有限线段模式。测量在所选原图或业务局部空间计算，支持一般仿射；单位为image-px/reference-px/兼容template-px或明确标定的mm。卡尺、拟合及模板父搜索需要相似变换。Workflow几何及坐标包10节点和双平台示例见[几何测量与复核](../DP.WorkFlow/docs/nodes/vision-geometry-measurement.md)。
+2026-10-02增加VisionPoint、VisionLine、IGeometryMeasurer/GeometryMeasurer，支持生成直线、点点/点线/线线距离及有限线段模式。测量在所选原图或业务局部空间计算，支持一般仿射；单位为image-px/reference-px或明确标定的mm。卡尺、拟合及模板父搜索需要相似变换。Workflow几何及坐标包10节点和双平台示例见[几何测量与复核](../DP.WorkFlow/docs/nodes/vision-geometry-measurement.md)。
 
 - `ImageFrame`：图像内容身份与独立租约，图像修改必须换身份。
 - `IImageFileReader` / `OpenCvImageFileReader`：真实文件解码，保持Gray8/BGR/BGRA/Gray16。
