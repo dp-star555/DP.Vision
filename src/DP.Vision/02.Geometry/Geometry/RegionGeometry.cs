@@ -257,6 +257,32 @@ public sealed class RegionGeometry : Geometry
         return new RegionGeometry(runs);
     }
 
+    /// <summary>在原图范围[0,width)×[0,height)内取反：范围内不属于本Region的像素；范围外的游程不参与结果。</summary>
+    /// <param name="width">取反范围宽度，单位为原图像素，1～<see cref="ImageInfo.MaxDimension"/>。</param>
+    /// <param name="height">取反范围高度，单位为原图像素，1～<see cref="ImageInfo.MaxDimension"/>。</param>
+    /// <param name="token">取消。</param>
+    /// <returns>精确补集。</returns>
+    public RegionGeometry Complement(int width, int height, CancellationToken token = default)
+    {
+        if (width < 1 || width > ImageInfo.MaxDimension)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "取反范围宽度必须在1～" + ImageInfo.MaxDimension + "之间。");
+        }
+
+        if (height < 1 || height > ImageInfo.MaxDimension)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height), "取反范围高度必须在1～" + ImageInfo.MaxDimension + "之间。");
+        }
+
+        var rows = new RegionRun[height];
+        for (int y = 0; y < height; y++)
+        {
+            rows[y] = new RegionRun(y, 0, width);
+        }
+
+        return new RegionGeometry(rows).Subtract(this, token);
+    }
+
     private static bool Precedes(RegionRun a, RegionRun b)
     {
         return a.Row < b.Row || a.Row == b.Row && a.Start <= b.Start;

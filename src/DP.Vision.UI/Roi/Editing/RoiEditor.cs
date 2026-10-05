@@ -5,7 +5,7 @@ using System.Linq;
 namespace DP.Vision.UI;
 
 /// <summary>只在UI线程使用、与厂商无关的ROI编辑器；一次拖动对应一次撤销事务，编辑预览与检测证据分离。</summary>
-public sealed class RoiEditor
+public sealed partial class RoiEditor
 {
     // 选中/预览/草稿的显示颜色，只影响编辑层外观。
     private const uint SelectedColor = VisionColors.Cyan;
@@ -13,6 +13,7 @@ public sealed class RoiEditor
     private const uint ExcludeColor = 0xFFFFAA33;
     private const uint IncludeColor = 0xFF3399FF;
     private const uint DraftColor = VisionColors.Yellow;
+    private const uint EraserColor = 0xFFFF5555;
 
     private static void ValidateTolerance(double value, string parameter)
     {
@@ -174,6 +175,13 @@ public sealed class RoiEditor
         Cancel();
         if (selected.Purpose == purpose && selected.Enabled == enabled)
         {
+            return;
+        }
+
+        if (IsPaintId(selected.Id) && selected.Purpose != purpose)
+        {
+            ValidationError = "涂抹层的用途由其标识决定，请使用“包含/排除互换”。";
+            Notify();
             return;
         }
 
@@ -360,6 +368,8 @@ public sealed class RoiEditor
         _vertices.Clear();
         _cursor = null;
         _changedGesture = false;
+        _stroke = null;
+        _strokeRegion = null;
     }
 
     /// <summary>撤销一次已提交事务。</summary>
@@ -402,6 +412,11 @@ public sealed class RoiEditor
     public bool PointerDown(PointD point, double tolerance)
     {
         ValidateTolerance(tolerance, nameof(tolerance));
+        if (IsPaintTool)
+        {
+            return BeginStroke(point);
+        }
+
         if (Tool == ERoiTool.InsertVertex)
         {
             return InsertVertex(point, tolerance);
@@ -490,8 +505,21 @@ public sealed class RoiEditor
             return;
         }
 
+        if (_stroke != null)
+        {
+            ContinueStroke(point);
+            return;
+        }
+
         if (!_start.HasValue)
         {
+            if (IsPaintTool)
+            {
+                // 画笔/橡皮悬停时显示笔刷范围。
+                _cursor = point;
+                Notify();
+            }
+
             return;
         }
 
@@ -542,6 +570,12 @@ public sealed class RoiEditor
     {
         if (!_start.HasValue)
         {
+            return;
+        }
+
+        if (_stroke != null)
+        {
+            EndStroke(point);
             return;
         }
 
@@ -707,7 +741,18 @@ public sealed class RoiEditor
             .ToList();
         if (_original == null && _preview != null)
         {
-            visuals.Add(new Visual("draft", _preview, DraftColor));
+            visuals.Add(new Visual("draft", _preview, Tool == ERoiTool.Eraser ? EraserColor : DraftColor));
+        }
+
+        if (IsPaintTool && _cursor.HasValue)
+        {
+            visuals.Add(
+                new Visual(
+                    "brush",
+                    new EllipseGeometry(_cursor.Value, BrushRadius, BrushRadius),
+                    Tool == ERoiTool.Eraser ? EraserColor : DraftColor
+                )
+            );
         }
 
         if (_vertices.Count > 0)

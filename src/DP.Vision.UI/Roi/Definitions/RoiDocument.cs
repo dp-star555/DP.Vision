@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace DP.Vision.UI;
 
@@ -59,4 +60,50 @@ public sealed class RoiDocument
 
     /// <summary>已提交的ROI定义集合，不包含尚未提交的拖动预览。</summary>
     public IReadOnlyList<RoiDefinition> Rois { get; }
+
+    /// <summary>
+    /// 把已启用的ROI合成为后台有效区域：全部包含（几何ROI与涂抹层）的并集减去全部排除的并集，排除优先、与顺序无关；
+    /// 没有任何ROI时为整幅图。全部禁用时报错而不回退全图；开放折线、点或超出原图的ROI报错并指出其标识。
+    /// </summary>
+    /// <param name="imageWidth">原图宽度，单位为像素。</param>
+    /// <param name="imageHeight">原图高度，单位为像素。</param>
+    /// <param name="maximumWork">单个ROI的栅格化工作量上限，含义同<see cref="RegionRasterizer.Rasterize"/>。</param>
+    /// <param name="token">协作式取消标记。</param>
+    /// <returns>独立Region，可为空。</returns>
+    public RegionGeometry ToRegion(
+        int imageWidth,
+        int imageHeight,
+        long maximumWork = 16777216,
+        CancellationToken token = default
+    )
+    {
+        var enabled = Rois.Where(r => r.Enabled).ToArray();
+        if (Rois.Count > 0 && enabled.Length == 0)
+        {
+            throw new InvalidOperationException("全部ROI已禁用，有效区域不会回退为整幅图。");
+        }
+
+        foreach (var roi in enabled)
+        {
+            if (roi.Shape is ContourGeometry c && (!c.Closed || !c.Filled))
+            {
+                throw new ArgumentException($"ROI“{roi.Id}”是开放折线或点，不能参与有效区域。");
+            }
+
+            var b = roi.Shape.Bounds;
+            if (b.X < 0 || b.Y < 0 || b.Right > imageWidth || b.Bottom > imageHeight)
+            {
+                throw new ArgumentException($"ROI“{roi.Id}”超出原图范围（{imageWidth}×{imageHeight}）。");
+            }
+        }
+
+        return RegionRasterizer.Compose(
+            imageWidth,
+            imageHeight,
+            enabled.Where(r => r.Purpose == ERoiPurpose.Include).Select(r => r.Shape),
+            enabled.Where(r => r.Purpose == ERoiPurpose.Exclude).Select(r => r.Shape),
+            maximumWork,
+            token
+        );
+    }
 }

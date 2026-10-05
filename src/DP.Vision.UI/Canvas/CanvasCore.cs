@@ -103,6 +103,10 @@ internal sealed class CanvasCore<TPath> : IDisposable
             if (_editor != null)
             {
                 _editor.Changed += EditorChanged;
+                if (Frame != null)
+                {
+                    _editor.SetPaintArea(Frame.Info.Width, Frame.Info.Height);
+                }
             }
 
             EditorChanged(this, EventArgs.Empty);
@@ -174,6 +178,7 @@ internal sealed class CanvasCore<TPath> : IDisposable
         }
 
         Frame = next;
+        _editor?.SetPaintArea(next.Info.Width, next.Info.Height);
         if (old == null || old.FrameId != next.FrameId || old.Info.Layout != next.Info.Layout || fit)
         {
             Revision++;

@@ -32,4 +32,10 @@ public enum ERoiTool
 
     /// <summary>删除选中轮廓最近的顶点。</summary>
     DeleteVertex,
+
+    /// <summary>圆形画笔：按涂抹用途把扫过的像素加入涂抹层，并从另一用途的涂抹层去掉。</summary>
+    Brush,
+
+    /// <summary>橡皮：从两个涂抹层去掉扫过的像素，不修改几何ROI。</summary>
+    Eraser,
 }

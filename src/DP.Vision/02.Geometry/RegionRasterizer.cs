@@ -128,6 +128,222 @@ public static class RegionRasterizer
     }
 
     /// <summary>
+    /// 包含/排除合成：全部包含形状的并集减去全部排除形状的并集，结果与形状顺序无关，排除始终优先。
+    /// 没有包含形状时以整幅图为基底。每个形状按<see cref="Rasterize"/>的规则转换，越界或开放轮廓直接拒绝。
+    /// </summary>
+    /// <param name="imageWidth">原图宽度，单位为像素。</param>
+    /// <param name="imageHeight">原图高度，单位为像素。</param>
+    /// <param name="include">包含形状。</param>
+    /// <param name="exclude">排除形状。</param>
+    /// <param name="maximumWork">单个形状的转换工作量上限，含义同<see cref="Rasterize"/>。</param>
+    /// <param name="token">协作式取消标记。</param>
+    /// <returns>独立Region，可为空。</returns>
+    public static RegionGeometry Compose(
+        int imageWidth,
+        int imageHeight,
+        IEnumerable<Geometry> include,
+        IEnumerable<Geometry> exclude,
+        long maximumWork = 16777216,
+        CancellationToken token = default
+    )
+    {
+        if (include == null)
+        {
+            throw new ArgumentNullException(nameof(include), "包含形状集合不能为空。");
+        }
+
+        if (exclude == null)
+        {
+            throw new ArgumentNullException(nameof(exclude), "排除形状集合不能为空。");
+        }
+
+        if (imageWidth < 1 || imageHeight < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(imageWidth), "原图尺寸必须大于0。");
+        }
+
+        // 先求包含并集再逐个扣除排除形状；直接在游程上运算，不分配整幅图大小的临时掩码。
+        RegionGeometry? result = null;
+        foreach (var shape in include)
+        {
+            var region = Rasterize(shape, imageWidth, imageHeight, maximumWork, token);
+            result = result == null ? region : result.Union(region, token);
+        }
+
+        result ??= new RegionGeometry(Array.Empty<RegionRun>()).Complement(imageWidth, imageHeight, token);
+        foreach (var shape in exclude)
+        {
+            result = result.Subtract(Rasterize(shape, imageWidth, imageHeight, maximumWork, token), token);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 圆形笔刷沿折线扫过的像素：像素中心到任一线段的距离不超过半径即属于结果（含边界）。
+    /// 与<see cref="Rasterize"/>不同，笔画是交互涂抹，超出原图的部分按原图范围裁去。
+    /// </summary>
+    /// <param name="points">笔画轨迹的原图坐标，1～4096点；单点得到一个圆。</param>
+    /// <param name="radius">笔刷半径，单位为原图像素，0.5～1000。</param>
+    /// <param name="imageWidth">原图宽度，单位为像素。</param>
+    /// <param name="imageHeight">原图高度，单位为像素。</param>
+    /// <param name="token">协作式取消标记。</param>
+    /// <returns>裁剪到原图内的独立Region，可为空。</returns>
+    public static RegionGeometry Stroke(
+        IReadOnlyList<PointD> points,
+        double radius,
+        int imageWidth,
+        int imageHeight,
+        CancellationToken token = default
+    )
+    {
+        if (points == null)
+        {
+            throw new ArgumentNullException(nameof(points), "笔画轨迹不能为空。");
+        }
+
+        if (points.Count < 1 || points.Count > 4096)
+        {
+            throw new ArgumentException("笔画轨迹点数必须在1～4096之间。", nameof(points));
+        }
+
+        if (double.IsNaN(radius) || radius < .5 || radius > 1000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(radius), "笔刷半径必须在0.5～1000像素之间。");
+        }
+
+        if (imageWidth < 1 || imageHeight < 1 || imageWidth > ImageInfo.MaxDimension || imageHeight > ImageInfo.MaxDimension)
+        {
+            throw new ArgumentOutOfRangeException(nameof(imageWidth), "原图尺寸超出范围。");
+        }
+
+        double minY = double.MaxValue,
+            maxY = double.MinValue;
+        foreach (var p in points)
+        {
+            if (double.IsNaN(p.X) || double.IsNaN(p.Y) || double.IsInfinity(p.X) || double.IsInfinity(p.Y))
+            {
+                throw new ArgumentException("笔画轨迹必须是有限坐标。", nameof(points));
+            }
+
+            minY = Math.Min(minY, p.Y);
+            maxY = Math.Max(maxY, p.Y);
+        }
+
+        // 像素中心y+0.5落在[minY-r, maxY+r]内的行才可能被覆盖。
+        int top = (int)Math.Max(0, Math.Ceiling(minY - radius - .5)),
+            bottom = (int)Math.Min(imageHeight - 1, Math.Floor(maxY + radius - .5));
+        var runs = new List<RegionRun>();
+        var spans = new List<(double Low, double High)>();
+        int segments = Math.Max(1, points.Count - 1);
+        for (int y = top; y <= bottom; y++)
+        {
+            token.ThrowIfCancellationRequested();
+            double cy = y + .5;
+            spans.Clear();
+            for (int i = 0; i < segments; i++)
+            {
+                var a = points[i];
+                var b = points[Math.Min(i + 1, points.Count - 1)];
+                if (CapsuleSpan(a, b, radius, cy, out double low, out double high))
+                {
+                    spans.Add((low, high));
+                }
+            }
+
+            spans.Sort((u, v) => u.Low.CompareTo(v.Low));
+            int lastEnd = int.MinValue;
+            foreach (var (low, high) in spans)
+            {
+                // 中心x+0.5∈[low, high]的整数列，裁剪到原图。
+                int start = (int)Math.Max(0, Math.Ceiling(low - .5)),
+                    end = (int)Math.Min(imageWidth, Math.Floor(high - .5) + 1);
+                if (end <= start)
+                {
+                    continue;
+                }
+
+                int last = runs.Count - 1;
+                if (last >= 0 && runs[last].Row == y && start <= lastEnd)
+                {
+                    if (end > lastEnd)
+                    {
+                        runs[last] = new RegionRun(y, runs[last].Start, end);
+                        lastEnd = end;
+                    }
+
+                    continue;
+                }
+
+                runs.Add(new RegionRun(y, start, end));
+                lastEnd = end;
+            }
+        }
+
+        return new RegionGeometry(runs);
+    }
+
+    // 胶囊（线段按半径外扩）与水平线y=cy的交集区间；胶囊是凸集，等于两端圆盘与中间矩形带各自区间的并。
+    private static bool CapsuleSpan(PointD a, PointD b, double r, double cy, out double low, out double high)
+    {
+        low = double.MaxValue;
+        high = double.MinValue;
+        Disk(a, r, cy, ref low, ref high);
+        Disk(b, r, cy, ref low, ref high);
+        double dx = b.X - a.X,
+            dy = b.Y - a.Y,
+            length = Math.Sqrt(dx * dx + dy * dy);
+        if (length > 1e-12)
+        {
+            // 投影参数t=((x-ax)dx+(cy-ay)dy)/L²∈[0,1]，有符号距离s=((cy-ay)dx-(x-ax)dy)/L∈[-r,r]，两者都是x的线性函数。
+            double from = double.MinValue,
+                to = double.MaxValue;
+            Linear(dx / (length * length), (cy - a.Y) * dy / (length * length) - a.X * dx / (length * length), 0, 1, ref from, ref to);
+            Linear(-dy / length, ((cy - a.Y) * dx + a.X * dy) / length, -r, r, ref from, ref to);
+            if (from <= to)
+            {
+                low = Math.Min(low, from);
+                high = Math.Max(high, to);
+            }
+        }
+
+        return low <= high;
+    }
+
+    private static void Disk(PointD c, double r, double cy, ref double low, ref double high)
+    {
+        double h = r * r - (cy - c.Y) * (cy - c.Y);
+        if (h < 0)
+        {
+            return;
+        }
+
+        double w = Math.Sqrt(h);
+        low = Math.Min(low, c.X - w);
+        high = Math.Max(high, c.X + w);
+    }
+
+    // 把 min ≤ k·x + m ≤ max 解成x区间并与[from,to]求交。
+    private static void Linear(double k, double m, double min, double max, ref double from, ref double to)
+    {
+        if (Math.Abs(k) < 1e-15)
+        {
+            if (m < min || m > max)
+            {
+                from = double.MaxValue;
+                to = double.MinValue;
+            }
+
+            return;
+        }
+
+        double p = (min - m) / k,
+            q = (max - m) / k;
+        from = Math.Max(from, Math.Min(p, q));
+        to = Math.Min(to, Math.Max(p, q));
+    }
+
+    /// <summary>
     /// 填充轮廓的逐行扫描：每行只求一次各边与像素中心线的交点，再按与
     /// <see cref="ContourGeometry.Contains"/>相同的奇偶规则判定整行，代价从“像素数×顶点数”降为“行数×顶点数+像素数”。
     /// Contains把恰好落在边上的点算作内部；这类点只可能出现在交点、中心线上的顶点及位于中心线上的水平边附近，
