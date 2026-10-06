@@ -122,7 +122,7 @@ public sealed class CaliperMeasurer : ICaliperMeasurer
         if (frame == null || options == null) throw new ArgumentNullException(nameof(frame));
         token.ThrowIfCancellationRequested();
         var info = frame.Image.Info;
-        if (info.Layout != EPixelLayout.Gray8) throw new NotSupportedException("Caliper requires explicit Gray8 preprocessing.");
+        VisionImage.RequireGray8(frame.Image, "亚像素卡尺");
         if ((long)info.Width * info.Height > 16777216) throw new ArgumentException("Caliper image budget exceeded.");
         double dx = options.End.X - options.Start.X, dy = options.End.Y - options.Start.Y, length = Math.Sqrt(dx * dx + dy * dy);
         dx /= length; dy /= length;

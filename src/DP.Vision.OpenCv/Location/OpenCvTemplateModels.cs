@@ -23,7 +23,8 @@ public sealed class OpenCvTemplateModelBuilder : IVisionTemplateBuilder
         token.ThrowIfCancellationRequested();
         var d = VisionTemplateStore.CopyDefinition(request.Definition); d.Validate();
         if (request.Source.Image.Info.Width != d.SourceWidth || request.Source.Image.Info.Height != d.SourceHeight) throw new ArgumentException("样图尺寸与模板定义不一致。");
-        if (!CvPixels.Supports(request.Source.Image) || request.Source.Image.Info.ByteLength > 64 * 1024 * 1024) throw new NotSupportedException("模板仅支持有界8位图像；16位需显式转换。");
+        VisionImage.RequireGray8(request.Source.Image, "模板制作");
+        if (request.Source.Image.Info.ByteLength > 64 * 1024 * 1024) throw new NotSupportedException("模板样图超过64MiB预算。");
         var settings = Parse(request.Settings);
         using var gray = CvPixels.Gray(request.Source.Image);
         if (settings.Kernel > 1) Cv2.GaussianBlur(gray, gray, new Size(settings.Kernel, settings.Kernel), 0);
@@ -187,7 +188,8 @@ internal sealed class OpenCvPreparedTemplateMatcher : IPreparedVisionTemplateMat
     }
     public TemplatePoseResult Match(ImageFrame frame, PixelBounds searchBounds, TemplatePoseOptions options, RegionGeometry? region = null, CancellationToken token = default)
     {
-        if (!searchBounds.Fits(frame.Image) || !CvPixels.Supports(frame.Image)) throw new ArgumentException("匹配范围越界或图像格式不支持。");
+        VisionImage.RequireGray8(frame.Image, "模板匹配");
+        if (!searchBounds.Fits(frame.Image)) throw new ArgumentException("匹配范围越界。");
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216) throw new ArgumentException("匹配图像超过像素预算。");
         InspectionMask.Validate(region, frame.Image);
         // 模板必须整体落在区域内：先把搜索矩形收缩到区域外接框（工作量预算也按收缩后计算），区域窗口只建一次供所有角度/缩放候选共用。

@@ -16,7 +16,7 @@ public sealed class OpenCvEdgeMeasurer : IEdgeMeasurer
         if (frame == null) throw new ArgumentNullException(nameof(frame));
         if (options == null) throw new ArgumentNullException(nameof(options));
         if (!bounds.Fits(frame.Image)) throw new ArgumentOutOfRangeException(nameof(bounds));
-        if (!CvPixels.Supports(frame.Image)) throw new NotSupportedException("Explicit Gray16 conversion required.");
+        VisionImage.RequireGray8(frame.Image, "边缘测量");
         InspectionMask.Validate(regionMask, frame.Image);
         token.ThrowIfCancellationRequested();
         using var gray = CvPixels.Gray(frame.Image);

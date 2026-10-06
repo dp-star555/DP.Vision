@@ -90,26 +90,18 @@ internal static class HalconTemplateNative
     internal static byte[] GrayBytes(IImageSource source, CancellationToken token)
         => GrayBytes(source, new PixelBounds(0, 0, source.Info.Width, source.Info.Height), token);
 
-    /// <summary>把原图中指定矩形转换为连续灰度字节；灰度图按行整块复制，彩色图逐像素加权。</summary>
+    /// <summary>把8位灰度原图中指定矩形按行复制为连续字节；彩色或16位图像明确报错。</summary>
     internal static byte[] GrayBytes(IImageSource source, PixelBounds crop, CancellationToken token)
     {
+        VisionImage.RequireGray8(source, "HALCON模板");
         var info = source.Info;
-        if (info.Layout != EPixelLayout.Gray8 && info.Layout != EPixelLayout.Bgr24 && info.Layout != EPixelLayout.Bgra32
-            && info.Layout != EPixelLayout.Rgb24 && info.Layout != EPixelLayout.Rgba32)
-            throw new NotSupportedException("HALCON模板仅支持8位灰度或RGB/BGR图像；16位图像需要显式转换。");
         if ((long)info.Width * info.Height > 16777216 || info.ByteLength > 64 * 1024 * 1024) throw new ArgumentException("HALCON模板图像超过16M像素或64MiB预算。");
         if (!crop.Fits(info.Width, info.Height)) throw new ArgumentOutOfRangeException(nameof(crop));
-        int channels = info.Layout == EPixelLayout.Gray8 ? 1 : info.Layout == EPixelLayout.Bgr24 || info.Layout == EPixelLayout.Rgb24 ? 3 : 4;
-        bool rgb = info.Layout == EPixelLayout.Rgb24 || info.Layout == EPixelLayout.Rgba32;
-        var result = new byte[crop.Width * crop.Height]; var row = channels == 1 ? null : new byte[crop.Width * channels];
+        var result = new byte[crop.Width * crop.Height];
         for (int y = 0; y < crop.Height; y++)
         {
             token.ThrowIfCancellationRequested();
-            int offset = checked((crop.Y + y) * info.Stride + crop.X * channels);
-            if (row == null) { source.CopyTo(offset, result, y * crop.Width, crop.Width); continue; }
-            source.CopyTo(offset, row, 0, row.Length);
-            for (int x = 0; x < crop.Width; x++) result[y * crop.Width + x] =
-                (byte)(((rgb ? 77 : 29) * row[x * channels] + 150 * row[x * channels + 1] + (rgb ? 29 : 77) * row[x * channels + 2] + 128) >> 8);
+            source.CopyTo(checked((crop.Y + y) * info.Stride + crop.X), result, y * crop.Width, crop.Width);
         }
         return result;
     }

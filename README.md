@@ -23,6 +23,7 @@
 2026-10-02增加VisionPoint、VisionLine、IGeometryMeasurer/GeometryMeasurer，支持生成直线、点点/点线/线线距离及有限线段模式。测量在所选原图或业务局部空间计算，支持一般仿射；单位为image-px/reference-px或明确标定的mm。卡尺、拟合及模板父搜索需要相似变换。Workflow几何及坐标包9节点和双平台示例见[几何测量与复核](../DP.WorkFlow/docs/nodes/vision-geometry-measurement.md)。
 
 - `ImageFrame`：图像内容身份与独立租约，图像修改必须换身份。
+- `VisionImage.RequireGray8` / `VisionImage.ToGray8`：模板匹配（OpenCV/HALCON）、卡尺、边缘测量、阈值分割和Blob只接受Gray8，其它格式抛出NotSupportedException，不做隐式转换；需要时调用ToGray8把彩色按亮度显式转换（Gray16需指定增益，不在此转换）。
 - `IImageFileReader` / `OpenCvImageFileReader`：真实文件解码，保持Gray8/BGR/BGRA/Gray16。
 - `IBlobAnalyzer` / `OpenCvBlobAnalyzer`：灰度闭区间、4/8连通、面积过滤，返回原图精确Region及像素中心质心；正常空结果成功。
 - `IColorAnalyzer` / `RgbColorAnalyzer`：明确RGB通道均值，Gray8复制三通道，Alpha不加权；不做产品判定。

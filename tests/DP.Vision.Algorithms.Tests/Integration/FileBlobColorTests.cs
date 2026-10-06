@@ -26,8 +26,13 @@ public sealed class FileBlobColorTests
             }
             using var image = await new OpenCvImageFileReader().ReadAsync(path);
             using var frame = new ImageFrame("file", image);
+            // 连通域按灰度阈值工作，彩色图明确报错，需先转换为8位灰度。
+            Assert.ThrowsExactly<NotSupportedException>(() => new OpenCvBlobAnalyzer().Analyze(frame, new PixelBounds(0, 0, 3, 3), new BlobOptions(0, 0)));
+            using var grayImage = VisionImage.ToGray8(image);
+            Assert.AreEqual(EPixelLayout.Gray8, grayImage.Info.Layout);
+            using var grayFrame = new ImageFrame("file-gray", grayImage);
             var blobs = new OpenCvBlobAnalyzer().Analyze(
-                frame,
+                grayFrame,
                 new PixelBounds(0, 0, 3, 3),
                 new BlobOptions(0, 0)
             );
@@ -37,7 +42,7 @@ public sealed class FileBlobColorTests
             var color = new RgbColorAnalyzer().Analyze(frame, new PixelBounds(0, 0, 3, 3));
             Assert.AreEqual(255d * 8 / 9, color.Red, 1e-9);
             Assert.AreEqual(0d, color.Blue);
-            Assert.AreEqual(blobs.FrameId, color.FrameId);
+            Assert.AreEqual(frame.FrameId, color.FrameId);
         }
         finally
         {
