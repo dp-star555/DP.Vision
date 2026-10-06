@@ -95,6 +95,8 @@ public sealed class BlobAnalysisResult
     public IReadOnlyList<BlobObservation> Blobs { get; }
     /// <summary>连通域数量。</summary>
     public int Count => Blobs.Count;
+    /// <summary>列表中的第一个连通域（筛选排序后即排序首个）；没有连通域时为空。</summary>
+    public BlobObservation? First => Blobs.Count > 0 ? Blobs[0] : null;
 }
 
 /// <summary>只读原图的连通域分析能力。</summary>

@@ -32,12 +32,14 @@
 - `ITemplateLocator` / `OpenCvTemplateLocator`：固定方向/尺度的平移定位，明确分数与正常空结果。
 - `IImagePreprocessor` / `OpenCvImagePreprocessor`：显式灰度、反相、Gaussian/中值、固定增益/偏置及Gray16→Gray8。
 - `IRegionProcessor` / `OpenCvRegionProcessor`：闭区间分割、精确掩码、零背景形态学与四连通背景填孔。
-- `BlobObservation.Features` / `BlobSelector`：栅格周长、圆度、面积矩等效椭圆及确定性筛选。
+- `BlobObservation.Features` / `BlobSelector`：栅格周长、圆度、面积矩等效椭圆及确定性筛选；可按面积、质心X/Y（绑定坐标系时按业务坐标）、圆度排序，`BlobAnalysisResult.First`为排序首个。
 - `ICaliperMeasurer` / `CaliperMeasurer`：双线性带采样、灰度剖面、梯度峰抛物线亚像素插值及极性/间距控制。
 - `IRobustLineFitter` / `RobustLineFitter`：确定性RANSAC＋正交TLS，内点索引/RMS和退化拒绝。
+- `IRobustCircleFitter` / `RobustCircleFitter`：确定性三点RANSAC，内点代数拟合后几何细化，输出圆心、半径、内点和RMS；共线或证据不足明确报错。Workflow的“找线”“找圆”由多把卡尺加鲁棒拟合组成。
+- `BarcodeObservation.Location`：码的近似位置（引擎定位点平均值），`Bounds`为搜索范围；ZXing填入定位点，供按位置排序。
 - `ITemplatePoseLocator` / `OpenCvTemplatePoseLocator`：显式角度/尺度上下限，OpenCV按步长采样并包含端点，使用有效模板掩码，输出独立姿态正反变换；HALCON资源模型直接使用原生范围搜索。旧候选列表接口已删除。
 
-这些算子已接入Workflow的8个新增节点与双宿主。用法和准确边界见[算子说明](../DP.WorkFlow/docs/nodes/vision-operators.md)。相机实机工作延期，不以合成边缘测试冒充现场精度验收。
+这些算子已接入Workflow节点与双宿主（Workflow 2026-10-06起不再提供基于`IEdgeMeasurer`的边缘线圆测量节点和基于`ITemplateLocator`的平移定位节点，接口仍保留在算法库）。节点参数用到的枚举在取值上标注 `[Description]` 中文标签，供属性面板显示。用法和准确边界见[算子说明](../DP.WorkFlow/docs/nodes/vision-operators.md)。相机实机工作延期，不以合成边缘测试冒充现场精度验收。
 - 分析使用8位输入，越界/Gray16明确拒绝；测量和模板定位只接受声明的矩形范围，不自动取任意ROI外接框或降位深。
 
 ## 视图浏览器

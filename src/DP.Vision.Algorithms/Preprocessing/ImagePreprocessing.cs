@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Threading;
 
 namespace DP.Vision.Algorithms;
@@ -7,16 +8,22 @@ namespace DP.Vision.Algorithms;
 public enum EImagePreprocessing
 {
     /// <summary>8位RGB/BGR/Alpha转Gray8，Alpha不加权。</summary>
+    [Description("彩色转灰度")]
     Grayscale,
     /// <summary>Gray8反相。</summary>
+    [Description("反相")]
     Invert,
     /// <summary>Gray8 Gaussian，边界Reflect101。</summary>
+    [Description("高斯滤波")]
     Gaussian,
     /// <summary>Gray8中值，边界Replicate。</summary>
+    [Description("中值滤波")]
     Median,
     /// <summary>Gray8固定增益/偏置，饱和到0..255。</summary>
+    [Description("增益/偏置")]
     GainOffset,
     /// <summary>Gray16固定增益/偏置到Gray8，非自动拉伸。</summary>
+    [Description("16位转8位")]
     Gray16ToGray8
 }
 

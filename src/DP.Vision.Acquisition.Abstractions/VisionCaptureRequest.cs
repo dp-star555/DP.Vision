@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 
 namespace DP.Vision.Acquisition;
 
@@ -6,15 +7,19 @@ namespace DP.Vision.Acquisition;
 public enum EVisionTriggerMode
 {
     /// <summary>保持设备当前触发设置。</summary>
+    [Description("保持当前")]
     KeepCurrent = 0,
 
     /// <summary>设备自由运行。</summary>
+    [Description("自由运行")]
     FreeRun = 1,
 
     /// <summary>软件触发。</summary>
+    [Description("软件触发")]
     Software = 2,
 
     /// <summary>外部硬件触发。</summary>
+    [Description("外部触发")]
     External = 3
 }
 

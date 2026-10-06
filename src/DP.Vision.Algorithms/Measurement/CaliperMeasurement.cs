@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 
@@ -9,10 +10,13 @@ namespace DP.Vision.Algorithms;
 public enum ECaliperPolarity
 {
     /// <summary>两种极性。</summary>
+    [Description("任意")]
     Any,
     /// <summary>由暗到亮。</summary>
+    [Description("由暗到亮")]
     Rising,
     /// <summary>由亮到暗。</summary>
+    [Description("由亮到暗")]
     Falling
 }
 

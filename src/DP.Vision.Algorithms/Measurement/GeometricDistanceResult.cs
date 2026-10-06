@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 
 namespace DP.Vision.Algorithms;
 
@@ -7,8 +8,10 @@ namespace DP.Vision.Algorithms;
 public enum EVisionLineDistanceMode
 {
     /// <summary>无限直线最短距离；不平行时为零。</summary>
+    [Description("无限直线")]
     InfiniteLines = 0,
     /// <summary>两个有限线段间的最短距离。</summary>
+    [Description("有限线段")]
     Segments = 1
 }
 

@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Threading;
 
 namespace DP.Vision.Algorithms;
@@ -60,14 +61,19 @@ public sealed class RegionAnalysisResult
 public enum ERegionMorphology
 {
     /// <summary>膨胀。</summary>
+    [Description("膨胀")]
     Dilate,
     /// <summary>腐蚀。</summary>
+    [Description("腐蚀")]
     Erode,
     /// <summary>先腐蚀后膨胀。</summary>
+    [Description("开运算")]
     Open,
     /// <summary>先膨胀后腐蚀。</summary>
+    [Description("闭运算")]
     Close,
     /// <summary>填补不与画布边界四连通的背景孔洞。</summary>
+    [Description("填充孔洞")]
     FillHoles
 }
 
@@ -75,10 +81,13 @@ public enum ERegionMorphology
 public enum ERegionKernel
 {
     /// <summary>方形。</summary>
+    [Description("矩形")]
     Rectangle,
     /// <summary>OpenCV离散椭圆。</summary>
+    [Description("椭圆")]
     Ellipse,
     /// <summary>十字。</summary>
+    [Description("十字")]
     Cross
 }
 

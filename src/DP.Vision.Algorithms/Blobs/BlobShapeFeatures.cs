@@ -1,6 +1,7 @@
 using System;
-using System.Threading;
+using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 
 namespace DP.Vision.Algorithms;
 
@@ -51,16 +52,25 @@ public sealed class BlobShapeFeatures
 /// <summary>显式Blob事实筛选范围，全部为闭区间。</summary>
 public sealed class BlobSelectionOptions
 {
-    /// <summary>创建面积、圆度和伸长比条件。</summary>
+    /// <summary>创建面积、圆度和伸长比条件及选中结果的排序。</summary>
     /// <param name="minimumArea">最小面积。</param><param name="maximumArea">最大面积。</param>
     /// <param name="minimumCircularity">最小栅格圆度。</param><param name="maximumElongation">最大长短轴比。</param>
-    public BlobSelectionOptions(long minimumArea = 1, long maximumArea = long.MaxValue, double minimumCircularity = 0, double maximumElongation = double.MaxValue)
+    /// <param name="sortKey">选中结果的排序依据；质心按绑定的业务坐标排序，未绑定时按原图坐标。</param>
+    /// <param name="descending">是否降序。</param>
+    public BlobSelectionOptions(long minimumArea = 1, long maximumArea = long.MaxValue, double minimumCircularity = 0, double maximumElongation = double.MaxValue,
+        EBlobSortKey sortKey = EBlobSortKey.None, bool descending = false)
     {
         if (minimumArea < 1 || maximumArea < minimumArea || double.IsNaN(minimumCircularity) || minimumCircularity < 0 || minimumCircularity > 1
             || double.IsNaN(maximumElongation) || double.IsInfinity(maximumElongation) || maximumElongation < 1)
             throw new ArgumentOutOfRangeException(nameof(minimumArea));
+        if (!Enum.IsDefined(typeof(EBlobSortKey), sortKey)) throw new ArgumentOutOfRangeException(nameof(sortKey));
         MinimumArea = minimumArea; MaximumArea = maximumArea; MinimumCircularity = minimumCircularity; MaximumElongation = maximumElongation;
+        SortKey = sortKey; Descending = descending;
     }
+    /// <summary>选中结果的排序依据。</summary>
+    public EBlobSortKey SortKey { get; }
+    /// <summary>是否降序。</summary>
+    public bool Descending { get; }
     /// <summary>最小面积。</summary>
     public long MinimumArea { get; }
     /// <summary>最大面积。</summary>
@@ -71,11 +81,31 @@ public sealed class BlobSelectionOptions
     public double MaximumElongation { get; }
 }
 
+/// <summary>连通域筛选结果的排序依据。</summary>
+public enum EBlobSortKey
+{
+    /// <summary>保持输入顺序（按首个像素的行、列）。</summary>
+    [Description("保持原顺序")]
+    None,
+    /// <summary>按面积。</summary>
+    [Description("面积")]
+    Area,
+    /// <summary>按质心X。</summary>
+    [Description("质心X")]
+    CentroidX,
+    /// <summary>按质心Y。</summary>
+    [Description("质心Y")]
+    CentroidY,
+    /// <summary>按栅格圆度。</summary>
+    [Description("圆度")]
+    Circularity
+}
+
 /// <summary>Blob事实选择能力。</summary>
 [VisionCapability("pixel.blob-select", "像素处理", "连通域筛选")]
 public interface IBlobSelector
 {
-    /// <summary>选择已有事实，保持输入顺序和FrameId，空选集正常完成。</summary>
+    /// <summary>选择已有事实并按选项排序（不排序时保持输入顺序），保持FrameId，空选集正常完成。</summary>
     /// <param name="input">输入事实。</param><param name="options">范围。</param><param name="token">取消。</param><returns>选中事实。</returns>
     BlobAnalysisResult Select(BlobAnalysisResult input, BlobSelectionOptions options, CancellationToken token = default);
 }
@@ -89,12 +119,28 @@ public sealed class BlobSelector : IBlobSelector
         if (input == null) throw new ArgumentNullException(nameof(input));
         if (options == null) throw new ArgumentNullException(nameof(options));
         token.ThrowIfCancellationRequested();
-        var result = new BlobAnalysisResult(input.FrameId, input.Blobs.Where(b =>
+        var selected = input.Blobs.Where(b =>
         {
             token.ThrowIfCancellationRequested();
             return b.Area >= options.MinimumArea && b.Area <= options.MaximumArea && b.Features.Circularity >= options.MinimumCircularity
                 && b.Features.Elongation <= options.MaximumElongation;
-        }));
+        });
+        if (options.SortKey != EBlobSortKey.None)
+        {
+            // 稳定排序：同值保持输入顺序；质心随定位坐标排序，工件旋转后“从左到右”仍按工件方向。
+            Func<BlobObservation, double> key = options.SortKey switch
+            {
+                EBlobSortKey.Area => b => b.Area,
+                EBlobSortKey.Circularity => b => b.Features.Circularity,
+                EBlobSortKey.CentroidX => b => Centroid(b).X,
+                _ => b => Centroid(b).Y
+            };
+            selected = options.Descending ? selected.OrderByDescending(key) : selected.OrderBy(key);
+        }
+        var result = new BlobAnalysisResult(input.FrameId, selected);
         return input.CoordinateSystem is null ? result : result.InCoordinates(input.CoordinateSystem);
+
+        Coordinate2D Centroid(BlobObservation blob) => input.CoordinateSystem is { } system
+            ? system.Locate(blob.Centroid).LocalPosition : new Coordinate2D(blob.Centroid.X, blob.Centroid.Y);
     }
 }

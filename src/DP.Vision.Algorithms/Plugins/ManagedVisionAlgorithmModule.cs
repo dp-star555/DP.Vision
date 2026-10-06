@@ -16,6 +16,7 @@ public sealed class ManagedVisionAlgorithmModule : IVisionAlgorithmModule
         registrations.Add(new VisionAlgorithmDescriptor("managed.blob-select", "Managed", "1", VisionAlgorithmFactory<IBlobSelector>.Stateless(() => new BlobSelector())));
         registrations.Add(new VisionAlgorithmDescriptor("managed.caliper", "Managed", "1", VisionAlgorithmFactory<ICaliperMeasurer>.Stateless(() => new CaliperMeasurer())));
         registrations.Add(new VisionAlgorithmDescriptor("managed.robust-line", "Managed", "1", VisionAlgorithmFactory<IRobustLineFitter>.Stateless(() => new RobustLineFitter())));
+        registrations.Add(new VisionAlgorithmDescriptor("managed.robust-circle", "Managed", "1", VisionAlgorithmFactory<IRobustCircleFitter>.Stateless(() => new RobustCircleFitter())));
         registrations.Add(new VisionAlgorithmDescriptor("managed.geometry", "Managed", "1", VisionAlgorithmFactory<IGeometryMeasurer>.Stateless(() => new GeometryMeasurer())));
         registrations.Add(new VisionAlgorithmDescriptor("managed.character-match", "Managed", "1", VisionAlgorithmFactory<ICharacterMatcher>.Stateless(() => new OrdinalCharacterMatcher())));
         registrations.Add(new VisionAlgorithmDescriptor("managed.text-quality", "Managed", "1", new VisionAlgorithmFactory<ITextQualityInspector>((configuration, dependencies, token) =>
