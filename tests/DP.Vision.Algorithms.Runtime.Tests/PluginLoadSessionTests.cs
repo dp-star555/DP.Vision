@@ -67,7 +67,7 @@ public sealed class PluginLoadSessionTests
         var root = Path.Combine(AppContext.BaseDirectory, "PluginTestRuns", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         File.Copy(typeof(IVisionAlgorithmModule).Assembly.Location, Path.Combine(root, "DP.Vision.Algorithms.dll"));
         var catalog = new VisionAlgorithmModuleLoader().Load(root, new[] { new ManagedVisionAlgorithmModule() });
-        Assert.AreEqual(0, catalog.Diagnostics.Count); Assert.AreEqual(7, catalog.Implementations.Count);
+        Assert.AreEqual(0, catalog.Diagnostics.Count); Assert.AreEqual(8, catalog.Implementations.Count);
         Assert.AreEqual(1, catalog.Implementations.Count(d => d.ImplementationId == "managed.geometry" && d.ContractType == typeof(IGeometryMeasurer)));
     }
 
