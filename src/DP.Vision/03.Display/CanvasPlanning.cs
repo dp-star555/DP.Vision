@@ -96,6 +96,29 @@ public static class CanvasPlanning
         return tiles;
     }
 
+    /// <summary>
+    /// 把图块的原图范围映射为整数设备像素边界：四条边分别取整。相邻图块共享的边得到同一个整数，
+    /// 绘制时既无细缝也无重叠；直接按小数矩形绘制会在部分缩放/平移位置露出一像素背景细线。
+    /// </summary>
+    /// <param name = "bounds">图块在原图中的范围。</param>
+    /// <param name = "view">当前视口。</param>
+    /// <returns>设备像素左、上、右、下边界（右、下为开区间）。</returns>
+    public static (int Left, int Top, int Right, int Bottom) DeviceBounds(RectD bounds, CanvasViewport view)
+    {
+        if (view == null)
+        {
+            throw new ArgumentNullException(nameof(view), "视口不能为空。");
+        }
+
+        int Snap(double origin, double image) => (int)Math.Floor(origin + image * view.Scale + .5);
+        return (
+            Snap(view.Origin.X, bounds.X),
+            Snap(view.Origin.Y, bounds.Y),
+            Snap(view.Origin.X, bounds.Right),
+            Snap(view.Origin.Y, bounds.Bottom)
+        );
+    }
+
     /// <summary>返回保守量化后的原图LOD容差；1:1及放大显示时保持精确几何。</summary>
     /// <param name = "options">显示策略中的LOD开关和屏幕误差限制。</param>
     /// <param name = "scale">每个原图像素对应的控件单位数，必须为有效缩放比例。</param>
