@@ -16,7 +16,7 @@ public sealed class OpenCvBlobAnalyzer : IBlobAnalyzer
         if (frame == null) throw new ArgumentNullException(nameof(frame));
         if (options == null) throw new ArgumentNullException(nameof(options));
         if (!bounds.Fits(frame.Image)) throw new ArgumentOutOfRangeException(nameof(bounds));
-        if (!CvPixels.Supports(frame.Image)) throw new NotSupportedException("Gray16 Blob analysis requires an explicit conversion.");
+        VisionImage.RequireGray8(frame.Image, "连通域分析");
         token.ThrowIfCancellationRequested();
         InspectionMask.Validate(regionMask, frame.Image);
         using var gray = CvPixels.Gray(frame.Image);

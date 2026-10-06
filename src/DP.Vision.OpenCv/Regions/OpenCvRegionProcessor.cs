@@ -16,7 +16,7 @@ public sealed class OpenCvRegionProcessor : IRegionProcessor
         if (frame == null) throw new ArgumentNullException(nameof(frame));
         if (!bounds.Fits(frame.Image) || minimumGray < 0 || maximumGray > 255 || minimumGray > maximumGray)
             throw new ArgumentOutOfRangeException(nameof(bounds));
-        if (!CvPixels.Supports(frame.Image)) throw new NotSupportedException("Convert Gray16 explicitly first.");
+        VisionImage.RequireGray8(frame.Image, "阈值分割");
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216) throw new ArgumentException("Region pixel budget exceeded.");
         InspectionMask.Validate(mask, frame.Image); token.ThrowIfCancellationRequested();
         using var gray = CvPixels.Gray(frame.Image);

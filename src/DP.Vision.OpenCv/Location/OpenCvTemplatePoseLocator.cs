@@ -13,7 +13,7 @@ public sealed class OpenCvTemplatePoseLocator : ITemplatePoseLocator
     {
         if (frame == null || template == null || options == null) throw new ArgumentNullException(nameof(frame));
         if (!bounds.Fits(frame.Image)) throw new ArgumentOutOfRangeException(nameof(bounds));
-        if (!CvPixels.Supports(frame.Image) || !CvPixels.Supports(template.Image)) throw new NotSupportedException("Convert Gray16 explicitly first.");
+        VisionImage.RequireGray8(frame.Image, "模板匹配"); VisionImage.RequireGray8(template.Image, "模板匹配的模板图像");
         InspectionMask.Validate(regionMask, frame.Image);
         var info = template.Image.Info;
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216 || (long)info.Width * info.Height > 16777216) throw new ArgumentException("Pose image budget exceeded.");

@@ -26,7 +26,7 @@ public sealed class OpenCvTemplateLocator : ITemplateLocator
             || templateBounds.Width > search.Width || templateBounds.Height > search.Height)
             throw new ArgumentOutOfRangeException(nameof(search));
         if (double.IsNaN(minimumScore) || minimumScore < 0 || minimumScore > 1) throw new ArgumentOutOfRangeException(nameof(minimumScore));
-        if (!CvPixels.Supports(frame.Image) || !CvPixels.Supports(template.Image)) throw new NotSupportedException("Explicit Gray16 conversion required.");
+        VisionImage.RequireGray8(frame.Image, "模板匹配"); VisionImage.RequireGray8(template.Image, "模板匹配的模板图像");
         token.ThrowIfCancellationRequested();
         var templateReference = TemplateReference.FromImage(template.Image, templateBounds, token);
         // 模板必须整体落在区域内：搜索矩形收缩到区域外接框，结果不变、比较面积更小。
