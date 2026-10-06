@@ -156,7 +156,9 @@ public sealed class ZxingBarcodeDecoder : IMaskedBarcodeReader
                 r.BarcodeFormat == BarcodeFormat.QR_CODE && decoded!.Length == 1
                     ? TryQrGrid(source, bounds, scale, r.Text, token)
                     : null,
-                preprocessing
+                preprocessing,
+                (r.ResultPoints ?? Array.Empty<ResultPoint>()).Where(p => p != null)
+                    .Select(p => new PointD(bounds.X + p.X * scale, bounds.Y + p.Y * scale))
             ))
             .ToArray();
     }

@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Linq;
+
 namespace DP.Vision.Algorithms;
 
 /// <summary>实际码内容与几何；解码成功不代表外观合格。</summary>
@@ -22,12 +25,14 @@ public sealed class BarcodeObservation
     /// <param name = "bounds">选定的原图像素范围。</param>
     /// <param name = "moduleGrid">可选的实测QR网格，不能作为独立标准真值；已按原图坐标给出。</param>
     /// <param name = "preprocessing">空字符串表示原图直接读出；否则为读出前使用的预处理名称，说明原图可读性不足。</param>
+    /// <param name = "locatorPoints">引擎给出的码定位点，原图像素坐标；引擎不提供定位时为空。</param>
     public BarcodeObservation(
         string text,
         string format,
         PixelBounds bounds,
         BarcodeModuleGrid? moduleGrid,
-        string preprocessing
+        string preprocessing,
+        IEnumerable<PointD>? locatorPoints = null
     )
     {
         Text = text;
@@ -35,6 +40,9 @@ public sealed class BarcodeObservation
         Bounds = bounds;
         ModuleGrid = moduleGrid;
         Preprocessing = preprocessing ?? throw new System.ArgumentNullException(nameof(preprocessing));
+        LocatorPoints = (locatorPoints ?? Enumerable.Empty<PointD>()).ToArray();
+        if (LocatorPoints.Count > 0)
+            Location = new PointD(LocatorPoints.Average(p => p.X), LocatorPoints.Average(p => p.Y));
     }
 
     /// <summary>实际解码内容。</summary>
@@ -43,8 +51,14 @@ public sealed class BarcodeObservation
     /// <summary>解码得到的码制。</summary>
     public string Format { get; }
 
-    /// <summary>原图中的选定范围。</summary>
+    /// <summary>读取时的原图搜索范围；同一次读取的多个码相同，码自身位置见 <see cref="Location"/>。</summary>
     public PixelBounds Bounds { get; }
+
+    /// <summary>引擎给出的码定位点（如QR定位图案中心、一维码扫描线端点），原图像素坐标。</summary>
+    public IReadOnlyList<PointD> LocatorPoints { get; }
+
+    /// <summary>码在原图中的近似位置（定位点平均值），用于排序和显示；引擎不提供定位时为空。</summary>
+    public PointD? Location { get; }
 
     /// <summary>实测而非纠错后的QR结构。</summary>
     public BarcodeModuleGrid? ModuleGrid { get; }
