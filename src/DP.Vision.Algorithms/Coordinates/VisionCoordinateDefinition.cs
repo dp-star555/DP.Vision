@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,8 +10,10 @@ namespace DP.Vision.Algorithms;
 public enum EVisionCoordinateUnit
 {
     /// <summary>独立参考坐标的像素单位。</summary>
+    [Description("参考像素")]
     ReferencePixel = 0,
     /// <summary>由明确标定关系建立的毫米单位。</summary>
+    [Description("毫米")]
     Millimeter = 1
 }
 
