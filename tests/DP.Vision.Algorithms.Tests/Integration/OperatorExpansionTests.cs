@@ -119,6 +119,37 @@ public sealed class OperatorExpansionTests
         Assert.AreEqual(22.5, pair.Edges[1].Distance - pair.Edges[0].Distance, .3);
     }
 
+    /// <summary>彩色图按亮度转灰度后测量，结果与同等灰度图一致；16位灰度要求先预处理。</summary>
+    [TestMethod]
+    public void Caliper_MeasuresColorImagesThroughLuminance()
+    {
+        const int width = 64, height = 12;
+        var gray = new byte[width * height];
+        for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) gray[y * width + x] = (byte)Math.Round(255 / (1 + Math.Exp(-(x + .5 - 20.25) / 1.2)));
+        var options = new CaliperOptions(new PointD(.5, 5.5), new PointD(63.5, 5.5), polarity: ECaliperPolarity.Rising);
+        var measurer = new CaliperMeasurer();
+        using var grayImage = VisionImage.CopyFrom(new ImageInfo(width, height, EPixelLayout.Gray8), gray);
+        using var grayFrame = new ImageFrame("gray", grayImage);
+        var expected = measurer.Measure(grayFrame, options).Edges.Single().Position.X;
+        foreach (var layout in new[] { EPixelLayout.Bgr24, EPixelLayout.Rgb24, EPixelLayout.Bgra32, EPixelLayout.Rgba32 })
+        {
+            int channels = layout is EPixelLayout.Bgr24 or EPixelLayout.Rgb24 ? 3 : 4;
+            var color = new byte[gray.Length * channels];
+            for (int i = 0; i < gray.Length; i++) for (int c = 0; c < channels; c++) color[i * channels + c] = c == 3 ? (byte)17 : gray[i];
+            using var image = VisionImage.CopyFrom(new ImageInfo(width, height, layout), color); using var frame = new ImageFrame(layout.ToString(), image);
+            Assert.AreEqual(expected, measurer.Measure(frame, options).Edges.Single().Position.X, 1e-9, layout.ToString());
+        }
+        // 只有红色通道变化：亮度跨度约为0.299×255，边缘位置不变。
+        var red = new byte[gray.Length * 3];
+        for (int i = 0; i < gray.Length; i++) red[i * 3] = gray[i];
+        using var redImage = VisionImage.CopyFrom(new ImageInfo(width, height, EPixelLayout.Rgb24), red); using var redFrame = new ImageFrame("red", redImage);
+        var redResult = measurer.Measure(redFrame, options);
+        Assert.AreEqual(expected, redResult.Edges.Single().Position.X, .15);
+        Assert.AreEqual(255 * .299, redResult.Profile[^1] - redResult.Profile[0], 2);
+        using var deep = VisionImage.CopyFrom(new ImageInfo(width, height, EPixelLayout.Gray16), new byte[width * height * 2]); using var deepFrame = new ImageFrame("deep", deep);
+        Assert.ThrowsExactly<NotSupportedException>(() => measurer.Measure(deepFrame, options));
+    }
+
     /// <summary>离群点、重复性、退化和预算。</summary>
     [TestMethod]
     public void RobustLine_RejectsOutliersAndDegeneracyDeterministically()
