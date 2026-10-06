@@ -19,6 +19,7 @@ public sealed class VisionCanvasControl : Control, IVisionCanvas
     private readonly int _thread = Environment.CurrentManagedThreadId;
     private RenderCache<TileKey, Tile> _tiles;
     private RenderCache<MaskKey, Tile> _masks;
+    private readonly ImageAttributes _tileAttributes = TileAttributes();
 
     /// <summary>创建不加载厂商运行时、可安全用于设计器的画布。</summary>
     public VisionCanvasControl()
@@ -76,6 +77,13 @@ public sealed class VisionCanvasControl : Control, IVisionCanvas
 
     /// <summary>计入缓存的原生图块/掩码像素载荷，不含源图、几何和图形子系统开销。</summary>
     public long CachedPixelBytes => _tiles.Bytes + _masks.Bytes;
+
+    private static ImageAttributes TileAttributes()
+    {
+        var attributes = new ImageAttributes();
+        attributes.SetWrapMode(WrapMode.TileFlipXY);
+        return attributes;
+    }
 
     private RenderCache<TileKey, Tile> NewTileCache()
     {
@@ -186,13 +194,7 @@ public sealed class VisionCanvasControl : Control, IVisionCanvas
         {
             foreach (var request in requests)
             {
-                var tile = ImageTile(request);
-                g.DrawImage(
-                    tile.Bitmap,
-                    Screen(request.Bounds),
-                    new RectangleF(0, 0, tile.Bitmap.Width, tile.Bitmap.Height),
-                    GraphicsUnit.Pixel
-                );
+                DrawTile(g, ImageTile(request).Bitmap, request.Bounds);
             }
         }
 
@@ -219,13 +221,7 @@ public sealed class VisionCanvasControl : Control, IVisionCanvas
                             continue;
                         }
 
-                        var tile = MaskTile(visual, region, request);
-                        g.DrawImage(
-                            tile.Bitmap,
-                            Screen(request.Bounds),
-                            new RectangleF(0, 0, tile.Bitmap.Width, tile.Bitmap.Height),
-                            GraphicsUnit.Pixel
-                        );
+                        DrawTile(g, MaskTile(visual, region, request).Bitmap, request.Bounds);
                     }
                 }
                 else
@@ -276,6 +272,21 @@ public sealed class VisionCanvasControl : Control, IVisionCanvas
                 g.DrawRectangle(Pens.Black, p.X - 3, p.Y - 3, 6, 6);
             }
         }
+    }
+
+    /// <summary>
+    /// 图块按整数设备边界绘制：相邻图块共享同一条边，避免小数矩形之间露出背景细线；
+    /// 边缘采样用镜像环绕，避免 GDI+ 在位图边界混入透明像素。
+    /// </summary>
+    private void DrawTile(Graphics g, Bitmap bitmap, RectD bounds)
+    {
+        var (left, top, right, bottom) = CanvasPlanning.DeviceBounds(bounds, Viewport);
+        if (right <= left || bottom <= top)
+        {
+            return;
+        }
+
+        g.DrawImage(bitmap, Rectangle.FromLTRB(left, top, right, bottom), 0, 0, bitmap.Width, bitmap.Height, GraphicsUnit.Pixel, _tileAttributes);
     }
 
     private RectangleF Screen(RectD r)
@@ -606,6 +617,7 @@ public sealed class VisionCanvasControl : Control, IVisionCanvas
             _core.Dispose();
             _tiles.Dispose();
             _masks.Dispose();
+            _tileAttributes.Dispose();
         }
 
         base.Dispose(disposing);
