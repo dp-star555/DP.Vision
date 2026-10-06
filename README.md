@@ -20,7 +20,7 @@
 
 ### 文件与区域分析
 
-2026-10-02增加VisionPoint、VisionLine、IGeometryMeasurer/GeometryMeasurer，支持生成直线、点点/点线/线线距离及有限线段模式。测量在所选原图或业务局部空间计算，支持一般仿射；单位为image-px/reference-px或明确标定的mm。卡尺、拟合及模板父搜索需要相似变换。Workflow几何及坐标包10节点和双平台示例见[几何测量与复核](../DP.WorkFlow/docs/nodes/vision-geometry-measurement.md)。
+2026-10-02增加VisionPoint、VisionLine、IGeometryMeasurer/GeometryMeasurer，支持生成直线、点点/点线/线线距离及有限线段模式。测量在所选原图或业务局部空间计算，支持一般仿射；单位为image-px/reference-px或明确标定的mm。卡尺、拟合及模板父搜索需要相似变换。Workflow几何及坐标包9节点和双平台示例见[几何测量与复核](../DP.WorkFlow/docs/nodes/vision-geometry-measurement.md)。
 
 - `ImageFrame`：图像内容身份与独立租约，图像修改必须换身份。
 - `IImageFileReader` / `OpenCvImageFileReader`：真实文件解码，保持Gray8/BGR/BGRA/Gray16。
