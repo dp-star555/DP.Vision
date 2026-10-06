@@ -108,7 +108,7 @@ public sealed class CaliperResult
 [VisionCapability("measurement.caliper", "测量", "亚像素卡尺")]
 public interface ICaliperMeasurer
 {
-    /// <summary>接受8位灰度及8位彩色（按亮度转灰度，与OpenCV一致，Alpha不参与）；16位灰度须先预处理为8位，不隐式滤波或裁剪。</summary>
+    /// <summary>仅接受Gray8，不隐式滤波、裁剪或转换位深。</summary>
     /// <param name="frame">借用原图。</param><param name="options">采样配置。</param><param name="token">取消。</param><returns>同帧采样证据。</returns>
     CaliperResult Measure(ImageFrame frame, CaliperOptions options, CancellationToken token = default);
 }
@@ -122,7 +122,7 @@ public sealed class CaliperMeasurer : ICaliperMeasurer
         if (frame == null || options == null) throw new ArgumentNullException(nameof(frame));
         token.ThrowIfCancellationRequested();
         var info = frame.Image.Info;
-        if (info.Layout == EPixelLayout.Gray16) throw new NotSupportedException("卡尺不直接处理16位灰度图像，请先用“图像预处理”转换为8位灰度。");
+        if (info.Layout != EPixelLayout.Gray8) throw new NotSupportedException("Caliper requires explicit Gray8 preprocessing.");
         if ((long)info.Width * info.Height > 16777216) throw new ArgumentException("Caliper image budget exceeded.");
         double dx = options.End.X - options.Start.X, dy = options.End.Y - options.Start.Y, length = Math.Sqrt(dx * dx + dy * dy);
         dx /= length; dy /= length;
@@ -132,7 +132,7 @@ public sealed class CaliperMeasurer : ICaliperMeasurer
                 double x = p.X - dy * options.HalfWidth * options.BandSampleStep * sign, y = p.Y + dx * options.HalfWidth * options.BandSampleStep * sign;
                 if (x < .5 || y < .5 || x > info.Width - .5 || y > info.Height - .5) throw new ArgumentException("Caliper band extends outside sampleable pixel centers.");
             }
-        var pixels = GrayPixels(frame.Image, token);
+        var pixels = new byte[info.ByteLength]; frame.Image.CopyTo(0, pixels, 0, pixels.Length);
         int count = (int)Math.Ceiling(length) + 1; double step = length / (count - 1);
         var profile = new double[count]; var gradient = new double[count];
         for (int i = 0; i < count; i++)
@@ -166,24 +166,6 @@ public sealed class CaliperMeasurer : ICaliperMeasurer
             selected.Add(edge.Distance); edges.Add(edge);
         }
         return new CaliperResult(frame.FrameId, options, step, profile, edges.OrderBy(e => e.Distance));
-    }
-
-    // 彩色按OpenCV的8位定点亮度公式（R 0.299、G 0.587、B 0.114）转灰度，与其它视觉节点读到的灰度一致。
-    private static byte[] GrayPixels(IImageSource image, CancellationToken token)
-    {
-        var info = image.Info;
-        var raw = new byte[info.ByteLength]; image.CopyTo(0, raw, 0, raw.Length);
-        if (info.Layout == EPixelLayout.Gray8) return raw;
-        int channels = info.BytesPerPixel;
-        bool bgr = info.Layout is EPixelLayout.Bgr24 or EPixelLayout.Bgra32;
-        var gray = new byte[info.Width * info.Height];
-        for (int i = 0; i < gray.Length; i++)
-        {
-            if ((i & 0xFFFF) == 0) token.ThrowIfCancellationRequested();
-            int o = i * channels, r = raw[bgr ? o + 2 : o], g = raw[o + 1], b = raw[bgr ? o : o + 2];
-            gray[i] = (byte)((r * 4899 + g * 9617 + b * 1868 + 8192) >> 14);
-        }
-        return gray;
     }
 
     private static double Sample(byte[] pixels, int width, int height, double x, double y)
