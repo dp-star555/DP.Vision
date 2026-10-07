@@ -96,12 +96,12 @@ public sealed class VisionAlgorithmInspection
         foreach (var request in requests)
         {
             if (!seen.Add(request.BindingKey)) issues.Add(new VisionAlgorithmIssue("ALG_DUPLICATE_BINDING", "Inspection", request.BindingKey, request.Selection.ImplementationId, "", "算法绑定身份重复。"));
-            Walk(request.ContractType, request.Selection, request.RequiredFeatures, "", new HashSet<string>(StringComparer.Ordinal), new HashSet<VisionAlgorithmSelection>(), request, issues, resources, checkFiles, 0);
+            Walk(request.ContractType, request.Selection, request.RequiredFeatures, "", new HashSet<VisionAlgorithmSelection>(), request, issues, resources, checkFiles, 0);
         }
         return new VisionAlgorithmInspectionReport(issues);
     }
     private void Walk(Type contract, VisionAlgorithmSelection selection, IReadOnlyList<string> features, string dependencyPath,
-        HashSet<string> implementations, HashSet<VisionAlgorithmSelection> objects, VisionAlgorithmRequest request,
+        HashSet<VisionAlgorithmSelection> objects, VisionAlgorithmRequest request,
         List<VisionAlgorithmIssue> issues, VisionAlgorithmResourceContext? resources, bool checkFiles, int depth)
     {
         void Error(string code, string message, Exception? error = null) => issues.Add(new VisionAlgorithmIssue(code, "Inspection", request.BindingKey,
@@ -109,7 +109,6 @@ public sealed class VisionAlgorithmInspection
         if (selection == null || selection.Settings == null || selection.Dependencies == null) { Error("ALG_INVALID_SELECTION", "选择、设置或依赖配置为空。"); return; }
         if (depth > 64 || !objects.Add(selection)) { Error("ALG_DEPENDENCY_CYCLE", "选择配置存在引用循环或超过依赖深度预算。"); return; }
         if (string.IsNullOrWhiteSpace(selection.ImplementationId)) { Error("ALG_NO_SELECTION", "未选择算法实现。"); objects.Remove(selection); return; }
-        if (!implementations.Add(selection.ImplementationId)) { Error("ALG_DEPENDENCY_CYCLE", "算法依赖循环：" + selection.ImplementationId); objects.Remove(selection); return; }
         try
         {
             if (!_catalog.TryGet(selection.ImplementationId, out var descriptor)) { Error("ALG_IMPLEMENTATION_MISSING", "算法实现未安装或登记失败：" + selection.ImplementationId); return; }
@@ -156,13 +155,12 @@ public sealed class VisionAlgorithmInspection
                 { Error("ALG_RESOURCE_INVALID", error.Message, error); }
             }
             foreach (var duplicate in dependencies.GroupBy(d => d.Slot, StringComparer.Ordinal).Where(g => g.Count() > 1)) Error("ALG_DEPENDENCY_INVALID", "重复依赖槽位：" + duplicate.Key);
-            foreach (var unused in selection.Dependencies.Keys.Where(k => !dependencies.Any(d => d.Slot == k))) Error("ALG_DEPENDENCY_INVALID", "未声明的依赖槽位：" + unused);
             foreach (var dependency in dependencies.GroupBy(d => d.Slot, StringComparer.Ordinal).Select(g => g.First()))
                 if (!selection.Dependencies.TryGetValue(dependency.Slot, out var chosen)) Error("ALG_DEPENDENCY_MISSING", "缺少依赖选择：" + dependency.Slot);
-                else Walk(dependency.ContractType, chosen, Array.Empty<string>(), dependencyPath + "/" + dependency.Slot, implementations, objects, request, issues, resources, checkFiles, depth + 1);
+                else Walk(dependency.ContractType, chosen, Array.Empty<string>(), dependencyPath + "/" + dependency.Slot, objects, request, issues, resources, checkFiles, depth + 1);
         }
         catch (Exception error) when (error is not OutOfMemoryException && error is not OperationCanceledException) { Error("ALG_INSPECTION_FAILED", "引擎配置检查失败：" + error.Message, error); }
-        finally { implementations.Remove(selection.ImplementationId); objects.Remove(selection); }
+        finally { objects.Remove(selection); }
     }
     /// <summary>在独立副本上执行引擎升级规则，任何失败均保留原选择。</summary>
     public VisionAlgorithmSelection Migrate(VisionAlgorithmSelection selection)
@@ -179,7 +177,9 @@ public sealed class VisionAlgorithmInspection
                 var errors = validator.ValidateConfiguration(new VisionAlgorithmConfiguration(current.SettingsVersion, current.Settings));
                 if (errors.Count > 0) throw new InvalidOperationException("配置无法升级：" + string.Join("；", errors));
             }
-            foreach (var dependency in current.Dependencies.Values) Upgrade(dependency);
+            // 只升级当前配置实际声明的依赖；停用分支保留原配置，不要求其插件已安装。
+            foreach (var dependency in descriptor.Factory.GetDependencies(new VisionAlgorithmConfiguration(current.SettingsVersion, current.Settings)))
+                if (current.Dependencies.TryGetValue(dependency.Slot, out var active)) Upgrade(active);
         }
         Upgrade(clone);
         var contract = _catalog.GetRequired(clone.ImplementationId).ContractType;
@@ -190,7 +190,9 @@ public sealed class VisionAlgorithmInspection
     }
     internal static VisionAlgorithmSelection Clone(VisionAlgorithmSelection selection, HashSet<VisionAlgorithmSelection> path)
     {
-        if (selection == null || selection.Settings == null || selection.Dependencies == null || path.Count > 64 || !path.Add(selection)) throw new InvalidOperationException("选择配置无效或形成引用循环。");
+        if (selection == null || selection.Settings == null || selection.Dependencies == null) throw new InvalidOperationException("选择配置无效。");
+        if (path.Count > 64) throw new InvalidOperationException("选择配置超过依赖深度预算。");
+        if (!path.Add(selection)) throw new InvalidOperationException("选择配置形成引用循环。");
         try { return new VisionAlgorithmSelection { ImplementationId = selection.ImplementationId, SettingsVersion = selection.SettingsVersion,
             Settings = new Dictionary<string, string>(selection.Settings, StringComparer.Ordinal), Dependencies = selection.Dependencies.ToDictionary(p => p.Key, p => Clone(p.Value, path), StringComparer.Ordinal) }; }
         finally { path.Remove(selection); }

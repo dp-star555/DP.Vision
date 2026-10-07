@@ -32,11 +32,30 @@ public sealed class AlgorithmInspectionTests
         selection.Dependencies["unused"] = Selection();
         var requests = new[] { Request("node/first", Selection("missing")), Request("node/second", selection) };
         var report = new VisionAlgorithmInspection(catalog).Analyze(requests);
-        CollectionAssert.AreEquivalent(new[] { "ALG_IMPLEMENTATION_MISSING", "ALG_CONFIGURATION_INVALID", "ALG_PARAMETER_INVALID", "ALG_DEPENDENCY_INVALID", "ALG_DEPENDENCY_MISSING" }, report.Issues.Select(i => i.Code).ToArray());
+        CollectionAssert.AreEquivalent(new[] { "ALG_IMPLEMENTATION_MISSING", "ALG_CONFIGURATION_INVALID", "ALG_PARAMETER_INVALID", "ALG_DEPENDENCY_MISSING" }, report.Issues.Select(i => i.Code).ToArray());
         Assert.AreEqual("node/first", report.Issues.First().BindingKey);
         using var runtime = new VisionAlgorithmRuntime(catalog);
         var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareAsync(requests));
-        Assert.AreEqual(5, VisionAlgorithmExceptionDiagnostics.Read(error).Count);
+        Assert.AreEqual(4, VisionAlgorithmExceptionDiagnostics.Read(error).Count);
+    }
+
+    /// <summary>未启用的依赖保留配置，不因实现未安装阻止当前算法运行。</summary>
+    [TestMethod]
+    public async Task InactiveDependency_IsPreservedButNotPreparedOrUsed()
+    {
+        var catalog = Catalog(VisionAlgorithmFactory<ICounter>.Stateless(() => new Counter()));
+        var selection = Selection();
+        selection.Dependencies["disabled"] = Selection("uninstalled.plugin");
+        var request = Request("node", selection);
+        Assert.IsTrue(new VisionAlgorithmInspection(catalog).Analyze(new[] { request }).Success);
+        using var runtime = new VisionAlgorithmRuntime(catalog);
+
+        using var plan = await runtime.PrepareAsync(new[] { request });
+
+        Assert.AreEqual(8, plan.Invoke<ICounter, int>("node", counter => counter.Number));
+        Assert.AreEqual("uninstalled.plugin", selection.Dependencies["disabled"].ImplementationId);
+        var migrated = new VisionAlgorithmInspection(catalog).Migrate(selection);
+        Assert.AreEqual("uninstalled.plugin", migrated.Dependencies["disabled"].ImplementationId);
     }
 
     /// <summary>路径解析保持配方原值，未保存目录与越界引用明确拒绝。</summary>

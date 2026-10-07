@@ -156,9 +156,57 @@ public sealed class AlgorithmRuntimeTests
         var factory = new VisionAlgorithmFactory<ICounter>((_, _, _) => throw new AssertFailedException("不应创建"),
             _ => new[] { new VisionAlgorithmDependency("self", typeof(ICounter)) });
         using var runtime = Runtime(factory);
-        var request = Request("A"); request.Selection.Dependencies["self"] = Request("B").Selection;
+        var request = Request("A"); request.Selection.Dependencies["self"] = request.Selection;
         var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareAsync(new[] { request }));
         StringAssert.Contains(error.Message, "循环");
+    }
+
+    /// <summary>有限的依赖链允许复用同一实现，不将实现身份重复误判为配置引用循环。</summary>
+    [TestMethod]
+    public async Task RepeatedImplementation_CanComposeFiniteDependencyGraph()
+    {
+        int creates = 0, releases = 0;
+        var factory = new VisionAlgorithmFactory<ICounter>((configuration, dependencies, _) =>
+            Task.FromResult(new VisionAlgorithmActivation(configuration.Settings["resource"], EVisionAlgorithmSharing.SharedConcurrent, _ =>
+            {
+                creates++;
+                var number = dependencies.TryGetValue("self", out var child) ? ((ICounter)child).Number + 1 : 1;
+                return Task.FromResult(new VisionAlgorithmResource(new Counter(number, () => releases++)));
+            })), configuration => configuration.Settings.ContainsKey("next")
+                ? new[] { new VisionAlgorithmDependency("self", typeof(ICounter)) } : Array.Empty<VisionAlgorithmDependency>());
+        var catalog = VisionAlgorithmCatalog.Compose(new[] { new Module("test", r => r.Add(new VisionAlgorithmDescriptor("test.counter", "Test", "1", factory))) });
+        var request = Request("root", resource: "outer");
+        request.Selection.Settings["next"] = "true";
+        request.Selection.Dependencies["self"] = Request("child", resource: "inner").Selection;
+        Assert.IsTrue(new VisionAlgorithmInspection(catalog).Analyze(new[] { request }, checkFiles: false).Success);
+        Assert.AreEqual(0, creates);
+        using var runtime = new VisionAlgorithmRuntime(catalog);
+
+        using (var plan = await runtime.PrepareAsync(new[] { request }))
+        {
+            Assert.AreEqual(2, plan.Invoke<ICounter, int>("root", a => a.Number));
+            Assert.AreEqual(2, creates);
+        }
+        Assert.AreEqual(2, releases);
+    }
+
+    /// <summary>放宽实现复用不取消配置快照的递归预算。</summary>
+    [TestMethod]
+    public async Task DependencyDepthBudget_IsRejectedBeforeCreation()
+    {
+        int creates = 0;
+        using var runtime = Runtime(Factory(() => creates++, () => { }));
+        var request = Request("root");
+        var current = request.Selection;
+        for (var i = 0; i < 65; i++)
+        {
+            var child = Request("child").Selection;
+            current.Dependencies["child"] = child; current = child;
+        }
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareAsync(new[] { request }));
+
+        StringAssert.Contains(error.Message, "深度预算"); Assert.AreEqual(0, creates);
     }
 
     /// <summary>请求键、选择和特征不能依赖发现顺序。</summary>

@@ -58,7 +58,7 @@ public sealed class VisionAlgorithmRuntime : IDisposable
     public async Task<VisionAlgorithmPlan> PrepareAsync(IEnumerable<VisionAlgorithmRequest> requests, VisionAlgorithmResourceContext? resources, CancellationToken cancellationToken)
     {
         if (requests == null) throw new ArgumentNullException(nameof(requests));
-        var snapshots = requests.Select(r => new VisionAlgorithmRequest(r.BindingKey, r.ContractType, Snapshot(r.Selection, new HashSet<VisionAlgorithmSelection>()), r.RequiredFeatures)).ToArray();
+        var snapshots = requests.Select(r => new VisionAlgorithmRequest(r.BindingKey, r.ContractType, VisionAlgorithmInspection.Snapshot(r.Selection), r.RequiredFeatures)).ToArray();
         if (snapshots.GroupBy(r => r.BindingKey, StringComparer.Ordinal).Any(g => g.Count() > 1))
             throw new InvalidOperationException("计划存在重复算法绑定键。");
         var inspection = new VisionAlgorithmInspection(_catalog).Analyze(snapshots, resources);
@@ -100,7 +100,8 @@ public sealed class VisionAlgorithmRuntime : IDisposable
         List<ResourceEntry> leases, List<string> path, VisionAlgorithmResourceContext? resources, CancellationToken token)
     {
         if (string.IsNullOrWhiteSpace(selection.ImplementationId)) throw new InvalidOperationException("算法实现未明确选择。");
-        if (path.Contains(selection.ImplementationId)) throw new InvalidOperationException("算法依赖循环：" + string.Join(" → ", path.Concat(new[] { selection.ImplementationId })));
+        // 选择图已捕获为无引用循环的快照；有限的嵌套可合法复用同一实现。
+        if (path.Count > 64) throw new InvalidOperationException("算法依赖超过深度预算。");
         var descriptor = _catalog.GetRequired(selection.ImplementationId);
         if (!contract.IsAssignableFrom(descriptor.ContractType) && !descriptor.ContractType.IsAssignableFrom(contract)) throw new InvalidOperationException($"{descriptor.ImplementationId} 不提供 {contract.FullName}。");
         foreach (var feature in features)
@@ -112,7 +113,7 @@ public sealed class VisionAlgorithmRuntime : IDisposable
             if (resources != null) configuration = resources.Resolve(descriptor, configuration);
             var declared = descriptor.Factory.GetDependencies(configuration);
             if (declared.GroupBy(d => d.Slot, StringComparer.Ordinal).Any(g => g.Count() != 1)) throw new InvalidOperationException("工厂重复声明依赖槽位。");
-            if (selection.Dependencies.Keys.Any(key => !declared.Any(d => d.Slot == key))) throw new InvalidOperationException("配置包含未声明的依赖槽位。");
+            // 未启用的依赖配置保留以便再次启用；只准备当前工厂声明的槽位。
             var dependencies = new Dictionary<string, object>(StringComparer.Ordinal); var dependencyBindings = new List<Binding>();
             foreach (var dependency in declared.OrderBy(d => d.Slot, StringComparer.Ordinal))
             {
@@ -255,19 +256,6 @@ public sealed class VisionAlgorithmRuntime : IDisposable
 
     /// <summary>禁止新准备；已有计划与在途调用保持租约，完成后自然释放。</summary>
     public void Dispose() { lock (_gate) _disposed = true; }
-
-    private static VisionAlgorithmSelection Snapshot(VisionAlgorithmSelection selection, HashSet<VisionAlgorithmSelection> path)
-    {
-        if (selection == null || !path.Add(selection)) throw new InvalidOperationException("选择配置为空或形成引用循环。");
-        try
-        {
-            if (selection.Settings == null || selection.Dependencies == null) throw new InvalidOperationException("算法设置或依赖配置不能为空。");
-            return new VisionAlgorithmSelection { ImplementationId = selection.ImplementationId, SettingsVersion = selection.SettingsVersion,
-                Settings = new Dictionary<string, string>(selection.Settings, StringComparer.Ordinal),
-                Dependencies = selection.Dependencies.ToDictionary(p => p.Key, p => Snapshot(p.Value, path), StringComparer.Ordinal) };
-        }
-        finally { path.Remove(selection); }
-    }
 
     private static string Hash(string text)
     { using var sha = SHA256.Create(); return Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(text))); }

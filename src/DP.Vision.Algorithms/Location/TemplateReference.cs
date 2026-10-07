@@ -8,7 +8,7 @@ namespace DP.Vision.Algorithms;
 
 /// <summary>
 /// 模板参考：参考原点和X轴方向在模板像素边界坐标中的位置，以及标识参考内容的签名。
-/// 匹配结果用它算出本帧的参考点和参考方向；坐标系构建用签名识别模板是否变化。
+/// 匹配结果用它算出本帧的参考点和参考方向；签名用于追踪来源，不强制下游锁定某个模板。
 /// </summary>
 public sealed class TemplateReference
 {
@@ -35,7 +35,7 @@ public sealed class TemplateReference
     /// <summary>参考内容签名。</summary>
     public string Signature { get; }
 
-    /// <summary>把业务坐标定义和本参考绑定：签名随参考变化，下游按旧参考制作的ROI会被拒绝。</summary>
+    /// <summary>显式把参考证据附加到定义签名；仅供需要内容身份的调用方使用，工作流坐标来源绑定不依赖此方法。</summary>
     /// <param name="definition">业务坐标定义。</param>
     /// <returns>参考签名为本参考的定义。</returns>
     public VisionCoordinateDefinition Bind(VisionCoordinateDefinition definition)

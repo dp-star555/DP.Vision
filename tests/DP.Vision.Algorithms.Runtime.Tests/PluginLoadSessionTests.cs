@@ -73,10 +73,17 @@ public sealed class PluginLoadSessionTests
 
     private static string Stage()
     {
-        var repo = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "DP.Vision.sln"))) repo = repo.Parent;
-        Assert.IsNotNull(repo);
-        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        var output = new DirectoryInfo(AppContext.BaseDirectory);
+        var configuration = output.Name.StartsWith("debug", StringComparison.OrdinalIgnoreCase) ? "Debug"
+            : output.Name.StartsWith("release", StringComparison.OrdinalIgnoreCase) ? "Release" : output.Parent!.Name;
+        var artifactsBin = output.Parent!.Parent!.FullName;
+        var repo = output;
+        while (repo != null && !File.Exists(Path.Combine(repo.FullName, "DP.Vision.sln")))
+        {
+            var sibling = Path.Combine(repo.FullName, "DP.Vision");
+            if (File.Exists(Path.Combine(sibling, "DP.Vision.sln"))) { repo = new DirectoryInfo(sibling); break; }
+            repo = repo.Parent;
+        }
         var root = Path.Combine(AppContext.BaseDirectory, "PluginTestRuns", Guid.NewGuid().ToString("N"));
         Copy("Probe.Contracts", "netstandard2.0", "Probe.Contracts.dll", "contracts");
 #if NET48
@@ -92,7 +99,16 @@ public sealed class PluginLoadSessionTests
         void Copy(string project, string target, string file, string package)
         {
             var destination = Path.Combine(root, package); Directory.CreateDirectory(destination);
-            File.Copy(Path.Combine(repo!.FullName, "tests", "PluginFixtures", project, "bin", configuration, target, file), Path.Combine(destination, file));
+            // 独立 --artifacts-path 构建也使用本次生成的插件，不假定输出位于源码仓库的 bin/Debug。
+            var candidates = new[]
+            {
+                Path.Combine(artifactsBin, project, configuration.ToLowerInvariant() + "_" + target, file),
+                Path.Combine(artifactsBin, project, configuration.ToLowerInvariant(), file),
+                repo == null ? "" : Path.Combine(repo.FullName, "tests", "PluginFixtures", project, "bin", configuration, target, file)
+            };
+            var source = candidates.FirstOrDefault(File.Exists);
+            Assert.IsNotNull(source, "缺少已构建的插件测试文件：" + project + "/" + file);
+            File.Copy(source, Path.Combine(destination, file));
         }
     }
 }
