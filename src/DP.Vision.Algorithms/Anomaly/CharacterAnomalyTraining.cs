@@ -14,32 +14,43 @@ public sealed class CharacterAnomalyTraining
     /// <param name = "samples">实际使用的训练样本数。</param>
     /// <param name = "inkThreshold">缺墨阈值；来源图少于2张或模型不支持时为null。</param>
     /// <param name = "calibration">阈值标定说明（含缺墨标定）。</param>
+    /// <param name="normalization">训练采用的稳定行归一化方式。</param>
     public CharacterAnomalyTraining(
         string key,
-        PatchAnomalyModel model,
+        AnomalyModelAsset model,
         PatchAnomalyOptions options,
         int cellWidth,
         int cellHeight,
         int samples,
         double? inkThreshold,
-        string calibration
+        string calibration,
+        ECharacterNormalization normalization = ECharacterNormalization.LineInk
     )
     {
         Key = key ?? throw new ArgumentNullException(nameof(key));
-        Model = model ?? throw new ArgumentNullException(nameof(model));
+        Asset = model ?? throw new ArgumentNullException(nameof(model));
         Options = options ?? throw new ArgumentNullException(nameof(options));
         CellWidth = cellWidth;
         CellHeight = cellHeight;
         Samples = samples;
         InkThreshold = inkThreshold;
         Calibration = calibration ?? throw new ArgumentNullException(nameof(calibration));
+        if (!Enum.IsDefined(typeof(ECharacterNormalization), normalization))
+            throw new ArgumentOutOfRangeException(nameof(normalization));
+        Normalization = normalization;
     }
+
+    /// <summary>训练采用的行归一化方式。</summary>
+    public ECharacterNormalization Normalization { get; }
 
     /// <summary>模型键。</summary>
     public string Key { get; }
 
     /// <summary>局部块模型。</summary>
-    public PatchAnomalyModel Model { get; }
+    public PatchAnomalyModel Model => PatchAnomalyModel.FromBytes(Asset.Read("model.dppa"));
+
+    /// <summary>完整厂商模型资产，原生模型不经Patch解析。</summary>
+    public AnomalyModelAsset Asset { get; }
 
     /// <summary>训练所用局部块参数。</summary>
     public PatchAnomalyOptions Options { get; }

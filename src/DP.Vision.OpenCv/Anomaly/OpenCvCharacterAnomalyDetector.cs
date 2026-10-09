@@ -15,7 +15,13 @@ namespace DP.Vision.OpenCv;
 /// </summary>
 public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDetector
 {
-    private readonly IPatchAnomalyDetector _trainer;
+    private readonly IPatchAnomalyDetector? _legacyTrainer;
+    private readonly IAnomalyImplementation? _implementation;
+
+    /// <summary>使用厂商中立实现训练字符，归一化与模型推理分别负责。</summary>
+    /// <param name="implementation">明确实现；必须具有训练能力。</param>
+    public OpenCvCharacterAnomalyDetector(IAnomalyImplementation implementation)
+    { _implementation = implementation ?? throw new ArgumentNullException(nameof(implementation)); }
 
     /// <summary>使用手工特征实现训练。</summary>
     public OpenCvCharacterAnomalyDetector()
@@ -25,7 +31,7 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
     /// <param name = "trainer">局部块异常检测实现。</param>
     public OpenCvCharacterAnomalyDetector(IPatchAnomalyDetector trainer)
     {
-        _trainer = trainer ?? throw new ArgumentNullException(nameof(trainer));
+        _legacyTrainer = trainer ?? throw new ArgumentNullException(nameof(trainer));
     }
 
     /// <summary>归一化单元高度（像素）；模型单元高度与此不同时不检测。</summary>
@@ -63,6 +69,10 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
             {
                 token.ThrowIfCancellationRequested();
                 var all = group.ToArray();
+                if (all.Select(s => s.Line.Normalization).Distinct().Count() != 1)
+                    throw new ArgumentException(
+                        "同一字符模型不能混用ROI行几何和历史墨迹行几何，请统一提供制作行ROI。"
+                    );
                 int width = all.Max(s => CharacterCells.Width(s.Cell.Width, s.Line));
                 var chosen =
                     all.Length <= options.MaximumSamples ? all : Diverse(all, width, options.MaximumSamples);
@@ -79,11 +89,14 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
                     var origins = chosen
                         .Select(c => sources.FindIndex(g => ReferenceEquals(g, c.Gray)))
                         .ToList();
-                    var model =
-                        options.SourceLeaveOneOut && _trainer is IGroupedPatchAnomalyTrainer grouped
+                    var model = _legacyTrainer == null ? null :
+                        options.SourceLeaveOneOut && _legacyTrainer is IGroupedPatchAnomalyTrainer grouped
                             ? grouped.Train(crops, origins, options.Patch, token)
-                            : _trainer.Train(crops, options.Patch, token);
-                    double? ink = CharacterInkLoss.Supports(model)
+                            : _legacyTrainer.Train(crops, options.Patch, token);
+                    var asset = model != null ? PatchAnomalyImplementation.Capture(model, width, CharacterCells.CellHeight)
+                        : (_implementation as IAnomalyTrainer ?? throw new NotSupportedException("所选异常实现只有推理能力，请导入模型。"))
+                            .Train(crops, origins, new AnomalyTrainingOptions(options.Patch.ThresholdMargin), token);
+                    double? ink = model != null && CharacterInkLoss.Supports(model)
                         ? CharacterInkLoss.Calibrate(
                             CharacterInkLoss.Planes(model),
                             origins,
@@ -95,18 +108,19 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
                     trained.Add(
                         new CharacterAnomalyTraining(
                             group.Key,
-                            model,
+                            asset,
                             options.Patch,
                             width,
                             CharacterCells.CellHeight,
                             chosen.Length,
                             ink,
-                            model.Calibration
+                            asset.Calibration
                                 + (
                                     ink is double t
                                         ? $"；缺墨阈值{t:F3}（按来源图留一）"
                                         : "；缺墨检查未标定（良品来源图少于2张）"
-                                )
+                                ),
+                            all[0].Line.Normalization
                         )
                     );
                 }
@@ -150,11 +164,18 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
             var widths = all.Where(s => s.SampleIndex < training.Count)
                 .GroupBy(s => s.Key)
                 .ToDictionary(g => g.Key, g => g.Max(s => CharacterCells.Width(s.Cell.Width, s.Line)));
+            var modes = all.Where(s => s.SampleIndex < training.Count)
+                .GroupBy(s => s.Key)
+                .ToDictionary(g => g.Key, g => g.Select(s => s.Line.Normalization).Distinct().Single());
             foreach (var s in all)
             {
                 token.ThrowIfCancellationRequested();
                 if (widths.TryGetValue(s.Key, out int width))
                 {
+                    if (s.Line.Normalization != modes[s.Key])
+                        throw new ArgumentException(
+                            "训练与对照字符必须采用同一行归一化方式，请一致提供制作行ROI。"
+                        );
                     using var cell = CharacterCells.Normalize(s.Gray, s.Line, s.Cell, width);
                     cells.Add(
                         new NormalizedCharacterCell(
@@ -205,6 +226,7 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
 
         using var gray = CvPixels.Gray(image);
         var line = CharacterCells.Measure(gray, characters);
+        var roiLine = CharacterCells.MeasureRegion(gray, crop);
         var region = CvPixels.Rect(crop) & new Rect(0, 0, gray.Cols, gray.Rows);
         var work = characters
             .Where(c => c.Key != null)
@@ -213,14 +235,22 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
         var outcomes = new (CharacterAnomalyOutcome Outcome, Mat? Heat)[work.Count];
         void Run(int i)
         {
-            outcomes[i] = One(gray, line, region, work[i].character, work[i].reference, inkLoss, token);
+            outcomes[i] = One(
+                gray,
+                work[i].reference?.Normalization == ECharacterNormalization.LineRegion ? roiLine : line,
+                region,
+                work[i].character,
+                work[i].reference,
+                inkLoss,
+                token
+            );
         }
 
         try
         {
             if (
                 work.Count > 1
-                && work.All(w => w.reference == null || w.reference.Detector is OpenCvPatchAnomalyDetector)
+                && work.All(w => w.reference == null || w.reference.Runtime is PatchAnomalyRuntime)
             )
             {
                 // 手工特征实现线程安全，各字符相互独立。
@@ -320,7 +350,7 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
 
         using var cell = CharacterCells.Normalize(gray, line, c.Bounds, reference.CellWidth);
         using var source = CvPixels.Buffer(cell.Image);
-        using var result = reference.Detector.Detect(source, reference.Model, reference.Detection, token);
+        using var result = reference.Runtime.Inspect(source, reference.Detection, token);
         var findings = result
             .Findings.Select(f =>
                 f.Bounds is { } b
@@ -338,12 +368,13 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
         using var local = result.HeatMap != null ? CvPixels.Mat(result.HeatMap) : new Mat();
         double? inkScore = null,
             inkThreshold = null;
+        var legacy = (reference.Runtime as PatchAnomalyRuntime)?.Model;
         var ink =
             inkLoss
             && completed
             && reference.InkThreshold != null
-            && CharacterInkLoss.Supports(reference.Model)
-                ? CharacterInkLoss.For(reference.Model)
+            && legacy != null && CharacterInkLoss.Supports(legacy)
+                ? CharacterInkLoss.For(legacy)
                 : null;
         if (ink != null && reference.InkThreshold is double threshold)
         {
@@ -472,7 +503,20 @@ public sealed partial class OpenCvCharacterAnomalyDetector : ICharacterAnomalyDe
                 gray = grays[sample.Image] = CvPixels.Gray(sample.Image);
             }
 
-            var line = CharacterCells.Measure(gray, sample.Characters);
+            var line = sample.Bounds is PixelBounds bounds
+                ? CharacterCells.MeasureRegion(gray, bounds)
+                : CharacterCells.Measure(gray, sample.Characters);
+            if (
+                line == null
+                && sample.Characters.Any(c =>
+                    c.Key != null
+                    && CharacterIdentity.IsGlyph(c.Character)
+                    && !(c.Character.Length == 1 && CharacterCells.IsAlphanumeric(c.Character[0]))
+                )
+            )
+                throw new ArgumentException(
+                    "纯标点/符号行或不可测量Unicode行需要显式稳定单行ROI，不能按单字墨迹缩放。"
+                );
             if (line == null)
             {
                 continue;

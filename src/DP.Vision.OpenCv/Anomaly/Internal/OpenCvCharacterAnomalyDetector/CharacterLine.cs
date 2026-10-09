@@ -1,3 +1,5 @@
+using DP.Vision.Algorithms;
+
 namespace DP.Vision.OpenCv;
 
 public sealed partial class OpenCvCharacterAnomalyDetector
@@ -5,12 +7,20 @@ public sealed partial class OpenCvCharacterAnomalyDetector
     /// <summary>一行文字的几何：大写字母/数字顶线、基线（原图纵坐标）及纸色灰度。</summary>
     private sealed class CharacterLine
     {
-        internal CharacterLine(double capTop, double baseline, byte paper)
+        internal CharacterLine(
+            double capTop,
+            double baseline,
+            byte paper,
+            ECharacterNormalization normalization = ECharacterNormalization.LineInk
+        )
         {
             CapTop = capTop;
             Baseline = baseline;
             Paper = paper;
+            Normalization = normalization;
         }
+
+        internal ECharacterNormalization Normalization { get; }
 
         /// <summary>大写字母/数字顶线（原图纵坐标）。</summary>
         internal double CapTop { get; }

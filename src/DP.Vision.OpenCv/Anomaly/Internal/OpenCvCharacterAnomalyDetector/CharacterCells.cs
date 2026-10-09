@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using DP.Vision.Algorithms;
 using OpenCvSharp;
@@ -29,9 +30,45 @@ public sealed partial class OpenCvCharacterAnomalyDetector
 
         private static int Pad => (int)Math.Round(HorizontalPad * CapHeight);
 
-        private static bool Tall(char c)
+        private static bool Tall(string label)
         {
-            return c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || "bdfhklt".IndexOf(c) >= 0;
+            return label.Length != 1
+                || label[0] > 127
+                || label[0] >= '0' && label[0] <= '9'
+                || label[0] >= 'A' && label[0] <= 'Z'
+                || "bdfhklt".IndexOf(label[0]) >= 0;
+        }
+
+        private static bool Anchor(string label)
+        {
+            if (!CharacterIdentity.IsGlyph(label))
+                return false;
+            var category = CharUnicodeInfo.GetUnicodeCategory(label, 0);
+            return category >= UnicodeCategory.UppercaseLetter && category <= UnicodeCategory.OtherLetter
+                || category >= UnicodeCategory.DecimalDigitNumber && category <= UnicodeCategory.OtherNumber;
+        }
+
+        /// <summary>稳定单行ROI几何，不从当前字符墨迹推导比例；缺笔、纯标点或空墨不会被缩放补齐。</summary>
+        internal static CharacterLine? MeasureRegion(Mat gray, PixelBounds bounds)
+        {
+            if (
+                bounds.X < 0
+                || bounds.Y < 0
+                || bounds.Width < 4
+                || bounds.Height < 4
+                || (long)bounds.X + bounds.Width > gray.Cols
+                || (long)bounds.Y + bounds.Height > gray.Rows
+            )
+                return null;
+            using var crop = new Mat(gray, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
+            double height = bounds.Height / (1 + 2 * VerticalPad);
+            double top = bounds.Y + VerticalPad * height;
+            return new CharacterLine(
+                top,
+                top + height,
+                Percentile(crop, .98),
+                ECharacterNormalization.LineRegion
+            );
         }
 
         /// <summary>ASCII字母或数字：参与行几何测量。</summary>
@@ -40,10 +77,7 @@ public sealed partial class OpenCvCharacterAnomalyDetector
             return c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z';
         }
 
-        private static bool Descender(char c)
-        {
-            return "gjpqy".IndexOf(c) >= 0;
-        }
+        private static bool Descender(string label) => label.Length == 1 && "gjpqy".IndexOf(label[0]) >= 0;
 
         private static double Median(IEnumerable<double> values)
         {
@@ -56,9 +90,7 @@ public sealed partial class OpenCvCharacterAnomalyDetector
         /// <param name = "characters">该行字符（原图坐标），身份用于区分高字符和下伸字符。</param>
         internal static CharacterLine? Measure(Mat gray, IReadOnlyList<CharacterAnomalyCharacter> characters)
         {
-            var alnum = characters
-                .Where(c => c.Character.Length == 1 && IsAlphanumeric(c.Character[0]))
-                .ToArray();
+            var alnum = characters.Where(c => Anchor(c.Character)).ToArray();
             if (alnum.Length == 0)
             {
                 return null;
@@ -78,7 +110,7 @@ public sealed partial class OpenCvCharacterAnomalyDetector
             using var ink = new Mat();
             Cv2.Threshold(crop, ink, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
             byte paper = Percentile(crop, .98);
-            var tops = new List<(char c, double top, double bottom)>();
+            var tops = new List<(string c, double top, double bottom)>();
             foreach (var c in alnum)
             {
                 var cell = new Rect(c.Bounds.X, c.Bounds.Y, c.Bounds.Width, c.Bounds.Height) & union;
@@ -106,7 +138,7 @@ public sealed partial class OpenCvCharacterAnomalyDetector
 
                 if (top >= 0)
                 {
-                    tops.Add((c.Character[0], cell.Y + top, cell.Y + bottom));
+                    tops.Add((c.Character, cell.Y + top, cell.Y + bottom));
                 }
             }
 

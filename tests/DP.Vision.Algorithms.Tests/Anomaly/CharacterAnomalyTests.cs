@@ -79,15 +79,8 @@ public sealed class CharacterAnomalyTests
         return trained.ToDictionary(
             t => t.Key,
             t => new CharacterAnomalyReference(
-                t.Model,
-                patches,
-                new PatchAnomalyOptions(
-                    patchSize: t.Model.PatchSize,
-                    stride: t.Options.Stride,
-                    threshold: t.Model.Threshold,
-                    minimumArea: t.Options.MinimumArea,
-                    localRadius: t.Model.Radius
-                ),
+                new PatchAnomalyImplementation(t.Asset.ImplementationId, patches).Load(t.Asset),
+                new AnomalyDetectionOptions(t.Asset.Threshold, t.Options.MinimumArea),
                 t.CellWidth,
                 t.CellHeight,
                 t.InkThreshold

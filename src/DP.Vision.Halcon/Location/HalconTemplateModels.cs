@@ -18,6 +18,12 @@ public sealed class HalconVisionAlgorithmModule : IVisionAlgorithmModule
     public void Register(IVisionAlgorithmRegistration registrations)
     {
         if (registrations == null) throw new ArgumentNullException(nameof(registrations));
+        foreach (var method in new[] { EHalconAnomalyMethod.AnomalyDetection, EHalconAnomalyMethod.Variation })
+        {
+            var implementation = new HalconAnomalyImplementation(method);
+            registrations.Add(new VisionAlgorithmDescriptor(implementation.ImplementationId, "HALCON", "1", implementation,
+                features: new[] { "cpu", "normal-only-training", "native-model-asset", "pixel-anomaly-map" }));
+        }
         foreach (bool shape in new[] { false, true })
         {
             var factory = new HalconTemplateModelFactory(shape);

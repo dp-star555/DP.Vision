@@ -60,15 +60,12 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             return new CharacterSegmentation(status, reason, "none", count, Array.Empty<CharacterPatch>());
         }
 
-        if (string.IsNullOrEmpty(text) || text.Length > 128 || text.Any(c => c < 32 || c > 126))
+        if (!CharacterIdentity.TryTokenizeLine(text, out var tokens))
         {
-            return Stop("Only printable ASCII lines up to 128 tokens are supported.", status: "unsupported");
-        }
-
-        var tokens = text.Where(c => !char.IsWhiteSpace(c)).ToArray();
-        if (!tokens.Any(CharacterIdentity.IsAlphanumeric))
-        {
-            return Stop("No alphanumeric tokens.", status: "unsupported");
+            return Stop(
+                "Only printable Unicode single lines up to 128 characters are supported; spaces are not glyphs.",
+                status: "unsupported"
+            );
         }
 
         if (
@@ -128,6 +125,13 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             MatType.CV_32S
         );
         int minimum = Math.Max(2, (int)(bounds.Height * .04));
+        if (tokens.Any(c => char.IsPunctuation(c, 0) || char.IsSymbol(c, 0)))
+        {
+            // 点号/冒号等可能仅占几像素，不能用字母数字的行高噪点门槛删掉；
+            // 数量、边界、颜色、切线和完成性检查仍然保留，不会凭身份补造墨迹。
+            minimum = 2;
+        }
+
         var keep = new bool[components];
         for (int i = 1; i < components; i++)
         {
@@ -230,7 +234,7 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
         if (
             candidates
             && count != tokens.Length
-            && tokens.All(CharacterIdentity.IsAlphanumeric)
+            && tokens.All(c => c.Length == 1 && CharacterIdentity.IsAlphanumeric(c[0]))
             && runs.Count < tokens.Length
             && groups.Count < tokens.Length
         )
@@ -317,11 +321,6 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
         for (int i = 0; i < tokens.Length; i++)
         {
             token.ThrowIfCancellationRequested();
-            if (!CharacterIdentity.IsAlphanumeric(tokens[i]))
-            {
-                continue;
-            }
-
             int x0,
                 x1;
             using var cleaned = chip.Clone();
@@ -448,7 +447,7 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             using var patch = new Mat(cleaned, new Rect(x0, y0, x1 - x0, y1 - y0));
             patches.Add(
                 new CharacterPatch(
-                    tokens[i].ToString(),
+                    tokens[i],
                     i,
                     new PixelRect(bounds.X + x0, bounds.Y + y0, x1 - x0, y1 - y0),
                     CvPixels.Buffer(patch),
@@ -515,28 +514,27 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
     public CharacterSegmentation EqualCells(IImageSource frame, PixelRect bounds, string expected)
     {
         if (
-            string.IsNullOrEmpty(expected)
-            || expected.Length > 128
-            || expected.Any(c => !CharacterIdentity.IsAlphanumeric(c))
+            !CharacterIdentity.TryTokenizeLine(expected, out var identities)
+            || string.Concat(identities) != expected
         )
         {
             throw new ArgumentException("Invalid explicit identities.");
         }
 
-        if (!bounds.Fits(frame) || bounds.Width < expected.Length)
+        if (!bounds.Fits(frame) || bounds.Width < identities.Length)
         {
             throw new ArgumentException("Invalid equal cells.");
         }
 
         using var raw = CvPixels.Mat(frame);
         using var chars = new OwnedPatches();
-        for (int i = 0; i < expected.Length; i++)
+        for (int i = 0; i < identities.Length; i++)
         {
-            int left = bounds.X + i * bounds.Width / expected.Length,
-                right = bounds.X + (i + 1) * bounds.Width / expected.Length;
+            int left = bounds.X + i * bounds.Width / identities.Length,
+                right = bounds.X + (i + 1) * bounds.Width / identities.Length;
             var box = new PixelRect(left, bounds.Y, right - left, bounds.Height);
             using var crop = new Mat(raw, CvPixels.Rect(box));
-            chars.Add(new CharacterPatch(expected[i].ToString(), i, box, CvPixels.Buffer(crop)));
+            chars.Add(new CharacterPatch(identities[i], i, box, CvPixels.Buffer(crop)));
         }
 
         return new CharacterSegmentation(

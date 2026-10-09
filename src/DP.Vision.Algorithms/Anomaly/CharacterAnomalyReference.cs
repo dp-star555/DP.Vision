@@ -2,48 +2,34 @@ using System;
 
 namespace DP.Vision.Algorithms;
 
-/// <summary>检测时一个字符的参考：模型、与其特征来源匹配的检测实现、检测参数、单元尺寸及缺墨阈值。</summary>
+/// <summary>借用的字符运行实例及制作几何；不要求模型是Patch记忆库。</summary>
 public sealed class CharacterAnomalyReference
 {
-    /// <summary>创建字符参考。</summary>
-    /// <param name = "model">局部块模型。</param>
-    /// <param name = "detector">与模型特征来源一致的检测实现，调用方拥有。</param>
-    /// <param name = "detection">检测参数（步长、阈值、最小面积）。</param>
-    /// <param name = "cellWidth">训练时的归一化单元宽度。</param>
-    /// <param name = "cellHeight">训练时的归一化单元高度，与当前实现不一致时不检测。</param>
-    /// <param name = "inkThreshold">缺墨阈值；null时不做缺墨检查。</param>
-    public CharacterAnomalyReference(
-        PatchAnomalyModel model,
-        IPatchAnomalyDetector detector,
-        PatchAnomalyOptions detection,
-        int cellWidth,
-        int cellHeight,
-        double? inkThreshold
-    )
+    /// <summary>创建厂商中立参考。</summary>
+    /// <param name="runtime">借用实例，租约由调用者管理。</param>
+    /// <param name="detection">本次检测参数。</param>
+    /// <param name="cellWidth">制作单元宽度。</param>
+    /// <param name="cellHeight">制作单元高度。</param>
+    /// <param name="inkThreshold">旧手工模型的可选缺墨阈值。</param>
+    /// <param name="normalization">制作行几何方式。</param>
+    public CharacterAnomalyReference(ILoadedAnomalyModel runtime, AnomalyDetectionOptions detection,
+        int cellWidth, int cellHeight, double? inkThreshold, ECharacterNormalization normalization = ECharacterNormalization.LineInk)
     {
-        Model = model ?? throw new ArgumentNullException(nameof(model));
-        Detector = detector ?? throw new ArgumentNullException(nameof(detector));
+        Runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         Detection = detection ?? throw new ArgumentNullException(nameof(detection));
-        CellWidth = cellWidth;
-        CellHeight = cellHeight;
-        InkThreshold = inkThreshold;
+        if (cellWidth < 1 || cellHeight < 1 || !Enum.IsDefined(typeof(ECharacterNormalization), normalization)) throw new ArgumentException("字符制作几何无效。");
+        CellWidth = cellWidth; CellHeight = cellHeight; InkThreshold = inkThreshold; Normalization = normalization;
     }
-
-    /// <summary>局部块模型。</summary>
-    public PatchAnomalyModel Model { get; }
-
-    /// <summary>检测实现。</summary>
-    public IPatchAnomalyDetector Detector { get; }
-
+    /// <summary>借用的厂商运行实例。</summary>
+    public ILoadedAnomalyModel Runtime { get; }
     /// <summary>检测参数。</summary>
-    public PatchAnomalyOptions Detection { get; }
-
-    /// <summary>归一化单元宽度。</summary>
+    public AnomalyDetectionOptions Detection { get; }
+    /// <summary>制作宽度。</summary>
     public int CellWidth { get; }
-
-    /// <summary>归一化单元高度。</summary>
+    /// <summary>制作高度。</summary>
     public int CellHeight { get; }
-
-    /// <summary>缺墨阈值。</summary>
+    /// <summary>制作行归一化方式。</summary>
+    public ECharacterNormalization Normalization { get; }
+    /// <summary>旧手工缺墨标定阈值。</summary>
     public double? InkThreshold { get; }
 }

@@ -49,14 +49,24 @@ internal static class CountGuidedCuts
     /// 近似等线无衬线字体的相对字宽：窄字符、标点与宽字符分别加权；未知字符按1处理。
     /// 只作切割先验，不要求与实际字体一致。
     /// </summary>
-    internal static double RelativeWidth(char c)
+    internal static double RelativeWidth(string label)
     {
-        if ("Iil1|!.,:;'`".IndexOf(c) >= 0)
+        if (
+            label.Length != 1
+            || System.Globalization.CharUnicodeInfo.GetUnicodeCategory(label, 0)
+                == System.Globalization.UnicodeCategory.OtherLetter
+        )
+        {
+            return 1.6;
+        }
+
+        char c = label[0];
+        if ("Iil1|!.,:;'`。，、：；！？".IndexOf(c) >= 0)
         {
             return .35;
         }
 
-        if ("()[]{}-".IndexOf(c) >= 0)
+        if ("()[]{}-（）【】《》“”‘’".IndexOf(c) >= 0)
         {
             return .5;
         }
@@ -73,7 +83,7 @@ internal static class CountGuidedCuts
     /// <param name = "tokens">按顺序排列的非空白字符。</param>
     /// <param name = "token">协作式取消标记。</param>
     /// <returns>找不到每字都有墨迹的切割时返回null。</returns>
-    internal static Result? Cut(Mat ink, IReadOnlyList<char> tokens, CancellationToken token)
+    internal static Result? Cut(Mat ink, IReadOnlyList<string> tokens, CancellationToken token)
     {
         int n = tokens.Count,
             width = ink.Cols,

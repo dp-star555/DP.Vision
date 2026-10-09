@@ -24,7 +24,8 @@ public sealed class HalconTemplateModelTests
     public void ModuleRegistersPairedBuildersAndHonestFeatures()
     {
         var registration = new Registration(); new HalconVisionAlgorithmModule().Register(registration);
-        Assert.AreEqual(4, registration.Items.Count);
+        Assert.AreEqual(6, registration.Items.Count);
+        Assert.AreEqual(typeof(IAnomalyImplementation), registration.Items.Single(d => d.ImplementationId == HalconAnomalyImplementation.DeepId).ContractType);
         var ncc = registration.Items.Single(d => d.ImplementationId == "halcon.template-ncc-model");
         var shape = registration.Items.Single(d => d.ImplementationId == "halcon.template-shape-model");
         Assert.IsFalse(ncc.Features.Contains("scale")); Assert.IsTrue(shape.Features.Contains("scale"));
@@ -49,23 +50,19 @@ public sealed class HalconTemplateModelTests
         var repo = new DirectoryInfo(AppContext.BaseDirectory);
         while (repo != null && !File.Exists(Path.Combine(repo.FullName, "DP.Vision.sln"))) repo = repo.Parent;
         Assert.IsNotNull(repo);
-#if NET48
-        const string target = "net48";
-#else
-        const string target = "net8.0-windows";
-#endif
-        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
-        var output = Path.Combine(repo.FullName, "src", "DP.Vision.Halcon", "bin", configuration, target);
+        // 使用实际已装配程序集目录，支持常规bin与独立--artifacts-path，不猜配置名。
+        var output = Path.GetDirectoryName(typeof(HalconVisionAlgorithmModule).Assembly.Location)!;
         var root = Path.Combine(AppContext.BaseDirectory, "PluginTestRuns", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
-        foreach (var file in Directory.GetFiles(output, "*.dll").Where(p => Path.GetFileName(p) != "System.ValueTuple.dll"
-            && (!Path.GetFileName(p).StartsWith("DP.Vision", StringComparison.Ordinal) || Path.GetFileName(p) == "DP.Vision.Halcon.dll"))) File.Copy(file, Path.Combine(root, Path.GetFileName(file)));
+        foreach (var file in Directory.GetFiles(output, "*.dll").Where(p => Path.GetFileName(p) == "DP.Vision.Halcon.dll" || Path.GetFileName(p) == "halcondotnet.dll")) File.Copy(file, Path.Combine(root, Path.GetFileName(file)));
         var deps = Path.Combine(output, "DP.Vision.Halcon.deps.json");
         if (File.Exists(deps)) File.Copy(deps, Path.Combine(root, Path.GetFileName(deps)));
         var session = new PluginLoadSession();
         session.RegisterSharedAssembly(typeof(DP.Vision.Acquisition.IVisionAcquisitionDriverModule).Assembly);
         var catalog = new VisionAlgorithmModuleLoader(session).Load(root);
         Assert.AreEqual(0, catalog.Diagnostics.Count, string.Join("；", catalog.Diagnostics.Select(d => d.Reason)));
-        Assert.AreEqual(4, catalog.Implementations.Count);
+        Assert.AreEqual(6, catalog.Implementations.Count);
+        Assert.AreEqual(typeof(IAnomalyImplementation), catalog.GetRequired(HalconAnomalyImplementation.DeepId).ContractType);
+        Assert.IsTrue(catalog.GetRequired(HalconAnomalyImplementation.VariationId).Factory is IAnomalyImplementation);
         Assert.AreEqual(typeof(IPreparedVisionTemplateMatcher), catalog.GetRequired("halcon.template-ncc-model").ContractType);
         Assert.IsTrue(catalog.GetRequired("halcon.template-shape-model").Factory is IVisionTemplatePreviewFactory);
         var cameras = session.Discover<DP.Vision.Acquisition.IVisionAcquisitionDriverModule>(root);
