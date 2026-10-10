@@ -18,6 +18,7 @@ internal static class HalconTemplateNative
     internal static void CheckEnvironment()
     {
 #if HALCON_SDK
+        HalconMemoryPolicy.Apply();
         using var image = new HImage(); image.GenImageConst("byte", 1, 1);
 #else
         throw MissingSdk();
@@ -27,6 +28,7 @@ internal static class HalconTemplateNative
     {
         token.ThrowIfCancellationRequested();
 #if HALCON_SDK
+        HalconMemoryPolicy.Apply();
         var definition = VisionTemplateStore.CopyDefinition(request.Definition); definition.Validate();
         var image = request.Source.Image;
         if (image.Info.Width != definition.SourceWidth || image.Info.Height != definition.SourceHeight) throw new ArgumentException("样图尺寸与模板定义不一致。");
@@ -40,12 +42,15 @@ internal static class HalconTemplateNative
             for (int x = definition.X; x < definition.X + definition.Width; x++)
                 if (request.Mask == null || request.Mask.Contains(new PointD(x + .5, y + .5))) mask[y * definition.SourceWidth + x] = 255;
         }
-        var local = CropMask(mask, definition);
+        var localMask = CropMask(mask, definition);
         using var full = Image(pixels, definition.SourceWidth, definition.SourceHeight);
-        using var crop = full.CropPart(definition.Y, definition.X, definition.Width, definition.Height);
-        using var region = Region(local, definition.Width, definition.Height);
-        using var domain = crop.ReduceDomain(region);
-        if (region.AreaCenter(out double row, out double column) <= 0) throw new ArgumentException("模板有效区域为空。");
+        // 在整张样图上限定模板区域建模：高层金字塔平滑/缩小时用到模板框外的真实像素，
+        // 避免裁成小图后边缘轮廓在高层失真，导致层数≥3时顶层分数过低而找不到。
+        using var local = Region(localMask, definition.Width, definition.Height);
+        if (local.AreaCenter(out double row, out double column) <= 0) throw new ArgumentException("模板有效区域为空。");
+        // 重心按模板框坐标计算：下面设置的原点偏移相对区域重心，平移不影响，模型原点仍在模板框中心。
+        using var region = local.MoveRegion(definition.Y, definition.X);
+        using var domain = full.ReduceDomain(region);
         byte[] native;
         using (var stream = new MemoryStream())
         {
@@ -81,6 +86,7 @@ internal static class HalconTemplateNative
     {
         token.ThrowIfCancellationRequested();
 #if HALCON_SDK
+        HalconMemoryPolicy.Apply();
         return new HalconPreparedTemplateMatcher(snapshot, shape, token);
 #else
         throw MissingSdk();
@@ -148,7 +154,52 @@ internal static class HalconTemplateNative
 #endif
 }
 
+/// <summary>HALCON搜索的金字塔层数上限与搜索区域裁剪；纯计算，不依赖SDK。</summary>
+internal static class HalconTemplatePyramid
+{
+    /// <summary>顶层模板最短边至少约16像素：细长的文字模板不使用自动层数选出的过多层。制作时指定了层数则不超过它。</summary>
+    /// <param name="templateWidth">模板宽。</param><param name="templateHeight">模板高。</param>
+    /// <param name="buildLevels">制作时的层数，0为自动。</param><returns>搜索层数1..6。</returns>
+    internal static int SearchLevels(int templateWidth, int templateHeight, int buildLevels)
+    {
+        int shortest = Math.Min(templateWidth, templateHeight);
+        int levels = Math.Max(1, Math.Min(6, (int)Math.Floor(Math.Log(shortest / 16d, 2)) + 1));
+        return buildLevels > 0 ? Math.Min(levels, buildLevels) : levels;
+    }
+
+    /// <summary>余量随金字塔层数增加，保证每层平滑/缩小时搜索区域周围有真实像素；原点按64对齐保持金字塔网格一致。</summary>
+    /// <param name="bounds">允许区域外接框。</param><param name="width">原图宽。</param><param name="height">原图高。</param>
+    /// <param name="levels">搜索层数。</param><returns>裁剪到原图内的范围。</returns>
+    internal static PixelBounds Crop(RectD bounds, int width, int height, int levels)
+    {
+        int margin = Math.Max(32, (1 << Math.Max(1, levels)) * 8);
+        int x0 = Math.Max(0, ((int)bounds.X - margin) / 64 * 64), y0 = Math.Max(0, ((int)bounds.Y - margin) / 64 * 64);
+        int x1 = Math.Min(width, (int)(bounds.X + bounds.Width) + margin), y1 = Math.Min(height, (int)(bounds.Y + bounds.Height) + margin);
+        return new PixelBounds(x0, y0, x1 - x0, y1 - y0);
+    }
+}
+
 #if HALCON_SDK
+/// <summary>HALCON进程级内存策略，首次使用模板功能时设置一次。</summary>
+internal static class HalconMemoryPolicy
+{
+    private static readonly Lazy<bool> Applied = new(() =>
+    {
+        // 默认按线程缓存临时内存且不归还系统，多核机器上申请量可达GB级；改为线程空闲时释放。
+        try
+        {
+            HOperatorSet.SetSystem("global_mem_cache", "idle");
+            HOperatorSet.SetSystem("temporary_mem_cache", "idle");
+        }
+        catch (HOperatorException error)
+        {
+            throw new InvalidOperationException("HALCON内存缓存策略设置失败（global_mem_cache/temporary_mem_cache=idle），请确认当前HALCON版本支持该取值：" + error.Message, error);
+        }
+        return true;
+    });
+    internal static void Apply() => _ = Applied.Value;
+}
+
 internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMatcher
 {
     private readonly VisionTemplateDefinition _definition;
@@ -157,6 +208,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
     private readonly byte[] _mask;
     private readonly HShapeModel? _shape;
     private readonly HNCCModel? _ncc;
+    private readonly int _searchLevels;
     private bool _disposed;
     internal HalconPreparedTemplateMatcher(VisionTemplateSnapshot snapshot, bool shape, CancellationToken token)
     {
@@ -165,6 +217,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
         using var mask = VisionTemplateSource.Decode(snapshot.Read("source/mask.bin"));
         if (mask.Info.Layout != EPixelLayout.Gray8 || mask.Info.Width != _definition.SourceWidth || mask.Info.Height != _definition.SourceHeight) throw new InvalidDataException("HALCON模板掩码尺寸不一致。");
         var pixels = new byte[mask.Info.ByteLength]; mask.CopyTo(0, pixels, 0, pixels.Length); _mask = HalconTemplateNative.CropMask(pixels, _definition);
+        _searchLevels = HalconTemplatePyramid.SearchLevels(_definition.Width, _definition.Height, _settings.Levels);
         using var stream = new MemoryStream(snapshot.Read(HalconTemplateModelFactory.ModelFile), false);
         try
         {
@@ -187,24 +240,27 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
         if (allowed.AreaPixels == 0) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null, _reference);
         // 只把允许区域外接框（外扩一圈边距并按64像素对齐，保持金字塔网格与原图一致）交给HALCON，
         // 小ROI不再转换和建立整幅图金字塔；结果坐标加回裁剪原点。
-        var crop = Crop(allowed.Bounds, frame.Image.Info.Width, frame.Image.Info.Height);
+        var crop = HalconTemplatePyramid.Crop(allowed.Bounds, frame.Image.Info.Width, frame.Image.Info.Height, _searchLevels);
         var fit = new FitArea(allowed, search, region == null);
         using var image = HalconTemplateNative.Image(HalconTemplateNative.GrayBytes(frame.Image, crop, token), crop.Width, crop.Height);
         using var nativeRegion = HalconTemplateNative.Region(allowed.Runs.Select(r => new RegionRun(r.Row - crop.Y, r.Start - crop.X, r.EndExclusive - crop.X)));
         using var domain = image.ReduceDomain(nativeRegion);
         TemplatePoseTransform? best = null; double score = 0; long validationWork = 0;
+        // HALCON在每层都用MinScore筛候选；高层图像粗，搜索门槛放低保留候选，最终仍按用户的最小分数判定。
+        double searchScore = Math.Min(options.MinimumScore, .5);
         foreach (var interval in options.AngleIntervals())
         {
             token.ThrowIfCancellationRequested();
             HTuple rows, columns, angles, scores; HTuple? scales = null;
+            // 结果按分数从高到低返回，只取前 MaximumCandidates 个用于检查模板是否完整落在搜索区域内。
             if (_shape != null) domain.FindScaledShapeModel(_shape, -interval.Maximum, interval.Maximum - interval.Minimum,
-                options.MinimumScale, options.MaximumScale, options.MinimumScore, 1025, 1, "interpolation", 0, .9,
+                options.MinimumScale, options.MaximumScale, searchScore, options.MaximumCandidates, 1, "interpolation", _searchLevels, .9,
                 out rows, out columns, out angles, out scales, out scores);
-            else domain.FindNccModel(_ncc!, -interval.Maximum, interval.Maximum - interval.Minimum, options.MinimumScore, 1025, 1, "true", 0, out rows, out columns, out angles, out scores);
+            else domain.FindNccModel(_ncc!, -interval.Maximum, interval.Maximum - interval.Minimum, searchScore, options.MaximumCandidates, 1, "true", _searchLevels,
+                out rows, out columns, out angles, out scores);
             using (rows) using (columns) using (angles) using (scales) using (scores)
             {
                 token.ThrowIfCancellationRequested();
-                if (scores.Length >= 1025) throw new InvalidOperationException("HALCON匹配候选超过1024，请缩小搜索ROI或提高最小分数。");
                 for (int i = 0; i < scores.Length; i++)
                 {
                     // 返回的Row/Column是HALCON仿射矩阵平移量。先按affine_trans_pixel转换原点，
@@ -214,21 +270,13 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
                     var pose = new TemplatePoseTransform(_definition.Width, _definition.Height,
                         new PointD(crop.X + columns[i].D + .5 * actualScale * (c - s), crop.Y + rows[i].D + .5 * actualScale * (s + c)), actualAngle, actualScale);
                     double value = Math.Max(0, Math.Min(1, scores[i].D));
-                    if (value < score || !FitsMask(pose, fit, options.MaximumWork, ref validationWork, token)) continue;
+                    if (value < options.MinimumScore || value < score || !FitsMask(pose, fit, options.MaximumWork, ref validationWork, token)) continue;
                     best = pose; score = value;
                 }
             }
         }
         return new TemplatePoseResult(frame.FrameId, ModelIdentity, score, best, _reference);
     }
-    // 外接框外扩32像素、原点按64对齐（最多6层金字塔），裁剪到原图内。
-    private static PixelBounds Crop(RectD bounds, int width, int height)
-    {
-        int x0 = Math.Max(0, ((int)bounds.X - 32) / 64 * 64), y0 = Math.Max(0, ((int)bounds.Y - 32) / 64 * 64);
-        int x1 = Math.Min(width, (int)(bounds.X + bounds.Width) + 32), y1 = Math.Min(height, (int)(bounds.Y + bounds.Height) + 32);
-        return new PixelBounds(x0, y0, x1 - x0, y1 - y0);
-    }
-
     /// <summary>候选验证用的允许区域：纯矩形时只比较角点，否则在外接框内建一次位图供所有候选查表。</summary>
     private sealed class FitArea
     {

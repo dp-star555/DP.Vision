@@ -257,4 +257,25 @@ public sealed class HalconTemplateModelTests
             for (int dy = 0; dy < scale; dy++) for (int dx = 0; dx < scale; dx++) bytes[(top + yy * scale + dy) * 128 + left + xx * scale + dx] = value;
         }
     }
+
+    /// <summary>搜索层数让顶层模板最短边不少于约16像素：109像素高的文字模板为3层；制作指定层数时不超过它。</summary>
+    [TestMethod]
+    [DataRow(600, 109, 0, 3)]
+    [DataRow(20, 20, 0, 1)]
+    [DataRow(10, 300, 0, 1)]
+    [DataRow(2000, 2000, 0, 6)]
+    [DataRow(600, 109, 2, 2)]
+    [DataRow(600, 109, 5, 3)]
+    public void SearchLevelsKeepTopLevelTemplateAboutSixteenPixels(int width, int height, int buildLevels, int expected)
+        => Assert.AreEqual(expected, HalconTemplatePyramid.SearchLevels(width, height, buildLevels));
+
+    /// <summary>裁剪余量随层数增加（至少32像素），原点按64对齐，并限制在原图内。</summary>
+    [TestMethod]
+    public void SearchCropMarginGrowsWithLevels()
+    {
+        var bounds = new RectD(300, 200, 50, 40);
+        Assert.AreEqual(new PixelBounds(192, 128, 222, 176), HalconTemplatePyramid.Crop(bounds, 1000, 800, 3));
+        Assert.AreEqual(new PixelBounds(256, 128, 126, 144), HalconTemplatePyramid.Crop(bounds, 1000, 800, 1));
+        Assert.AreEqual(new PixelBounds(0, 0, 862, 752), HalconTemplatePyramid.Crop(bounds, 1000, 800, 6));
+    }
 }
