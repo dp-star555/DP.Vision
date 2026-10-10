@@ -16,9 +16,11 @@ public sealed class TemplatePoseOptions
     /// <param name="minimumScore">引擎定义的最小分数，0..1，非概率；不同引擎不能直接比较。</param><param name="maximumWork">引擎工作预算，最多20亿；像素比较或候选ROI验证。</param>
     /// <param name="angleStepRadians">采样引擎的角度步长；HALCON原生搜索不使用此参数。</param>
     /// <param name="scaleStep">采样引擎的尺度步长；HALCON原生搜索不使用此参数。</param>
+    /// <param name="maximumCandidates">原生搜索引擎最多返回的候选数（按分数从高到低），1..1024；采样引擎逐位置比较，不使用此参数。</param>
     public TemplatePoseOptions(double minimumAngleRadians, double maximumAngleRadians, double minimumScale = 1, double maximumScale = 1,
-        double minimumScore = .9, long maximumWork = 200000000, double angleStepRadians = Math.PI / 180, double scaleStep = .01)
+        double minimumScore = .9, long maximumWork = 200000000, double angleStepRadians = Math.PI / 180, double scaleStep = .01, int maximumCandidates = 32)
     {
+        if (maximumCandidates < 1 || maximumCandidates > 1024) throw new ArgumentException("最大候选数必须为1..1024。");
         if (new[] { minimumAngleRadians, maximumAngleRadians, minimumScale, maximumScale, minimumScore, angleStepRadians, scaleStep }
                 .Any(v => double.IsNaN(v) || double.IsInfinity(v))
             || minimumAngleRadians > maximumAngleRadians || maximumAngleRadians - minimumAngleRadians > 2 * Math.PI + 1e-10
@@ -28,8 +30,10 @@ public sealed class TemplatePoseOptions
             throw new ArgumentException("搜索区间或预算无效：角度下限不能大于上限、跨度不能超过360°，尺度须为0.1至10，采样步长必须为正数。");
         MinimumAngleRadians = minimumAngleRadians; MaximumAngleRadians = maximumAngleRadians;
         MinimumScale = minimumScale; MaximumScale = maximumScale; MinimumScore = minimumScore; MaximumWork = maximumWork;
-        AngleStepRadians = angleStepRadians; ScaleStep = scaleStep;
+        AngleStepRadians = angleStepRadians; ScaleStep = scaleStep; MaximumCandidates = maximumCandidates;
     }
+    /// <summary>原生搜索引擎最多返回的候选数；只需前几个最高分候选来检查模板是否完整落在搜索区域内。</summary>
+    public int MaximumCandidates { get; }
     /// <summary>顺时针角度下限。</summary>
     public double MinimumAngleRadians { get; }
     /// <summary>顺时针角度上限。</summary>

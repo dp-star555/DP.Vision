@@ -43,6 +43,16 @@ public sealed class TemplateSearchRangeTests
         => Assert.ThrowsExactly<ArgumentException>(() => new TemplatePoseOptions(minAngle, maxAngle, minScale, maxScale,
             angleStepRadians: angleStep, scaleStep: scaleStep));
 
+    /// <summary>原生搜索的最大候选数默认32，只接受1..1024。</summary>
+    [TestMethod]
+    public void MaximumCandidatesDefaultsTo32AndIsBounded()
+    {
+        Assert.AreEqual(32, new TemplatePoseOptions(0, 0).MaximumCandidates);
+        Assert.AreEqual(5, new TemplatePoseOptions(0, 0, maximumCandidates: 5).MaximumCandidates);
+        Assert.ThrowsExactly<ArgumentException>(() => new TemplatePoseOptions(0, 0, maximumCandidates: 0));
+        Assert.ThrowsExactly<ArgumentException>(() => new TemplatePoseOptions(0, 0, maximumCandidates: 1025));
+    }
+
     /// <summary>采样规模在创建模板候选之前校验，避免小步长耗尽内存。</summary>
     [TestMethod]
     public void OpenCvRejectsExcessiveSamplingBeforeMatching()
