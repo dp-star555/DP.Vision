@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using DP.Vision.Algorithms;
 using OpenCvSharp;
@@ -318,89 +319,72 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             : useComponents ? "connected_component_ownership"
             : "vertical_white_gaps";
         using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(3, 3));
+        // 整行像素、掩码和连通域标签只取一次；连通域归属用“标签→字符组”查找表，背景中值也只算一次，
+        // 每个字符只做一次数组遍历（原先逐像素查集合并对每个字符重排整行背景，长行耗时随字数平方增长）。
+        int width = bounds.Width,
+            pixels = bounds.Width * bounds.Height,
+            channels = chip.Channels();
+        var chipData = Bytes(chip);
+        var maskData = Bytes(mask);
+        var owner = new int[components];
+        int[] labelData = Array.Empty<int>();
+        var background = new byte[channels];
+        if (useComponents)
+        {
+            for (int id = 0; id < components; id++)
+            {
+                owner[id] = -1;
+            }
+
+            for (int g = 0; g < groups.Count; g++)
+            {
+                foreach (int id in groups[g])
+                {
+                    owner[id] = g;
+                }
+            }
+
+            labels.GetArray(out labelData);
+            for (int c = 0; c < channels; c++)
+            {
+                background[c] = MedianBackground(chipData, maskData, channels, c);
+            }
+        }
+
         for (int i = 0; i < tokens.Length; i++)
         {
             token.ThrowIfCancellationRequested();
             int x0,
                 x1;
-            using var cleaned = chip.Clone();
+            var cleanedData = (byte[])chipData.Clone();
             int removed = 0;
-            using var foreign = new Mat(bounds.Height, bounds.Width, MatType.CV_8UC1, Scalar.All(0));
+            var foreign = new byte[pixels];
             if (useComponents)
             {
                 var box = Box(groups[i]);
                 x0 = Math.Max(0, box.Left - 1);
                 x1 = Math.Min(bounds.Width, box.Right + 1);
-                var ownIds = new HashSet<int>(groups[i]);
-                var otherIds = new HashSet<int>(groups.Where((g, j) => i != j).SelectMany(g => g));
-                using var own = new Mat(bounds.Height, bounds.Width, MatType.CV_8UC1, Scalar.All(0));
-                for (int y = 0; y < bounds.Height; y++)
+                var own = new byte[pixels];
+                for (int p = 0; p < pixels; p++)
                 {
-                    for (int x = 0; x < bounds.Width; x++)
+                    int g = owner[labelData[p]];
+                    if (g == i)
                     {
-                        int id = labels.At<int>(y, x);
-                        if (otherIds.Contains(id))
-                        {
-                            foreign.Set(y, x, (byte)255);
-                        }
-
-                        if (ownIds.Contains(id))
-                        {
-                            own.Set(y, x, (byte)255);
-                        }
+                        own[p] = 255;
+                    }
+                    else if (g >= 0)
+                    {
+                        foreign[p] = 255;
                     }
                 }
 
-                using var halo = new Mat();
-                using var ownHalo = new Mat();
-                Cv2.Dilate(foreign, halo, kernel);
-                Cv2.Dilate(own, ownHalo, kernel);
-                var background = new byte[chip.Channels()];
-                for (int c = 0; c < background.Length; c++)
+                var halo = Dilate(foreign, bounds.Height, width, kernel);
+                var ownHalo = Dilate(own, bounds.Height, width, kernel);
+                for (int p = 0; p < pixels; p++)
                 {
-                    var values = new List<byte>();
-                    for (int y = 0; y < bounds.Height; y++)
+                    if (foreign[p] != 0 || (halo[p] != 0 && ownHalo[p] == 0 && labelData[p] == 0))
                     {
-                        for (int x = 0; x < bounds.Width; x++)
-                        {
-                            if (mask.At<byte>(y, x) == 0)
-                            {
-                                values.Add(
-                                    chip.Channels() == 1 ? chip.At<byte>(y, x) : chip.At<Vec3b>(y, x)[c]
-                                );
-                            }
-                        }
-                    }
-
-                    values.Sort();
-                    background[c] =
-                        values.Count == 0
-                            ? (byte)255
-                            : (byte)((values[(values.Count - 1) / 2] + values[values.Count / 2]) / 2);
-                }
-
-                for (int y = 0; y < bounds.Height; y++)
-                {
-                    for (int x = 0; x < bounds.Width; x++)
-                    {
-                        if (
-                            foreign.At<byte>(y, x) != 0
-                            || (
-                                halo.At<byte>(y, x) != 0
-                                && ownHalo.At<byte>(y, x) == 0
-                                && labels.At<int>(y, x) == 0
-                            )
-                        )
-                        {
-                            if (chip.Channels() == 1)
-                            {
-                                cleaned.Set(y, x, background[0]);
-                            }
-                            else
-                            {
-                                cleaned.Set(y, x, new Vec3b(background[0], background[1], background[2]));
-                            }
-                        }
+                        Buffer.BlockCopy(background, 0, cleanedData, p * channels, channels);
                     }
                 }
             }
@@ -418,7 +402,7 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             {
                 for (int x = x0; x < x1; x++)
                 {
-                    if (mask.At<byte>(y, x) != 0 && foreign.At<byte>(y, x) == 0)
+                    if (maskData[y * width + x] != 0 && foreign[y * width + x] == 0)
                     {
                         top = Math.Min(top, y);
                         bottom = Math.Max(bottom, y + 1);
@@ -437,13 +421,15 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
             {
                 for (int x = x0; x < x1; x++)
                 {
-                    if (foreign.At<byte>(y, x) != 0)
+                    if (foreign[y * width + x] != 0)
                     {
                         removed++;
                     }
                 }
             }
 
+            using var cleaned = new Mat(bounds.Height, width, chip.Type());
+            Marshal.Copy(cleanedData, 0, cleaned.Data, cleanedData.Length);
             using var patch = new Mat(cleaned, new Rect(x0, y0, x1 - x0, y1 - y0));
             patches.Add(
                 new CharacterPatch(
@@ -493,6 +479,62 @@ public sealed class OpenCvCharacterSegmenter : ICharacterSegmenter, IGlyphCandid
 
     /// <summary>按字符数最优切割时，单字墨迹宽度允许偏离预期宽度的最大比例。</summary>
     private const double MaximumGuidedWidth = 1.2;
+
+    /// <summary>复制为紧密排列的字节数组（ROI子图先克隆为连续内存）。</summary>
+    private static byte[] Bytes(Mat image)
+    {
+        using var copy = image.IsContinuous() ? null : image.Clone();
+        var source = copy ?? image;
+        var bytes = new byte[source.Rows * source.Cols * source.ElemSize()];
+        Marshal.Copy(source.Data, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    /// <summary>3×3膨胀单通道掩码。</summary>
+    private static byte[] Dilate(byte[] data, int rows, int cols, Mat kernel)
+    {
+        using var source = new Mat(rows, cols, MatType.CV_8UC1);
+        Marshal.Copy(data, 0, source.Data, data.Length);
+        using var result = new Mat();
+        Cv2.Dilate(source, result, kernel);
+        return Bytes(result);
+    }
+
+    /// <summary>非墨迹像素在指定通道上的中值（偶数个取中间两值的平均），按直方图求顺序统计量；没有背景时为白色。</summary>
+    private static byte MedianBackground(byte[] pixels, byte[] mask, int channels, int channel)
+    {
+        var histogram = new int[256];
+        int count = 0;
+        for (int p = 0; p < mask.Length; p++)
+        {
+            if (mask[p] == 0)
+            {
+                histogram[pixels[p * channels + channel]]++;
+                count++;
+            }
+        }
+
+        if (count == 0)
+        {
+            return 255;
+        }
+
+        int Nth(int index)
+        {
+            for (int v = 0, seen = 0; v < 256; v++)
+            {
+                seen += histogram[v];
+                if (seen > index)
+                {
+                    return v;
+                }
+            }
+
+            return 255;
+        }
+
+        return (byte)((Nth((count - 1) / 2) + Nth(count / 2)) / 2);
+    }
 
     private static bool ColumnHasInk(Mat mask, int x)
     {
