@@ -254,7 +254,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
             HTuple rows, columns, angles, scores; HTuple? scales = null;
             // 结果按分数从高到低返回，只取前 MaximumCandidates 个用于检查模板是否完整落在搜索区域内。
             if (_shape != null) domain.FindScaledShapeModel(_shape, -interval.Maximum, interval.Maximum - interval.Minimum,
-                options.MinimumScale, options.MaximumScale, searchScore, options.MaximumCandidates, 1, "interpolation", _searchLevels, .9,
+                options.MinimumScale, options.MaximumScale, searchScore, options.MaximumCandidates, 1, _settings.SubPixel, _searchLevels, .9,
                 out rows, out columns, out angles, out scales, out scores);
             else domain.FindNccModel(_ncc!, -interval.Maximum, interval.Maximum - interval.Minimum, searchScore, options.MaximumCandidates, 1, "true", _searchLevels,
                 out rows, out columns, out angles, out scores);

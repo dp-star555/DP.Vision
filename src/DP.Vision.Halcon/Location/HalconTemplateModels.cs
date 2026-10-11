@@ -83,7 +83,9 @@ public sealed class HalconTemplateModelFactory : IVisionAlgorithmFactory, IVisio
                 new VisionAlgorithmParameter("maximumScale", "模型最大尺度", typeof(double), "1.1", minimum: .1, maximum: 10),
                 new VisionAlgorithmParameter("scaleStep", "模型尺度步长", typeof(double), "0.01", minimum: .001, maximum: .2),
                 new VisionAlgorithmParameter("contrast", "制作对比度", typeof(int), "30", minimum: 1, maximum: 255),
-                new VisionAlgorithmParameter("minimumContrast", "搜索最小对比度", typeof(int), "10", minimum: 1, maximum: 255)
+                new VisionAlgorithmParameter("minimumContrast", "搜索最小对比度", typeof(int), "10", minimum: 1, maximum: 255),
+                new VisionAlgorithmParameter("subPixel", "亚像素精化", typeof(string), "least_squares",
+                    "匹配结果的位置/角度精化：interpolation（插值，最快，角度只到步长附近）、least_squares（最小二乘，默认）、least_squares_high、least_squares_very_high（更准更慢）。角度误差会随ROI离模板的距离放大成偏移。")
             });
             return list;
         }
@@ -134,6 +136,8 @@ internal sealed class HalconTemplateSettings
     internal int Levels, Contrast, MinimumContrast;
     internal double MinimumAngle, MaximumAngle, AngleStep, MinimumScale, MaximumScale, ScaleStep;
     internal string Metric = "use_polarity";
+    internal string SubPixel = "least_squares";
+    private static readonly string[] SubPixelModes = { "interpolation", "least_squares", "least_squares_high", "least_squares_very_high" };
     internal static HalconTemplateSettings Parse(IReadOnlyDictionary<string, string> values, bool shape)
     {
         var allowed = new HalconTemplateModelFactory(shape).BuildParameters.Select(p => p.Id).ToArray();
@@ -148,7 +152,8 @@ internal sealed class HalconTemplateSettings
         var result = new HalconTemplateSettings { Levels = (int)levels, Contrast = (int)contrast, MinimumContrast = (int)minContrast,
             MinimumAngle = Read("minimumAngle", -.35), MaximumAngle = Read("maximumAngle", .35), AngleStep = Read("angleStep", .01),
             MinimumScale = shape ? Read("minimumScale", .9) : 1, MaximumScale = shape ? Read("maximumScale", 1.1) : 1, ScaleStep = Read("scaleStep", .01),
-            Metric = values.TryGetValue("metric", out var metric) ? metric : "use_polarity" };
+            Metric = values.TryGetValue("metric", out var metric) ? metric : "use_polarity",
+            SubPixel = values.TryGetValue("subPixel", out var subPixel) ? subPixel : "least_squares" };
         if (new[] { levels, contrast, minContrast, result.MinimumAngle, result.MaximumAngle, result.AngleStep, result.MinimumScale, result.MaximumScale, result.ScaleStep }.Any(v => double.IsNaN(v) || double.IsInfinity(v))
             || levels != result.Levels || levels < 0 || levels > 6 || contrast != result.Contrast || minContrast != result.MinimumContrast
             || contrast < 1 || contrast > 255 || minContrast < 1 || minContrast > 255
@@ -156,6 +161,7 @@ internal sealed class HalconTemplateSettings
             || result.AngleStep < .001 || result.AngleStep > .2 || result.ScaleStep < .001 || result.ScaleStep > .2
             || result.MinimumScale < .1 || result.MaximumScale > 10 || result.MinimumScale > result.MaximumScale
             || !new[] { "use_polarity", "ignore_global_polarity" }.Contains(result.Metric)) throw new ArgumentException("HALCON模型制作参数或极性方式无效。");
+        if (!SubPixelModes.Contains(result.SubPixel)) throw new ArgumentException("HALCON亚像素精化方式无效：" + result.SubPixel);
         // 限制原生模型离散化规模；扩大范围时应同时调整采样步长。
         if ((1 + (result.MaximumAngle - result.MinimumAngle) / result.AngleStep) * (1 + (result.MaximumScale - result.MinimumScale) / result.ScaleStep) > 100000)
             throw new ArgumentException("HALCON模型姿态采样过多，请缩小范围或增大步长。");
