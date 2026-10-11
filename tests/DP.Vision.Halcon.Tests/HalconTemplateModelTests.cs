@@ -32,6 +32,11 @@ public sealed class HalconTemplateModelTests
         var factory = (HalconTemplateModelFactory)ncc.Factory;
         Assert.IsTrue(factory.ValidateSearch(Definition(), Settings(), new PixelBounds(0, 0, 128, 96), new TemplatePoseOptions(0d, 0d, 1.1, 1.1)).Count != 0);
         Assert.ThrowsExactly<ArgumentException>(() => HalconTemplateSettings.Parse(new Dictionary<string, string> { ["metric"] = "bogus" }, true));
+        // 形状匹配默认最小二乘精化；旧模板没有该键时同样采用默认值，NCC不接受该参数。
+        Assert.AreEqual("least_squares", HalconTemplateSettings.Parse(new Dictionary<string, string>(), true).SubPixel);
+        Assert.AreEqual("least_squares_high", HalconTemplateSettings.Parse(new Dictionary<string, string> { ["subPixel"] = "least_squares_high" }, true).SubPixel);
+        Assert.ThrowsExactly<ArgumentException>(() => HalconTemplateSettings.Parse(new Dictionary<string, string> { ["subPixel"] = "bogus" }, true));
+        Assert.ThrowsExactly<ArgumentException>(() => HalconTemplateSettings.Parse(new Dictionary<string, string> { ["subPixel"] = "least_squares" }, false));
     }
 #if !HALCON_SDK
     /// <summary>无SDK构建仍登记描述，但制作明确失败。</summary>
