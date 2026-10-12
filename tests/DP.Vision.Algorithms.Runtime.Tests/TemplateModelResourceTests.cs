@@ -114,6 +114,27 @@ public sealed class TemplateModelResourceTests
         Assert.IsTrue(endpoint.Found); Assert.AreEqual(Math.PI / 2, endpoint.Transform!.AngleRadians, 1e-10);
     }
 
+    [TestMethod]
+    public async Task OpenCvModel_ProvidesEdgeContours_ThatFollowTheMatch()
+    {
+        // 暗底上一个亮方块：模型轮廓是方块边缘，匹配后应落在场景中方块的边缘上。
+        using var image = Image(24, 24, (x, y) => (byte)(x is >= 6 and < 18 && y is >= 6 and < 18 ? 220 : 20));
+        using var source = new ImageFrame("source", image);
+        var definition = new VisionTemplateDefinition { SourceWidth = 24, SourceHeight = 24, Width = 24, Height = 24, ReferenceIdentity = "square" };
+        var build = await new OpenCvTemplateModelBuilder("opencv.template-model").BuildAsync(new VisionTemplateBuildRequest(source, definition, null, new Dictionary<string, string>()));
+        using var resource = await new OpenCvTemplateModelFactory(false).PreparePreviewAsync(build);
+        var matcher = (IPreparedVisionTemplateMatcher)resource.Instance;
+        using var sceneImage = Image(64, 64, (x, y) => (byte)(x is >= 26 and < 38 && y is >= 16 and < 28 ? 220 : 20));
+        using var scene = new ImageFrame("scene", sceneImage);
+        var result = matcher.Match(scene, new PixelBounds(0, 0, 64, 64), new TemplatePoseOptions(0d, 0d, 1d, 1d, .9));
+        Assert.IsTrue(result.Found);
+        Assert.IsTrue(result.ModelContours.Count > 0);
+        var points = result.ModelGeometry.OfType<ContourGeometry>().SelectMany(c => c.Points).ToArray();
+        Assert.IsTrue(points.Length > 0);
+        // 方块在场景中占 [26,38)×[16,28)，边缘点都应在其外扩2像素的范围内。
+        Assert.IsTrue(points.All(p => p.X >= 24 && p.X <= 40 && p.Y >= 14 && p.Y <= 30));
+    }
+
     private static IImageSource Image(int width, int height, Func<int, int, byte> value) => VisionImage.CopyFrom(new ImageInfo(width, height, EPixelLayout.Gray8),
         Enumerable.Range(0, width * height).Select(i => value(i % width, i / width)).ToArray());
     private static VisionAlgorithmRequest Request(string key, string path, string id = "opencv.template-model") => new VisionAlgorithmRequest(key, typeof(IPreparedVisionTemplateMatcher),

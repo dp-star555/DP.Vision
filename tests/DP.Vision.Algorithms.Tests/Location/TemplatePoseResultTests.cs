@@ -10,6 +10,39 @@ public sealed class TemplatePoseResultTests
 {
     private static readonly TemplateReference Center = new TemplateReference(10, 8, 0, "center");
 
+    /// <summary>模型轮廓按位姿变换到原图并加入显示；未找到时不显示。</summary>
+    [TestMethod]
+    public void ModelContoursFollowPose()
+    {
+        // 模板 20×16，轮廓是模板中心到右边中点的一段；旋转90°、放大2倍后应从中心指向下方20像素。
+        var contour = new[] { new Coordinate2D(10, 8), new Coordinate2D(20, 8) };
+        var pose = new TemplatePoseTransform(20, 16, new PointD(100, 50), Math.PI / 2, 2);
+        var result = new TemplatePoseResult("frame", "template", .95, pose, Center, new[] { contour });
+        var mapped = (ContourGeometry)result.ModelGeometry.Single();
+        Assert.AreEqual(100, mapped.Points[0].X, 1e-9); Assert.AreEqual(50, mapped.Points[0].Y, 1e-9);
+        Assert.AreEqual(100, mapped.Points[1].X, 1e-9); Assert.AreEqual(70, mapped.Points[1].Y, 1e-9);
+        Assert.AreEqual(5, result.DisplayGeometry.Count);
+        Assert.AreEqual(0, new TemplatePoseResult("frame", "template", .2, null, Center, new[] { contour }).ModelGeometry.Count);
+    }
+
+    /// <summary>掩码边界按像素边界合并成段；整矩形掩码只有四条边，L 形掩码多出内角两段。</summary>
+    [TestMethod]
+    public void MaskOutlineMergesRunsAndLimitKeepsEndpoints()
+    {
+        var full = TemplateModelContours.FromMask(Enumerable.Repeat((byte)255, 12).ToArray(), 4, 3);
+        Assert.AreEqual(4, full.Count);
+        Assert.IsTrue(TemplateModelContours.IsFull(Enumerable.Repeat((byte)1, 12).ToArray()));
+        // L 形：右上 2×1 无效。
+        var l = new byte[] { 255, 255, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255 };
+        var outline = TemplateModelContours.FromMask(l, 4, 3);
+        Assert.AreEqual(6, outline.Count);
+        Assert.IsTrue(outline.Any(c => c[0].X == 2 && c[0].Y == 1 && c[1].X == 4 && c[1].Y == 1));
+        var longContour = Enumerable.Range(0, 1001).Select(i => new Coordinate2D(i, 0)).ToArray();
+        var limited = TemplateModelContours.Limit(new[] { longContour }, 100).Single();
+        Assert.IsTrue(limited.Count <= 101);
+        Assert.AreEqual(0, limited[0].X); Assert.AreEqual(1000, limited[limited.Count - 1].X);
+    }
+
     /// <summary>参考原点偏离模板中心且带方向时，参考点和方向随位姿旋转缩放。</summary>
     [TestMethod]
     public void ReferencePointAndDirectionFollowPose()
