@@ -46,6 +46,8 @@ public sealed class GeometryMeasurementTests
         Assert.AreEqual(0, algorithm.LineToLine(horizontal, L(1, -2, 1, 2), mode: EVisionLineDistanceMode.Segments).Distance, 1e-12);
         Assert.AreEqual(2, algorithm.LineToLine(horizontal, L(4, 0, 7, 0), mode: EVisionLineDistanceMode.Segments).Distance, 1e-12);
         Assert.AreEqual(0, algorithm.LineToLine(horizontal, L(4, 0, 7, 0)).Distance, 1e-12);
+        // 两条近乎平行的竖直边：交点在千万像素之外，按平行处理给出间距，而不是抛坐标越界。
+        Assert.AreEqual(5, algorithm.LineToLine(L(100, 0, 100, 1000), L(105, 0, 105.00001, 1000)).Distance, 1e-3);
         Assert.AreEqual(1, algorithm.PointToLine(P(3, 1), horizontal).Distance, 1e-12);
         Assert.AreEqual(Math.Sqrt(2), algorithm.PointToLine(P(3, 1), horizontal, mode: EVisionLineDistanceMode.Segments).Distance, 1e-12);
         Assert.AreEqual(2, algorithm.PointToLine(P(2, 1), L(0, 5, 0, -5)).Distance, 1e-12);
