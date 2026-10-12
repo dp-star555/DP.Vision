@@ -209,6 +209,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
     private readonly HShapeModel? _shape;
     private readonly HNCCModel? _ncc;
     private readonly int _searchLevels;
+    private readonly IReadOnlyList<IReadOnlyList<Coordinate2D>> _contours;
     private bool _disposed;
     internal HalconPreparedTemplateMatcher(VisionTemplateSnapshot snapshot, bool shape, CancellationToken token)
     {
@@ -224,8 +225,32 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
             if (shape) _shape = HShapeModel.Deserialize(stream);
             else _ncc = HNCCModel.Deserialize(stream);
             token.ThrowIfCancellationRequested();
+            _contours = TemplateModelContours.Limit(_shape != null ? ShapeContours(_shape)
+                : TemplateModelContours.IsFull(_mask) ? Array.Empty<IReadOnlyList<Coordinate2D>>()
+                : TemplateModelContours.FromMask(_mask, _definition.Width, _definition.Height));
         }
         catch { _shape?.Dispose(); _ncc?.Dispose(); throw; }
+    }
+    // 形状模型第1层（原分辨率）的边缘轮廓，即实际参与匹配的特征。轮廓相对模型原点，原点已设在模板框中心，
+    // 对应模板像素边界坐标 (宽/2, 高/2)。
+    private IReadOnlyList<IReadOnlyList<Coordinate2D>> ShapeContours(HShapeModel model)
+    {
+        var result = new List<IReadOnlyList<Coordinate2D>>();
+        double cx = _definition.Width / 2d, cy = _definition.Height / 2d;
+        using var contours = model.GetShapeModelContours(1);
+        int count = contours.CountObj();
+        for (int i = 1; i <= count; i++)
+        {
+            using var contour = contours.SelectObj(i);
+            contour.GetContourXld(out HTuple rows, out HTuple columns);
+            using (rows) using (columns)
+            {
+                var points = new Coordinate2D[rows.Length];
+                for (int k = 0; k < points.Length; k++) points[k] = new Coordinate2D(cx + columns[k].D, cy + rows[k].D);
+                if (points.Length >= 2) result.Add(points);
+            }
+        }
+        return result;
     }
     public VisionTemplateDefinition Definition => VisionTemplateStore.CopyDefinition(_definition);
     public string ModelIdentity { get; }
@@ -237,7 +262,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
         _settings.ValidateSearch(options, _shape != null); InspectionMask.Validate(region, frame.Image);
         var allowed = new RegionGeometry(Enumerable.Range(search.Y, search.Height).Select(y => new RegionRun(y, search.X, search.X + search.Width)));
         if (region != null) allowed = allowed.Intersect(region, token);
-        if (allowed.AreaPixels == 0) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null, _reference);
+        if (allowed.AreaPixels == 0) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null, _reference, _contours);
         // 只把允许区域外接框（外扩一圈边距并按64像素对齐，保持金字塔网格与原图一致）交给HALCON，
         // 小ROI不再转换和建立整幅图金字塔；结果坐标加回裁剪原点。
         var crop = HalconTemplatePyramid.Crop(allowed.Bounds, frame.Image.Info.Width, frame.Image.Info.Height, _searchLevels);
@@ -275,7 +300,7 @@ internal sealed class HalconPreparedTemplateMatcher : IHalconPreparedTemplateMat
                 }
             }
         }
-        return new TemplatePoseResult(frame.FrameId, ModelIdentity, score, best, _reference);
+        return new TemplatePoseResult(frame.FrameId, ModelIdentity, score, best, _reference, _contours);
     }
     /// <summary>候选验证用的允许区域：纯矩形时只比较角点，否则在外接框内建一次位图供所有候选查表。</summary>
     private sealed class FitArea

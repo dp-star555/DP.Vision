@@ -109,11 +109,14 @@ public sealed class TemplatePoseResult : IVisionGeometryFact
     /// <summary>创建同帧匹配结果。</summary>
     /// <param name="frameId">图像身份。</param><param name="templateFrameId">模板身份。</param><param name="score">最佳候选分数。</param>
     /// <param name="transform">达标变换，未检出为空。</param><param name="reference">所用模板的参考。</param>
-    public TemplatePoseResult(string frameId, string templateFrameId, double score, TemplatePoseTransform? transform, TemplateReference reference)
+    /// <param name="modelContours">可选：模型实际使用的轮廓（形状模型边缘、灰度模型有效区域边界等），模板像素边界坐标；只用于显示。</param>
+    public TemplatePoseResult(string frameId, string templateFrameId, double score, TemplatePoseTransform? transform, TemplateReference reference,
+        IReadOnlyList<IReadOnlyList<Coordinate2D>>? modelContours = null)
     {
         if (string.IsNullOrWhiteSpace(frameId) || string.IsNullOrWhiteSpace(templateFrameId) || double.IsNaN(score) || score < 0 || score > 1) throw new ArgumentException("Invalid pose evidence.");
         FrameId = frameId; TemplateFrameId = templateFrameId; Score = score; Transform = transform;
         Reference = reference ?? throw new ArgumentNullException(nameof(reference));
+        ModelContours = modelContours ?? Array.Empty<IReadOnlyList<Coordinate2D>>();
     }
     /// <summary>是否达到最小分数。</summary>
     public bool Found => Transform != null;
@@ -161,6 +164,16 @@ public sealed class TemplatePoseResult : IVisionGeometryFact
             return VisionCoordinateBuilder.PoseMatrix(new PointD(origin.X, origin.Y), pose.AngleRadians + Reference.AxisAngleRadians, pose.Scale);
         }
     }
+    /// <summary>模型轮廓，模板像素边界坐标；匹配器未提供时为空。</summary>
+    [Browsable(false)] public IReadOnlyList<IReadOnlyList<Coordinate2D>> ModelContours { get; }
+    /// <summary>按匹配位姿变换到原图的模型轮廓，用于核对是否贴合；未找到或未提供时为空。</summary>
+    [Browsable(false)]
+    public IReadOnlyList<Geometry> ModelGeometry => Transform is { } pose
+        ? Array.AsReadOnly(ModelContours.Where(c => c.Count >= 2)
+            .Select(c => (Geometry)new ContourGeometry(c.Select(p => { var q = pose.ToImage(p); return new PointD(q.X, q.Y); }), IsClosed(c), false)).ToArray())
+        : Array.Empty<Geometry>();
+    private static bool IsClosed(IReadOnlyList<Coordinate2D> contour) =>
+        contour.Count > 2 && Math.Abs(contour[0].X - contour[contour.Count - 1].X) < 1e-9 && Math.Abs(contour[0].Y - contour[contour.Count - 1].Y) < 1e-9;
     /// <summary>实际匹配轮廓，原图坐标；未找到为空。</summary>
     [Browsable(false)]
     public Geometry? MatchGeometry => Transform is { } p ? new RectangleGeometry(p.Center, p.TemplateWidth * p.Scale, p.TemplateHeight * p.Scale, p.AngleRadians) : null;
@@ -174,9 +187,9 @@ public sealed class TemplatePoseResult : IVisionGeometryFact
             var origin = new PointD(m.Tx, m.Ty);
             double length = Math.Max(8, Math.Min(pose.TemplateWidth, pose.TemplateHeight) * pose.Scale / 3);
             PointD Axis(double x, double y) { double norm = Math.Sqrt(x * x + y * y); return new PointD(origin.X + length * x / norm, origin.Y + length * y / norm); }
-            return Array.AsReadOnly(new Geometry[] { MatchGeometry!, new EllipseGeometry(origin, 2, 2),
+            return Array.AsReadOnly(new Geometry[] { MatchGeometry! }.Concat(ModelGeometry).Concat(new Geometry[] { new EllipseGeometry(origin, 2, 2),
                 new ContourGeometry(new[] { origin, Axis(m.M11, m.M21) }, false, false),
-                new ContourGeometry(new[] { origin, Axis(m.M12, m.M22) }, false, false) });
+                new ContourGeometry(new[] { origin, Axis(m.M12, m.M22) }, false, false) }).ToArray());
         }
     }
     /// <summary>正常空检出也完成。</summary>
