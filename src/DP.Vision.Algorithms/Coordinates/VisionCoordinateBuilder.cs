@@ -53,8 +53,9 @@ public static class VisionCoordinateBuilder
         double sx = crossLine.B.ImagePosition.X - q.X, sy = crossLine.B.ImagePosition.Y - q.Y;
         double cross = rx * sy - ry * sx;
         if (Math.Abs(cross) <= 1e-10 * Math.Sqrt((rx * rx + ry * ry) * (sx * sx + sy * sy))) throw new ArgumentException("平行或近乎平行直线不能稳定构建原点。");
-        double t = ((q.X - p.X) * sy - (q.Y - p.Y) * sx) / cross;
-        return FromMatrix(definition, frame, PoseMatrix(new PointD(p.X + t * rx, p.Y + t * ry), Math.Atan2(ry, rx), scale), "line-intersection");
+        double t = ((q.X - p.X) * sy - (q.Y - p.Y) * sx) / cross, x = p.X + t * rx, y = p.Y + t * ry;
+        if (double.IsNaN(x) || double.IsInfinity(x) || Math.Abs(x) > 10000000 || double.IsNaN(y) || double.IsInfinity(y) || Math.Abs(y) > 10000000) throw new ArgumentException("两条直线近乎平行，交点超出坐标范围，不能稳定构建原点。");
+        return FromMatrix(definition, frame, PoseMatrix(new PointD(x, y), Math.Atan2(ry, rx), scale), "line-intersection");
     }
     /// <summary>业务局部到父坐标的固定映射组合到本帧；不重复乘定位矩阵。</summary>
     /// <param name="definition">业务定义。</param><param name="frame">本帧。</param><param name="parent">父坐标本帧映射。</param><param name="localToParent">业务到父。</param><returns>业务到原图。</returns>

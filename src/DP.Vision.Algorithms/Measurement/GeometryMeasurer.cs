@@ -48,9 +48,12 @@ public sealed class GeometryMeasurer : IGeometryMeasurer
         if (cross != 0)
         {
             var t = Cross(Subtract(q, p), s) / cross; var u = Cross(Subtract(q, p), r) / cross;
-            if (mode == EVisionLineDistanceMode.InfiniteLines || t >= 0 && t <= 1 && u >= 0 && u <= 1)
+            double x = p.X + t * r.X, y = p.Y + t * r.Y;
+            // 近乎平行的两条无限直线交点在坐标范围之外（例如两条拟合出的竖直边）：按平行处理，避免构造越界坐标。
+            bool representable = Representable(x) && Representable(y);
+            if (representable && (mode == EVisionLineDistanceMode.InfiniteLines || t >= 0 && t <= 1 && u >= 0 && u <= 1))
             {
-                var intersection = new PointD(p.X + t * r.X, p.Y + t * r.Y);
+                var intersection = new PointD(x, y);
                 return Result(intersection, intersection, a.A, space, mode);
             }
         }
@@ -84,6 +87,8 @@ public sealed class GeometryMeasurer : IGeometryMeasurer
         if (clamp) t = Math.Max(0, Math.Min(1, t));
         return new PointD(a.X + t * dx, a.Y + t * dy);
     }
+    // 与 PointD 的取值范围一致：有限且不超过正负一千万像素。
+    private static bool Representable(double value) => !double.IsNaN(value) && !double.IsInfinity(value) && Math.Abs(value) <= 10000000;
     private static PointD Subtract(PointD a, PointD b) => new PointD(a.X - b.X, a.Y - b.Y);
     private static double Cross(PointD a, PointD b) => a.X * b.Y - a.Y * b.X;
 }

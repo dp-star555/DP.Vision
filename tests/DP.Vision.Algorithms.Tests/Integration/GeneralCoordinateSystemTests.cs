@@ -69,6 +69,9 @@ public sealed class GeneralCoordinateSystemTests
         Assert.ThrowsExactly<ArgumentException>(() => VisionCoordinateBuilder.FromTwoPoints(definition, frame, P(1, 1), P(1, 1), 1));
         Assert.ThrowsExactly<InvalidOperationException>(() => VisionCoordinateBuilder.FromTwoPoints(definition, frame, P(1, 1), new VisionPoint("other", new PointD(2, 2)), 1));
         Assert.ThrowsExactly<ArgumentException>(() => VisionCoordinateBuilder.FromLines(definition, frame, axis, new VisionLine(P(5, 30), P(15, 30))));
+        // 近乎平行但未达到平行判定时，交点超出坐标范围也明确拒绝，而不是抛参数越界。
+        Assert.ThrowsExactly<ArgumentException>(() => VisionCoordinateBuilder.FromLines(definition, frame,
+            new VisionLine(P(0, 0), P(0, 1000)), new VisionLine(P(5, 0), P(5.00001, 1000))));
     }
 
     /// <summary>父子组合不重复补偿。</summary>
