@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 using DP.Vision.Algorithms;
 using OpenCvSharp;
@@ -10,6 +11,16 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
 {
     /// <summary>对齐时尝试的缩放百分比；100优先，其余用于吸收外接框归一化带来的粗细缩放误差。</summary>
     private static readonly int[] Scales = { 100, 98, 102, 96, 104, 94, 106 };
+
+    /// <summary>归一化画布边长。</summary>
+    private const int Side = 112;
+
+    /// <summary>对齐搜索的最大平移（像素）。</summary>
+    private const int Shift = 2;
+
+    /// <summary>每行打包所需的64位字数。</summary>
+    private const int Words = 2;
+
 
     /// <summary>贴边差异块内切半径不超过此值（归一化像素，约4像素宽以内）时视为轮廓细条，不计入。</summary>
     private const float MinimumEdgeDefectRadius = 2f;
@@ -47,46 +58,7 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
 
         using var a = Normalize(actual, options, token);
         using var r = Normalize(reference, options, token);
-        using var best = a.Clone();
-        double bestScore = -1;
-        int bestDistance = int.MaxValue;
-        using var shifted = new Mat();
-        using var intersection = new Mat();
-        using var union = new Mat();
-        using var transform = new Mat(2, 3, MatType.CV_32F, Scalar.All(0));
-        // 外接框归一化会把笔画粗细变化转成整体缩放误差（越靠近外缘误差越大），因此在平移之外搜索±6%缩放。
-        // 缩放会改变面积，用交并比而不是交集选择最佳对齐，避免偏向放大。
-        foreach (int percent in Scales)
-        {
-            float scale = percent / 100f;
-            transform.Set(0, 0, scale);
-            transform.Set(1, 1, scale);
-            for (int dy = -2; dy <= 2; dy++)
-            {
-                for (int dx = -2; dx <= 2; dx++)
-                {
-                    token.ThrowIfCancellationRequested();
-                    transform.Set(0, 2, 56 * (1 - scale) + dx);
-                    transform.Set(1, 2, 56 * (1 - scale) + dy);
-                    Cv2.WarpAffine(a, shifted, transform, new Size(112, 112), InterpolationFlags.Nearest);
-                    Cv2.BitwiseAnd(shifted, r, intersection);
-                    Cv2.BitwiseOr(shifted, r, union);
-                    int overlap = Cv2.CountNonZero(intersection),
-                        total = Cv2.CountNonZero(union),
-                        distance = dx * dx + dy * dy + (percent - 100) * (percent - 100);
-                    double score = total == 0 ? 0 : overlap / (double)total;
-                    if (
-                        score > bestScore + 1e-9
-                        || (Math.Abs(score - bestScore) <= 1e-9 && distance < bestDistance)
-                    )
-                    {
-                        shifted.CopyTo(best);
-                        bestScore = score;
-                        bestDistance = distance;
-                    }
-                }
-            }
-        }
+        using var best = Align(a, r, token);
 
         // 不先膨胀：膨胀会把内部小缺墨一并缩掉。先按原始差异分块，再用到参考边缘的距离判断每块是否深入笔画。
         using var inv = new Mat();
@@ -141,37 +113,50 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
         int m = Cv2.CountNonZero(missing),
             e = Cv2.CountNonZero(extra),
             n = Cv2.CountNonZero(r);
-        using var delta = new Mat(112, 112, MatType.CV_8UC3, Scalar.All(255));
-        for (int y = 0; y < 112; y++)
+        var bestData = Bytes(best);
+        var referenceData = Bytes(r);
+        var missingData = Bytes(missing);
+        var rawMissingData = Bytes(rawMissing);
+        var extraData = Bytes(extra);
+        var rawExtraData = Bytes(rawExtra);
+        var deltaData = new byte[Side * Side * 3];
+        for (int p = 0; p < Side * Side; p++)
         {
-            token.ThrowIfCancellationRequested();
-            for (int x = 0; x < 112; x++)
+            // 浅色为已忽略的边缘波动，深色为计入差异的缺墨/多墨（BGR）。
+            byte b = 255,
+                g = 255,
+                red = 255;
+            if (bestData[p] > 0 || referenceData[p] > 0)
             {
-                if (best.At<byte>(y, x) > 0 || r.At<byte>(y, x) > 0)
-                {
-                    delta.Set(y, x, new Vec3b(190, 190, 190));
-                }
-
-                // 浅色为已忽略的边缘波动，深色为计入差异的缺墨/多墨。
-                if (missing.At<byte>(y, x) > 0)
-                {
-                    delta.Set(y, x, new Vec3b(30, 30, 230));
-                }
-                else if (rawMissing.At<byte>(y, x) > 0)
-                {
-                    delta.Set(y, x, new Vec3b(200, 200, 250));
-                }
-
-                if (extra.At<byte>(y, x) > 0)
-                {
-                    delta.Set(y, x, new Vec3b(230, 180, 0));
-                }
-                else if (rawExtra.At<byte>(y, x) > 0)
-                {
-                    delta.Set(y, x, new Vec3b(250, 235, 190));
-                }
+                (b, g, red) = (190, 190, 190);
             }
+
+            if (missingData[p] > 0)
+            {
+                (b, g, red) = (30, 30, 230);
+            }
+            else if (rawMissingData[p] > 0)
+            {
+                (b, g, red) = (200, 200, 250);
+            }
+
+            if (extraData[p] > 0)
+            {
+                (b, g, red) = (230, 180, 0);
+            }
+            else if (rawExtraData[p] > 0)
+            {
+                (b, g, red) = (250, 235, 190);
+            }
+
+            deltaData[p * 3] = b;
+            deltaData[p * 3 + 1] = g;
+            deltaData[p * 3 + 2] = red;
         }
+
+        token.ThrowIfCancellationRequested();
+        using var delta = new Mat(Side, Side, MatType.CV_8UC3);
+        Marshal.Copy(deltaData, 0, delta.Data, deltaData.Length);
 
         using var actualView = new Mat();
         using var referenceView = new Mat();
@@ -237,35 +222,49 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
             shallowest[i] = float.MaxValue;
         }
 
-        for (int y = 0; y < raw.Rows; y++)
+        int cols = raw.Cols;
+        labels.GetArray(out int[] labelData);
+        depth.GetArray(out float[] depthData);
+        own.GetArray(out float[] ownData);
+        float[]? insideData = null;
+        if (inside != null)
         {
-            token.ThrowIfCancellationRequested();
-            for (int x = 0; x < raw.Cols; x++)
-            {
-                int label = labels.At<int>(y, x);
-                if (label == 0)
-                {
-                    continue;
-                }
+            inside.GetArray(out float[] values);
+            insideData = values;
+        }
 
-                float d = depth.At<float>(y, x);
-                shallowest[label] = Math.Min(shallowest[label], d);
-                width[label] = Math.Max(width[label], own.At<float>(y, x));
-                if (d > deepest[label])
-                {
-                    deepest[label] = d;
-                    at[label] = new Point(x, y);
-                }
+        for (int p = 0; p < labelData.Length; p++)
+        {
+            int label = labelData[p];
+            if (label == 0)
+            {
+                continue;
+            }
+
+            float d = depthData[p];
+            shallowest[label] = Math.Min(shallowest[label], d);
+            width[label] = Math.Max(width[label], ownData[p]);
+            if (d > deepest[label])
+            {
+                deepest[label] = d;
+                at[label] = new Point(p % cols, p / cols);
             }
         }
 
+        token.ThrowIfCancellationRequested();
         var required = new float[count];
         for (int i = 1; i < count; i++)
         {
             // 局部半宽：最深点附近（约两倍深度范围内）参考墨迹的最大内距离，粗细不同的笔画各自按比例判断。
             // 中心线判断：最深点在自身深度范围内已是局部最大值，说明差异切到了笔画中心。
-            float half = inside == null ? (float)halfWidth : DiskMaximum(inside, at[i], 2 * deepest[i] + 1);
-            float center = inside == null ? float.MaxValue : DiskMaximum(inside, at[i], deepest[i] + 1);
+            float half =
+                insideData == null
+                    ? (float)halfWidth
+                    : DiskMaximum(insideData, raw.Rows, cols, at[i], 2 * deepest[i] + 1);
+            float center =
+                insideData == null
+                    ? float.MaxValue
+                    : DiskMaximum(insideData, raw.Rows, cols, at[i], deepest[i] + 1);
             double need = Math.Max(band + 1, options.DepthRatio * half);
             required[i] = (float)(missing ? Math.Min(need, half) : need);
             // 贴着笔画边缘的差异块必须是有宽度的缺口，或者（缺墨时）切到笔画中心；
@@ -278,27 +277,28 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
             }
         }
 
-        var core = new Mat(raw.Size(), MatType.CV_8UC1, Scalar.All(0));
-        using var kept = new Mat(raw.Size(), MatType.CV_8UC1, Scalar.All(0));
-        try
+        var keptData = new byte[labelData.Length];
+        var coreData = new byte[labelData.Length];
+        for (int p = 0; p < labelData.Length; p++)
         {
-            for (int y = 0; y < raw.Rows; y++)
+            int label = labelData[p];
+            if (label > 0 && deepest[label] >= required[label] - 1e-3f)
             {
-                token.ThrowIfCancellationRequested();
-                for (int x = 0; x < raw.Cols; x++)
+                keptData[p] = 255;
+                if (depthData[p] >= (float)Math.Min(required[label], band + 1) - 1e-3f)
                 {
-                    int label = labels.At<int>(y, x);
-                    if (label > 0 && deepest[label] >= required[label] - 1e-3f)
-                    {
-                        kept.Set(y, x, (byte)255);
-                        if (depth.At<float>(y, x) >= (float)Math.Min(required[label], band + 1) - 1e-3f)
-                        {
-                            core.Set(y, x, (byte)255);
-                        }
-                    }
+                    coreData[p] = 255;
                 }
             }
+        }
 
+        token.ThrowIfCancellationRequested();
+        var core = new Mat(raw.Rows, cols, MatType.CV_8UC1);
+        using var kept = new Mat(raw.Rows, cols, MatType.CV_8UC1);
+        try
+        {
+            Marshal.Copy(coreData, 0, core.Data, coreData.Length);
+            Marshal.Copy(keptData, 0, kept.Data, keptData.Length);
             // 从深处向外恢复容差带宽度，完整量出缺陷边缘，而不是像膨胀容差那样缩小它。
             int radius = (int)Math.Ceiling(band) + 1;
             using var grow = Cv2.GetStructuringElement(
@@ -325,28 +325,180 @@ public sealed class OpenCvGlyphComparer : IGlyphComparer
     }
 
     /// <summary>取以某点为圆心、指定半径内的最大距离值。</summary>
-    /// <param name = "distance">32位浮点距离图。</param>
+    /// <param name = "distance">按行排列的32位浮点距离图。</param>
+    /// <param name = "rows">行数。</param>
+    /// <param name = "cols">列数。</param>
     /// <param name = "center">圆心像素。</param>
     /// <param name = "radius">归一化像素半径。</param>
     /// <returns>圆内最大距离值。</returns>
-    private static float DiskMaximum(Mat distance, Point center, float radius)
+    private static float DiskMaximum(float[] distance, int rows, int cols, Point center, float radius)
     {
         int r = (int)Math.Ceiling(radius);
         float maximum = 0;
-        for (int y = Math.Max(0, center.Y - r); y <= Math.Min(distance.Rows - 1, center.Y + r); y++)
+        for (int y = Math.Max(0, center.Y - r); y <= Math.Min(rows - 1, center.Y + r); y++)
         {
-            for (int x = Math.Max(0, center.X - r); x <= Math.Min(distance.Cols - 1, center.X + r); x++)
+            for (int x = Math.Max(0, center.X - r); x <= Math.Min(cols - 1, center.X + r); x++)
             {
                 int dx = x - center.X,
                     dy = y - center.Y;
                 if (dx * dx + dy * dy <= radius * radius)
                 {
-                    maximum = Math.Max(maximum, distance.At<float>(y, x));
+                    maximum = Math.Max(maximum, distance[y * cols + x]);
                 }
             }
         }
 
         return maximum;
+    }
+
+    /// <summary>
+    /// 对齐搜索：每个缩放只做一次最近邻仿射，画到四周各多2像素的画布上；±2像素平移即从该画布裁取112×112，
+    /// 按行打包成位串用位与/位计数求交集和并集。按交并比选最佳（缩放会改变面积，不用交集），同分取离原位最近的。
+    /// </summary>
+    /// <param name = "actual">归一化实际字。</param>
+    /// <param name = "reference">归一化参考字。</param>
+    /// <param name = "token">协作式取消标记。</param>
+    /// <returns>调用方拥有的最佳对齐后的实际字。</returns>
+    private static Mat Align(Mat actual, Mat reference, CancellationToken token)
+    {
+        const int padded = Side + 2 * Shift;
+        var referenceRows = Pack(Bytes(reference), Side, 0, Side);
+        int referenceCount = 0;
+        foreach (ulong word in referenceRows)
+        {
+            referenceCount += PopCount(word);
+        }
+
+        double bestScore = -1;
+        int bestDistance = int.MaxValue,
+            bestPercent = 100,
+            bestDx = 0,
+            bestDy = 0;
+        using var transform = new Mat(2, 3, MatType.CV_32F, Scalar.All(0));
+        using var canvas = new Mat();
+        // 外接框归一化会把笔画粗细变化转成整体缩放误差（越靠近外缘误差越大），因此在平移之外搜索±6%缩放。
+        foreach (int percent in Scales)
+        {
+            token.ThrowIfCancellationRequested();
+            Warp(actual, canvas, transform, percent);
+            var wide = Pack(Bytes(canvas), padded, 0, padded);
+            // 每个水平平移量一份按行打包的画布（列从Shift-dx开始，由整行位串右移得到）；垂直平移只改变取用的行。
+            var columns = new ulong[2 * Shift + 1][];
+            for (int dx = -Shift; dx <= Shift; dx++)
+            {
+                columns[dx + Shift] = Columns(wide, Shift - dx);
+            }
+
+            for (int dy = -Shift; dy <= Shift; dy++)
+            {
+                for (int dx = -Shift; dx <= Shift; dx++)
+                {
+                    var rows = columns[dx + Shift];
+                    int overlap = 0,
+                        shifted = 0;
+                    for (int y = 0; y < Side; y++)
+                    {
+                        int source = (y - dy + Shift) * Words;
+                        for (int w = 0; w < Words; w++)
+                        {
+                            ulong value = rows[source + w];
+                            shifted += PopCount(value);
+                            overlap += PopCount(value & referenceRows[y * Words + w]);
+                        }
+                    }
+
+                    int total = shifted + referenceCount - overlap,
+                        distance = dx * dx + dy * dy + (percent - 100) * (percent - 100);
+                    double score = total == 0 ? 0 : overlap / (double)total;
+                    if (
+                        score > bestScore + 1e-9
+                        || (Math.Abs(score - bestScore) <= 1e-9 && distance < bestDistance)
+                    )
+                    {
+                        bestScore = score;
+                        bestDistance = distance;
+                        bestPercent = percent;
+                        bestDx = dx;
+                        bestDy = dy;
+                    }
+                }
+            }
+        }
+
+        Warp(actual, canvas, transform, bestPercent);
+        using var crop = new Mat(canvas, new Rect(Shift - bestDx, Shift - bestDy, Side, Side));
+        return crop.Clone();
+    }
+
+    /// <summary>以画布中心为不动点缩放，并整体右下移<see cref = "Shift"/>像素画到加宽画布上（最近邻，边界补0）。</summary>
+    private static void Warp(Mat actual, Mat canvas, Mat transform, int percent)
+    {
+        float scale = percent / 100f;
+        transform.Set(0, 0, scale);
+        transform.Set(1, 1, scale);
+        transform.Set(0, 2, Side / 2 * (1 - scale) + Shift);
+        transform.Set(1, 2, Side / 2 * (1 - scale) + Shift);
+        Cv2.WarpAffine(
+            actual,
+            canvas,
+            transform,
+            new Size(Side + 2 * Shift, Side + 2 * Shift),
+            InterpolationFlags.Nearest
+        );
+    }
+
+    /// <summary>把每行从<paramref name = "left"/>列起的<paramref name = "count"/>个像素（不超过128）打包成位串（非0为1），每行<see cref = "Words"/>个64位字。</summary>
+    private static ulong[] Pack(byte[] data, int stride, int left, int count)
+    {
+        int rows = data.Length / stride;
+        var packed = new ulong[rows * Words];
+        for (int y = 0; y < rows; y++)
+        {
+            int row = y * stride + left;
+            for (int x = 0; x < count; x++)
+            {
+                if (data[row + x] != 0)
+                {
+                    packed[y * Words + (x >> 6)] |= 1UL << (x & 63);
+                }
+            }
+        }
+
+        return packed;
+    }
+
+    /// <summary>从整行位串中取第<paramref name = "left"/>列起的<see cref = "Side"/>列（左移出界的高位清零）。</summary>
+    private static ulong[] Columns(ulong[] wide, int left)
+    {
+        const ulong high = (1UL << (Side - 64)) - 1;
+        var packed = new ulong[wide.Length];
+        for (int i = 0; i < wide.Length; i += Words)
+        {
+            ulong low = wide[i],
+                top = wide[i + 1];
+            packed[i] = left == 0 ? low : (low >> left) | (top << (64 - left));
+            packed[i + 1] = (top >> left) & high;
+        }
+
+        return packed;
+    }
+
+    private static int PopCount(ulong value)
+    {
+        value -= (value >> 1) & 0x5555555555555555UL;
+        value = (value & 0x3333333333333333UL) + ((value >> 2) & 0x3333333333333333UL);
+        value = (value + (value >> 4)) & 0x0F0F0F0F0F0F0F0FUL;
+        return (int)((value * 0x0101010101010101UL) >> 56);
+    }
+
+    /// <summary>复制为紧密排列的字节数组。</summary>
+    private static byte[] Bytes(Mat image)
+    {
+        using var copy = image.IsContinuous() ? null : image.Clone();
+        var source = copy ?? image;
+        var bytes = new byte[source.Rows * source.Cols * source.ElemSize()];
+        Marshal.Copy(source.Data, bytes, 0, bytes.Length);
+        return bytes;
     }
 
     /// <summary>
