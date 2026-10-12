@@ -27,16 +27,31 @@ public enum EVisionDisplayRole
     AxisY
 }
 
+/// <summary>显示项的判定状态；非 <see cref="None"/> 时画布用状态色代替角色色（几何和标签都换）。</summary>
+public enum EVisionDisplayTone
+{
+    /// <summary>无判定，按角色配色。</summary>
+    None,
+    /// <summary>合格（绿）。</summary>
+    Ok,
+    /// <summary>警告/临界（橙）。</summary>
+    Warning,
+    /// <summary>不合格（红）。</summary>
+    Ng
+}
+
 /// <summary>
 /// 一个显示项：原图坐标几何或标记点、角色、图上短标签及点击说明。标记点由画布按屏幕像素画成固定大小的 ×。
 /// </summary>
 public sealed class VisionDisplayItem
 {
-    private VisionDisplayItem(Geometry? geometry, PointD? marker, EVisionDisplayRole role, string? label, string? detail)
+    private VisionDisplayItem(Geometry? geometry, PointD? marker, EVisionDisplayRole role, string? label, string? detail,
+        EVisionDisplayTone tone = EVisionDisplayTone.None, uint? argb = null)
     {
         if (!Enum.IsDefined(typeof(EVisionDisplayRole), role)) throw new ArgumentOutOfRangeException(nameof(role));
+        if (!Enum.IsDefined(typeof(EVisionDisplayTone), tone)) throw new ArgumentOutOfRangeException(nameof(tone));
         if (label?.Length > 64) throw new ArgumentException("图上标签最长64个字符，完整说明放在 detail。", nameof(label));
-        Geometry = geometry; Marker = marker; Role = role; Label = label; Detail = detail;
+        Geometry = geometry; Marker = marker; Role = role; Label = label; Detail = detail; Tone = tone; Argb = argb;
     }
 
     /// <summary>几何显示项。</summary>
@@ -67,6 +82,18 @@ public sealed class VisionDisplayItem
     public string? Label { get; }
     /// <summary>点击说明；为空时由画布使用结果摘要。</summary>
     public string? Detail { get; }
+    /// <summary>判定状态；非 None 时覆盖角色色。</summary>
+    public EVisionDisplayTone Tone { get; }
+    /// <summary>显式颜色（0xAARRGGBB），仅在角色和状态都表达不了时使用；不为空时覆盖状态色和角色色。</summary>
+    public uint? Argb { get; }
+
+    /// <summary>返回带判定状态的副本，如按公差判出的 OK/NG。</summary>
+    /// <param name="tone">判定状态。</param>
+    public VisionDisplayItem WithTone(EVisionDisplayTone tone) => new VisionDisplayItem(Geometry, Marker, Role, Label, Detail, tone, Argb);
+
+    /// <summary>返回带显式颜色的副本；传 null 恢复按状态/角色配色。优先用角色和状态，颜色只作最后手段。</summary>
+    /// <param name="argb">0xAARRGGBB 颜色。</param>
+    public VisionDisplayItem WithColor(uint? argb) => new VisionDisplayItem(Geometry, Marker, Role, Label, Detail, Tone, argb);
 
     /// <summary>不依赖屏幕尺度的几何（标记点为半径2像素的小圆），供只认几何的显示使用。</summary>
     public Geometry ToGeometry() => Geometry ?? new EllipseGeometry(Marker!.Value, 2, 2);

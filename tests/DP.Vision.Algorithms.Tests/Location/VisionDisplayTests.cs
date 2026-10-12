@@ -39,4 +39,23 @@ public sealed class VisionDisplayTests
         Assert.ThrowsExactly<ArgumentException>(() => VisionDisplayItem.Point(new PointD(0, 0), label: new string('x', 65)));
         Assert.IsInstanceOfType(VisionDisplayItem.Point(new PointD(1, 2)).ToGeometry(), typeof(EllipseGeometry));
     }
+
+    /// <summary>状态和显式颜色以副本叠加，不改原项；颜色可清除。</summary>
+    [TestMethod]
+    public void ToneAndColorAreCopiedOverrides()
+    {
+        var item = VisionDisplayItem.Segment(new PointD(0, 0), new PointD(1, 0), EVisionDisplayRole.Measurement, "1.000 px", "宽度");
+        Assert.AreEqual(EVisionDisplayTone.None, item.Tone);
+        Assert.IsNull(item.Argb);
+        var ng = item.WithTone(EVisionDisplayTone.Ng);
+        Assert.AreEqual(EVisionDisplayTone.Ng, ng.Tone);
+        Assert.AreEqual(EVisionDisplayTone.None, item.Tone);
+        Assert.AreEqual("1.000 px", ng.Label); Assert.AreEqual("宽度", ng.Detail); Assert.AreSame(item.Geometry, ng.Geometry);
+        var colored = ng.WithColor(0xFF00FFFF);
+        Assert.AreEqual(0xFF00FFFFu, colored.Argb); Assert.AreEqual(EVisionDisplayTone.Ng, colored.Tone);
+        Assert.IsNull(colored.WithColor(null).Argb);
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => item.WithTone((EVisionDisplayTone)99));
+        var marker = VisionDisplayItem.Point(new PointD(2, 3)).WithTone(EVisionDisplayTone.Ok);
+        Assert.AreEqual(new PointD(2, 3), marker.Marker!.Value);
+    }
 }
