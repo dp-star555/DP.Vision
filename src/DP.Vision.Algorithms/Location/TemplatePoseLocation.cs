@@ -104,7 +104,7 @@ public sealed class TemplatePoseTransform
 /// 角度单位为度，顺时针为正（图像Y轴向下），与搜索区间、参考方向的约定一致。
 /// 未找到时Transform为空，各数值输出为NaN，不能伪装成零位姿。
 /// </summary>
-public sealed class TemplatePoseResult : IVisionGeometryFact
+public sealed class TemplatePoseResult : IVisionGeometryFact, IVisionDisplayFact
 {
     /// <summary>创建同帧匹配结果。</summary>
     /// <param name="frameId">图像身份。</param><param name="templateFrameId">模板身份。</param><param name="score">最佳候选分数。</param>
@@ -179,17 +179,18 @@ public sealed class TemplatePoseResult : IVisionGeometryFact
     public Geometry? MatchGeometry => Transform is { } p ? new RectangleGeometry(p.Center, p.TemplateWidth * p.Scale, p.TemplateHeight * p.Scale, p.AngleRadians) : null;
     /// <inheritdoc/>
     [Browsable(false)]
-    public IReadOnlyList<Geometry> DisplayGeometry
+    public IReadOnlyList<Geometry> DisplayGeometry => VisionDisplay.Geometries(DisplayItems);
+    /// <summary>匹配框（标注分数）、模型轮廓、参考点及参考坐标轴；未找到为空。</summary>
+    [Browsable(false)]
+    public IReadOnlyList<VisionDisplayItem> DisplayItems
     {
         get
         {
-            if (Transform is not { } pose || ReferenceToImage is not { } m) return Array.Empty<Geometry>();
-            var origin = new PointD(m.Tx, m.Ty);
+            if (Transform is not { } pose || ReferenceToImage is not { } m) return Array.Empty<VisionDisplayItem>();
             double length = Math.Max(8, Math.Min(pose.TemplateWidth, pose.TemplateHeight) * pose.Scale / 3);
-            PointD Axis(double x, double y) { double norm = Math.Sqrt(x * x + y * y); return new PointD(origin.X + length * x / norm, origin.Y + length * y / norm); }
-            return Array.AsReadOnly(new Geometry[] { MatchGeometry! }.Concat(ModelGeometry).Concat(new Geometry[] { new EllipseGeometry(origin, 2, 2),
-                new ContourGeometry(new[] { origin, Axis(m.M11, m.M21) }, false, false),
-                new ContourGeometry(new[] { origin, Axis(m.M12, m.M22) }, false, false) }).ToArray());
+            return new[] { new VisionDisplayItem(MatchGeometry!, EVisionDisplayRole.Result, FormattableString.Invariant($"分数 {Score:F3}")) }
+                .Concat(ModelGeometry.Select(g => new VisionDisplayItem(g, EVisionDisplayRole.Model)))
+                .Concat(VisionDisplay.Axes(m, length)).ToArray();
         }
     }
     /// <summary>正常空检出也完成。</summary>

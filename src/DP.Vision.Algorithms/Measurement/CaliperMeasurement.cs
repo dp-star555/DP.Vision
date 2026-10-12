@@ -68,7 +68,7 @@ public sealed class CaliperEdge
 }
 
 /// <summary>卡尺证据，包含完整一维灰度剖面，空边缘集合正常完成。</summary>
-public sealed class CaliperResult
+public sealed class CaliperResult : IVisionDisplayFact
 {
     internal CaliperResult(string frameId, CaliperOptions options, double step, double[] profile, IEnumerable<CaliperEdge> edges)
     { FrameId = frameId; Start = options.Start; End = options.End; SampleStep = step; Profile = Array.AsReadOnly((double[])profile.Clone()); Edges = Array.AsReadOnly(edges.ToArray()); }
@@ -106,6 +106,13 @@ public sealed class CaliperResult
     public int Count => Edges.Count;
     /// <summary>完成状态，空边缘不是执行错误。</summary>
     public EAlgorithmStatus Status => EAlgorithmStatus.Completed;
+    /// <inheritdoc/>
+    public string Summary => $"卡尺边缘 {Count}；剖面采样 {Profile.Count}；梯度峰抛物线插值。";
+    /// <summary>采样方向线及各边缘点（点击边缘查看坐标与梯度）。</summary>
+    [Browsable(false)]
+    public IReadOnlyList<VisionDisplayItem> DisplayItems => new[] { VisionDisplayItem.Segment(Start, End, EVisionDisplayRole.Input) }
+        .Concat(Edges.Select(e => VisionDisplayItem.Point(e.Position, EVisionDisplayRole.Result,
+            detail: FormattableString.Invariant($"边缘 ({e.Position.X:F4},{e.Position.Y:F4})；梯度 {e.Gradient:F3}")))).ToArray();
 }
 
 /// <summary>独立采样带卡尺。</summary>

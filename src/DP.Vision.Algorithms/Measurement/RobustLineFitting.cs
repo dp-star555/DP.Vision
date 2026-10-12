@@ -6,7 +6,7 @@ using System.Threading;
 namespace DP.Vision.Algorithms;
 
 /// <summary>鲁棒直线拟合的端点、内点索引和残差，不拥有图像。</summary>
-public sealed class RobustLineResult
+public sealed class RobustLineResult : IVisionDisplayFact
 {
     internal RobustLineResult(string frameId, PointD a, PointD b, int[] indices, double rms)
     { FrameId = frameId; A = a; B = b; InlierIndices = Array.AsReadOnly((int[])indices.Clone()); RmsError = rms; }
@@ -45,6 +45,10 @@ public sealed class RobustLineResult
     public double RmsError { get; }
     /// <summary>完成状态，不是产品判定。</summary>
     public EAlgorithmStatus Status => EAlgorithmStatus.Completed;
+    /// <inheritdoc/>
+    public string Summary => FormattableString.Invariant($"鲁棒直线内点 {InlierCount}；RMS {RmsError:F4}px。");
+    /// <inheritdoc/>
+    public IReadOnlyList<VisionDisplayItem> DisplayItems => new[] { VisionDisplayItem.Segment(A, B, EVisionDisplayRole.Result, FormattableString.Invariant($"RMS {RmsError:F3}")) };
 }
 
 /// <summary>确定性、有预算的RANSAC直线拟合能力。</summary>

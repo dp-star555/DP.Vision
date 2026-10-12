@@ -16,7 +16,7 @@ public enum EVisionLineDistanceMode
 }
 
 /// <summary>带单位空间、原图最近点及来源的距离证据；不是产品判定。</summary>
-public sealed class GeometricDistanceResult : IVisionGeometryFact
+public sealed class GeometricDistanceResult : IVisionGeometryFact, IVisionDisplayFact
 {
     internal GeometricDistanceResult(VisionPoint a, VisionPoint b, EVisionCoordinateSpace space, EVisionLineDistanceMode mode, EVisionDistanceKind kind)
     {
@@ -46,8 +46,19 @@ public sealed class GeometricDistanceResult : IVisionGeometryFact
     /// <summary>测量正常完成，与业务阈值无关。</summary>
     public EAlgorithmStatus Status => EAlgorithmStatus.Completed;
     /// <inheritdoc/>
-    public IReadOnlyList<Geometry> DisplayGeometry => Array.AsReadOnly(new Geometry[] { Distance == 0
-        ? (Geometry)new EllipseGeometry(A.ImagePosition, 1, 1) : new ContourGeometry(new[] { A.ImagePosition, B.ImagePosition }) });
+    public IReadOnlyList<Geometry> DisplayGeometry => VisionDisplay.Geometries(DisplayItems);
+    /// <summary>两个最近点和它们之间的测量线；距离为零时只有一个点。</summary>
+    public IReadOnlyList<VisionDisplayItem> DisplayItems
+    {
+        get
+        {
+            var label = FormattableString.Invariant($"{Distance:F3} {Unit}");
+            return Distance == 0
+                ? new[] { VisionDisplayItem.Point(A.ImagePosition, EVisionDisplayRole.Result, label) }
+                : new[] { VisionDisplayItem.Point(A.ImagePosition), VisionDisplayItem.Point(B.ImagePosition),
+                    VisionDisplayItem.Segment(A.ImagePosition, B.ImagePosition, EVisionDisplayRole.Measurement, label) };
+        }
+    }
     /// <inheritdoc/>
     public string Summary => FormattableString.Invariant($"距离 {Distance:F6} {Unit}；{(Kind == EVisionDistanceKind.PointToPoint ? "点到点" : Kind == EVisionDistanceKind.PointToLine ? "点到线" : "线到线")}；{(Kind == EVisionDistanceKind.PointToPoint ? "点间距" : Mode == EVisionLineDistanceMode.Segments ? "有限线段" : "无限直线")}；完成不等于产品合格。");
 }

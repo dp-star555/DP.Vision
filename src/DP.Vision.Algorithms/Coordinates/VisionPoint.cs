@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace DP.Vision.Algorithms;
 
 /// <summary>同帧视觉点；原图位置始终保留，局部位置带明确定位来源。</summary>
-public sealed class VisionPoint : IVisionGeometryFact
+public sealed class VisionPoint : IVisionGeometryFact, IVisionDisplayFact
 {
     /// <summary>创建原图事实，可附加同帧定位。</summary>
     /// <param name="frameId">来源帧身份。</param><param name="imagePosition">原图像素坐标。</param><param name="coordinates">可选定位来源。</param>
@@ -20,7 +20,9 @@ public sealed class VisionPoint : IVisionGeometryFact
     /// <summary>原图像素边界坐标。</summary>
     public PointD ImagePosition { get; }
     /// <inheritdoc/>
-    public IReadOnlyList<Geometry> DisplayGeometry => Array.AsReadOnly(new Geometry[] { new EllipseGeometry(ImagePosition, 1, 1) });
+    public IReadOnlyList<Geometry> DisplayGeometry => VisionDisplay.Geometries(DisplayItems);
+    /// <inheritdoc/>
+    public IReadOnlyList<VisionDisplayItem> DisplayItems => new[] { VisionDisplayItem.Point(ImagePosition) };
     /// <inheritdoc/>
     public string Summary => FormattableString.Invariant($"视觉点 原图({ImagePosition.X:F4}, {ImagePosition.Y:F4})image-px；坐标来源 {CoordinateSystem?.CoordinateSystemId ?? "原图"}")
         + (LocalPosition is { } local ? FormattableString.Invariant($"；局部({local.X:F4}, {local.Y:F4}){CoordinateSystem!.Definition.UnitName}。") : "。");
