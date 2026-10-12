@@ -1,11 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Threading;
 
 namespace DP.Vision.Algorithms;
 
 /// <summary>带来源帧和画布尺寸的精确Region事实，不拥有图像。</summary>
-public sealed class RegionAnalysisResult
+public sealed class RegionAnalysisResult : IVisionDisplayFact
 {
     /// <summary>构造并检查所有游程在画布内。</summary>
     /// <param name="frameId">内容身份。</param><param name="width">原图宽。</param><param name="height">原图高。</param><param name="region">精确Region。</param>
@@ -37,6 +38,11 @@ public sealed class RegionAnalysisResult
     public RegionGeometry Region { get; }
     /// <summary>像素面积。</summary>
     public long Area => Region.AreaPixels;
+    /// <inheritdoc/>
+    public string Summary => $"精确Region面积 {Area}；孔洞保留，空区域正常完成。";
+    /// <inheritdoc/>
+    [Browsable(false)]
+    public IReadOnlyList<VisionDisplayItem> DisplayItems => new[] { new VisionDisplayItem(Region, EVisionDisplayRole.Region, $"面积 {Area}") };
     /// <summary>完成不等于非空或产品合格。</summary>
     public EAlgorithmStatus Status => EAlgorithmStatus.Completed;
     /// <summary>拒绝跨帧或尺寸不一致的掩码。</summary>

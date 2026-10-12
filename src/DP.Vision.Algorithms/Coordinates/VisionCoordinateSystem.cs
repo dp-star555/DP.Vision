@@ -117,7 +117,7 @@ public class VisionCoordinateSystem
 }
 
 /// <summary>构建节点的统一输出，适用于定位和参数构建来源。</summary>
-public sealed class VisionCoordinateSystemResult : IVisionCoordinateResult, IVisionGeometryFact
+public sealed class VisionCoordinateSystemResult : IVisionCoordinateResult, IVisionGeometryFact, IVisionDisplayFact
 {
     /// <summary>包装已验证的本帧坐标系。</summary><param name="coordinateSystem">有效坐标系。</param><param name="calibrationRms">可选标定拟合误差。</param>
     public VisionCoordinateSystemResult(VisionCoordinateSystem coordinateSystem, double? calibrationRms = null)
@@ -136,15 +136,8 @@ public sealed class VisionCoordinateSystemResult : IVisionCoordinateResult, IVis
     public string Summary => "坐标系 " + CoordinateSystem.Definition.Name + "（" + CoordinateSystem.Definition.Id + "，v" + CoordinateSystem.Definition.Version + "，" + CoordinateSystem.Definition.UnitName + "）；来源 " + CoordinateSystem.SourceIdentity
         + (CalibrationRms.HasValue ? FormattableString.Invariant($"；拟合RMS {CalibrationRms.Value:F4}image-px。") : "。");
     /// <inheritdoc/>
-    public IReadOnlyList<Geometry> DisplayGeometry
-    {
-        get
-        {
-            var m = CoordinateSystem.LocalToImage; var origin = new PointD(m.Tx, m.Ty);
-            PointD Axis(double x, double y) { double length = Math.Sqrt(x * x + y * y); return new PointD(origin.X + 40 * x / length, origin.Y + 40 * y / length); }
-            return Array.AsReadOnly(new Geometry[] { new EllipseGeometry(origin, 2, 2),
-                new ContourGeometry(new[] { origin, Axis(m.M11, m.M21) }, false, false),
-                new ContourGeometry(new[] { origin, Axis(m.M12, m.M22) }, false, false) });
-        }
-    }
+    public IReadOnlyList<Geometry> DisplayGeometry => VisionDisplay.Geometries(DisplayItems);
+    /// <summary>原点（标注“名称/版本”）及 X/Y 轴。</summary>
+    public IReadOnlyList<VisionDisplayItem> DisplayItems => VisionDisplay.Axes(CoordinateSystem.LocalToImage, 40,
+        CoordinateSystem.Definition.Name + "/v" + CoordinateSystem.Definition.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray();
 }

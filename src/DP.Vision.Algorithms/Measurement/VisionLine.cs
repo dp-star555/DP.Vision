@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace DP.Vision.Algorithms;
 
 /// <summary>两个不同的同帧视觉点定义的直线；端点也定义有限线段，不是拟合证据。</summary>
-public sealed class VisionLine : IVisionGeometryFact
+public sealed class VisionLine : IVisionGeometryFact, IVisionDisplayFact
 {
     /// <summary>创建直线；混帧、混局部定义和重合点必须拒绝。</summary>
     /// <param name="a">第一点。</param><param name="b">第二点。</param>
@@ -28,7 +28,9 @@ public sealed class VisionLine : IVisionGeometryFact
     /// <summary>原图端点间长度，不是无限直线长度。</summary>
     public double ImageLength => Math.Sqrt(Math.Pow(B.ImagePosition.X - A.ImagePosition.X, 2) + Math.Pow(B.ImagePosition.Y - A.ImagePosition.Y, 2));
     /// <inheritdoc/>
-    public IReadOnlyList<Geometry> DisplayGeometry => Array.AsReadOnly(new Geometry[] { new ContourGeometry(new[] { A.ImagePosition, B.ImagePosition }) });
+    public IReadOnlyList<Geometry> DisplayGeometry => VisionDisplay.Geometries(DisplayItems);
+    /// <inheritdoc/>
+    public IReadOnlyList<VisionDisplayItem> DisplayItems => new[] { VisionDisplayItem.Segment(A.ImagePosition, B.ImagePosition, EVisionDisplayRole.Result) };
     /// <inheritdoc/>
     public string Summary => FormattableString.Invariant($"生成直线；端点间原图长度 {ImageLength:F4}px；坐标来源 {CoordinateSystem?.CoordinateSystemId ?? "原图"}。");
     /// <summary>显式转换表达，原图端点不变。</summary>

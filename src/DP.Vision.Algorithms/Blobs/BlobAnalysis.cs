@@ -62,7 +62,7 @@ public sealed class BlobObservation
 }
 
 /// <summary>完成的Blob分析；空集合也是正常完成。</summary>
-public sealed class BlobAnalysisResult
+public sealed class BlobAnalysisResult : IVisionDisplayFact
 {
     /// <summary>复制分析事实。</summary>
     /// <param name="frameId">输入图像身份。</param>
@@ -97,6 +97,11 @@ public sealed class BlobAnalysisResult
     public int Count => Blobs.Count;
     /// <summary>列表中的第一个连通域（筛选排序后即排序首个）；没有连通域时为空。</summary>
     public BlobObservation? First => Blobs.Count > 0 ? Blobs[0] : null;
+    /// <inheritdoc/>
+    public string Summary => $"帧 {FrameId}；连通域 {Count}；完成≠产品合格。点击Region查看面积/质心。";
+    /// <summary>各连通域区域（标注序号，点击查看面积、质心和形状特征）。</summary>
+    public IReadOnlyList<VisionDisplayItem> DisplayItems => Blobs.Select((b, i) => new VisionDisplayItem(b.Region, EVisionDisplayRole.Region, "#" + (i + 1),
+        FormattableString.Invariant($"#{i + 1} 面积 {b.Area}；质心 ({b.Centroid.X:F3},{b.Centroid.Y:F3})；栅格周长 {b.Features.GridPerimeter}；圆度 {b.Features.Circularity:F4}；轴比 {b.Features.Elongation:F4}"))).ToArray();
 }
 
 /// <summary>只读原图的连通域分析能力。</summary>
