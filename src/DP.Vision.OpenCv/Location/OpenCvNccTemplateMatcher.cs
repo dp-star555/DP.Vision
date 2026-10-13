@@ -141,15 +141,15 @@ internal sealed class OpenCvNccTemplateMatcher : OpenCvPyramidMatcherBase
     /// score ≈ ΣI·T̃ / (‖T̃‖·sqrt(n掩码·Var框))。假定框内背景与掩码内方差相近，只用于产生候选，精化层改用精确掩码NCC。
     /// 不用OpenCV的CCOEFF_NORMED：它每次调用都重算整幅积分图，代价约为CCORR的3倍，且分母按外接框会使细长模板旋转后分数被系统性压低。
     /// </summary>
-    protected override unsafe float[] ScanTop(SearchState search, int index, PyramidPose pose, float threshold, CancellationToken token)
+    protected override unsafe void ScanTop(SearchState search, int index, PyramidPose pose, float threshold, float[] values, CancellationToken token)
     {
         var state = (State)search;
         var t = state.Lazy ? Tilde(state.Pyramid.Length - 1, pose) : state.Templates[index];
         using var scores = new Mat();
         try { Cv2.MatchTemplate(state.TopFloat, t.Tilde, scores, TemplateMatchModes.CCorr); }
         finally { if (state.Lazy) t.Tilde.Dispose(); }
-        var values = Read(scores, false);
-        if (t.Valid == 0 || t.Energy < 1e-6) { Array.Clear(values, 0, values.Length); return values; }
+        if (t.Valid == 0 || t.Energy < 1e-6) { Array.Clear(values, 0, scores.Rows * scores.Cols); return; }
+        for (int y = 0; y < scores.Rows; y++) Marshal.Copy(scores.Ptr(y), values, y * scores.Cols, scores.Cols);
         int mw = scores.Cols, mh = scores.Rows, iw = state.IntegralWidth, bw = pose.Width, bh = pose.Height;
         double area = (double)bw * bh, inverse = 1 / Math.Sqrt(t.Energy * t.Valid), floor = 1e-6 * area * area;
         fixed (double* sum = state.Sum, squares = state.Squares)
@@ -172,7 +172,6 @@ internal sealed class OpenCvNccTemplateMatcher : OpenCvPyramidMatcherBase
                 }
             }
         }
-        return values;
     }
 
     /// <summary>

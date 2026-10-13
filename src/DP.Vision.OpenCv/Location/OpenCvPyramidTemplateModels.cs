@@ -30,6 +30,7 @@ internal sealed class OpenCvPyramidSettings
     internal double MinimumAngle = -Math.PI, MaximumAngle = Math.PI, MinimumScale = .1, MaximumScale = 10;
     internal int Contrast = 30, MinimumContrast = 10;
     internal EShapeMetric Metric;
+    /// <summary>旧版顶层提前终止的贪婪度；顶层改为SIMD逐特征累加后不再使用，只为已制作模型的参数校验保留。</summary>
     internal double Greediness = .9;
     internal bool LeastSquares = true;
 
@@ -158,14 +159,22 @@ internal sealed class OpenCvPyramidModel
         return model;
     }
 
-    /// <summary>自动层数：顶层模板面积不少于256像素、短边不少于8像素，最多6层。</summary>
-    internal static int AutoLevels(int width, int height)
+    /// <summary>自动层数的边缘点下限：形状模型顶层至少保留这么多边缘点才继续加层（制作时逐层检查）。</summary>
+    internal const int AutoShapeFeatures = 24;
+
+    /// <summary>
+    /// 自动层数的几何上限，最多6层。NCC：顶层模板面积不少于256像素、短边不少于8像素（灰度相关需要足够的像素）。
+    /// 形状：顶层短边不少于5像素、面积不少于64像素，再由制作时的边缘点数决定是否真的加层——与HALCON按顶层模型点数自动选层同理；
+    /// 细长模板按短边限制会过早停止，而它们在更粗的层上仍有大量边缘点。
+    /// </summary>
+    internal static int AutoLevels(EOpenCvPyramidTemplateKind kind, int width, int height)
     {
+        bool shape = kind == EOpenCvPyramidTemplateKind.Shape;
         int levels = 1;
         while (levels < 6)
         {
             double f = Math.Pow(2, levels), w = width / f, h = height / f;
-            if (w * h < 256 || Math.Min(w, h) < 8) break;
+            if (shape ? w * h < 64 || Math.Min(w, h) < 5 : w * h < 256 || Math.Min(w, h) < 8) break;
             levels++;
         }
         return levels;
@@ -213,7 +222,7 @@ public sealed class OpenCvPyramidTemplateBuilder : IVisionTemplateBuilder
 
     private OpenCvPyramidModel Build(IImageSource image, byte[] fullMask, VisionTemplateDefinition d, OpenCvPyramidSettings settings, CancellationToken token)
     {
-        int requested = settings.Levels == 0 ? OpenCvPyramidModel.AutoLevels(d.Width, d.Height) : settings.Levels;
+        int requested = settings.Levels == 0 ? OpenCvPyramidModel.AutoLevels(_kind, d.Width, d.Height) : settings.Levels;
         var levels = new List<OpenCvPyramidLevel>();
         var gray = CvPixels.Gray(image);
         var mask = new Mat(d.SourceHeight, d.SourceWidth, MatType.CV_8UC1);
@@ -269,6 +278,7 @@ public sealed class OpenCvPyramidTemplateBuilder : IVisionTemplateBuilder
         var chosen = OpenCvShapeFeatures.Thin(edges, l == 0 ? 4096 : 1024);
         problem = $"边缘特征只有{chosen.Count}个（至少{OpenCvPyramidModel.MinimumShapeFeatures}个），请降低制作对比度或改用更清晰的模板区域。";
         if (chosen.Count < OpenCvPyramidModel.MinimumShapeFeatures) return null;
+        if (l > 0 && settings.Levels == 0 && chosen.Count < OpenCvPyramidModel.AutoShapeFeatures) return null;
         int n = chosen.Count;
         level.Qx = new float[n]; level.Qy = new float[n]; level.Ux = new float[n]; level.Uy = new float[n];
         for (int i = 0; i < n; i++)
@@ -330,7 +340,7 @@ internal static class OpenCvShapeFeatures
         return result;
     }
 
-    /// <summary>超过上限时按幅值优先、保持最小间距地稀疏化，并打乱顺序使任意前缀都均匀覆盖模板（供提前终止使用）。</summary>
+    /// <summary>超过上限时按幅值优先、保持最小间距地稀疏化，并打乱顺序使任意前缀都均匀覆盖模板（顶层和精化层按前缀取均匀子集）。</summary>
     internal static List<Edge> Thin(List<Edge> edges, int maximum)
     {
         var chosen = edges;
@@ -410,7 +420,6 @@ public sealed class OpenCvPyramidTemplateFactory : IVisionAlgorithmFactory, IVis
                 new VisionAlgorithmParameter("contrast", "制作对比度", typeof(int), "30", "模型边缘点的最小灰度差（Sobel幅值/4）。", 1, 255),
                 new VisionAlgorithmParameter("minimumContrast", "搜索最小对比度", typeof(int), "10", "搜索图像中低于此灰度差的梯度视为噪声，不参与评分。", 1, 255),
                 new VisionAlgorithmParameter("metric", "极性方式", typeof(string), "use_polarity", "use_polarity（明暗方向须一致）、ignore_global_polarity（允许整体反色）或ignore_local_polarity（逐点忽略明暗）。"),
-                new VisionAlgorithmParameter("greediness", "贪婪度", typeof(double), "0.9", "0..1；越大越早放弃没有希望的位置，越快但越可能漏检。只影响顶层粗搜索。", 0, 1),
                 new VisionAlgorithmParameter("subPixel", "亚像素精化", typeof(string), "least_squares", "interpolation（分数抛物线插值）或least_squares（边缘点到边缘线的最小二乘，默认，更准）。")
             });
             return list;
@@ -423,8 +432,8 @@ public sealed class OpenCvPyramidTemplateFactory : IVisionAlgorithmFactory, IVis
         try
         {
             var parsed = OpenCvPyramidSettings.Parse(_kind, settings);
-            int levels = parsed.Levels == 0 ? OpenCvPyramidModel.AutoLevels(definition.Width, definition.Height) : parsed.Levels;
-            OpenCvPyramidPlan.Create(definition.Width, definition.Height, levels, parsed, search, options);
+            int levels = parsed.Levels == 0 ? OpenCvPyramidModel.AutoLevels(_kind, definition.Width, definition.Height) : parsed.Levels;
+            OpenCvPyramidPlan.Create(_kind, definition.Width, definition.Height, levels, parsed, search, options);
             return Array.Empty<string>();
         }
         catch (ArgumentException ex) { return new[] { ex.Message }; }
