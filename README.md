@@ -38,6 +38,7 @@
 - `IRobustCircleFitter` / `RobustCircleFitter`：确定性三点RANSAC，内点代数拟合后几何细化，输出圆心、半径、内点和RMS；共线或证据不足明确报错。Workflow的“找线”“找圆”由多把卡尺加鲁棒拟合组成。
 - `BarcodeObservation.Location`：码的近似位置（引擎定位点平均值），`Bounds`为搜索范围；ZXing填入定位点，供按位置排序。
 - `ITemplatePoseLocator` / `OpenCvTemplatePoseLocator`：显式角度/尺度上下限，OpenCV按步长采样并包含端点，使用有效模板掩码，输出独立姿态正反变换；HALCON资源模型直接使用原生范围搜索。旧候选列表接口已删除。
+- 模板资源匹配：OpenCV提供形状匹配（梯度方向·金字塔）、灰度NCC（金字塔）和旧平方差三种方式；金字塔引擎按位姿假设计预算、自适应步长、粗到精并行搜索与亚像素精化，见 [TEMPLATE_MATCHING.md](TEMPLATE_MATCHING.md)。
 
 这些算子已接入Workflow节点与双宿主（Workflow 2026-10-06起不再提供基于`IEdgeMeasurer`的边缘线圆测量节点和基于`ITemplateLocator`的平移定位节点，接口仍保留在算法库）。节点参数用到的枚举在取值上标注 `[Description]` 中文标签，供属性面板显示。用法和准确边界见[算子说明](../DP.WorkFlow/docs/nodes/vision-operators.md)。相机实机工作延期，不以合成边缘测试冒充现场精度验收。
 - 分析使用8位输入，越界/Gray16明确拒绝；测量和模板定位只接受声明的矩形范围，不自动取任意ROI外接框或降位深。

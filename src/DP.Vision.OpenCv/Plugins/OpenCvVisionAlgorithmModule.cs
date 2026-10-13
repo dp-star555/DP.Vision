@@ -34,6 +34,15 @@ public sealed class OpenCvVisionAlgorithmModule : IVisionAlgorithmModule
             registrations.Add(new VisionAlgorithmDescriptor(factory.BuilderImplementationId, "OpenCV", "1",
                 VisionAlgorithmFactory<IVisionTemplateBuilder>.Stateless(() => new OpenCvTemplateModelBuilder(factory.ImplementationId), () => _ = OpenCvSharp.Cv2.GetVersionString())));
         }
+        foreach (var kind in new[] { EOpenCvPyramidTemplateKind.Ncc, EOpenCvPyramidTemplateKind.Shape })
+        {
+            var factory = new OpenCvPyramidTemplateFactory(kind);
+            registrations.Add(new VisionAlgorithmDescriptor(factory.ImplementationId, "OpenCV", "1", factory,
+                features: new[] { "translation", "rotation", "scale", "masked-template", "pyramid" },
+                parameters: new[] { new VisionAlgorithmParameter("templatePath", "模板资源", typeof(string), description: "已发布版本的manifest.json。", isFilePath: true) }));
+            registrations.Add(new VisionAlgorithmDescriptor(factory.BuilderImplementationId, "OpenCV", "1",
+                VisionAlgorithmFactory<IVisionTemplateBuilder>.Stateless(() => new OpenCvPyramidTemplateBuilder(factory.ImplementationId, kind), () => _ = OpenCvSharp.Cv2.GetVersionString())));
+        }
         Add<ITranslationRegistrar>(registrations, "translation", () => new OpenCvTranslationRegistrar());
         Add<ICharacterSegmenter>(registrations, "character-segment", () => new OpenCvCharacterSegmenter(), "glyph-candidates");
         Add<IGlyphComparer>(registrations, "glyph-compare", () => new OpenCvGlyphComparer());

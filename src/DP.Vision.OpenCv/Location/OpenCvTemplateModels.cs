@@ -303,7 +303,7 @@ internal static class OpenCvTemplateSearch
             long cost = (long)(bounds.Width - width + 1) * (bounds.Height - height + 1) * width * height;
             work = checked(work + cost);
         }
-        if (work > options.MaximumWork) throw new InvalidOperationException($"模板比较预算超限：预计 {work:N0}，上限 {options.MaximumWork:N0}；搜索 {bounds.Width}×{bounds.Height}，模板 {definition.Width}×{definition.Height}。请缩小搜索ROI、角度/尺度范围或增大采样步长；模型自检可选择制作区域。");
+        if (work > options.MaximumWork) throw new InvalidOperationException($"模板比较预算超限：预计 {work:N0}，上限 {options.MaximumWork:N0}；搜索 {bounds.Width}×{bounds.Height}，模板 {definition.Width}×{definition.Height}。请缩小搜索ROI、角度/尺度范围或增大采样步长，大范围搜索请改用“形状匹配（梯度方向·金字塔）”或“灰度NCC（金字塔）”；模型自检可选择制作区域。");
         return (angles, scales);
     }
 }
