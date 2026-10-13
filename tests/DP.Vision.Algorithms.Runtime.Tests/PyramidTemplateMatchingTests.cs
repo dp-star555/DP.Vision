@@ -94,6 +94,31 @@ public sealed class PyramidTemplateMatchingTests
         Assert.AreEqual(result.CenterX, again.CenterX, 1e-9);
     }
 
+    /// <summary>
+    /// 实际用法：用标签上的“SILICON WAFER”一行做形状模板，在逐张印刷粗细/模糊/颗粒不同的标签上找（含竖放90°和±5%尺度），
+    /// 分数在亚像素位姿上计算，应保持在0.95以上。
+    /// </summary>
+    [TestMethod]
+    public async Task Shape_WaferLabelText_KeepsHighScoreAcrossPrintVariation()
+    {
+        using var source = Wafer(0, 3);
+        var definition = new VisionTemplateDefinition { SourceWidth = 2000, SourceHeight = 1274, X = 100, Y = 125, Width = 660, Height = 100, OriginX = 430, OriginY = 175 };
+        using var matcher = await Prepare(EOpenCvPyramidTemplateKind.Shape, source, definition);
+        var options = new TemplatePoseOptions(-Math.PI, Math.PI, .9, 1.1, .8, 200000000, .5 * Degree, .01);
+        var cases = new[] { (Angle: 1.3, Scale: 1.0, Seed: 51), (Angle: 91.2, Scale: 1.03, Seed: 52), (Angle: -2.1, Scale: .96, Seed: 53), (Angle: 178.4, Scale: 1.0, Seed: 54) };
+        foreach (var c in cases)
+        {
+            var center = new Point2d(1003.4, 640.7);
+            using var scene = WaferScene(source, definition, center, c.Angle * Degree, c.Seed, c.Scale);
+            var result = matcher.Match(scene, new PixelBounds(0, 0, 2000, 1274), options);
+            TestContext.WriteLine(result.Summary);
+            Assert.IsTrue(result.Found, result.Summary);
+            Assert.IsTrue(result.Score > .95, result.Summary);
+            Assert.AreEqual(center.X, result.CenterX, .3); Assert.AreEqual(center.Y, result.CenterY, .3);
+            Assert.AreEqual(c.Angle > 180 ? c.Angle - 360 : c.Angle, result.AngleDegrees, .05); Assert.AreEqual(c.Scale, result.Scale, .005);
+        }
+    }
+
     /// <summary>没有目标时不报告找到；预算过小时在校验和运行时都给出位姿假设数。</summary>
     [TestMethod]
     [DataRow(EOpenCvPyramidTemplateKind.Ncc)]
@@ -250,11 +275,52 @@ public sealed class PyramidTemplateMatchingTests
         using var background = Label(width, height, 1000 + seed);
         using var scene = Mat(background);
         warped.CopyTo(scene, cover);
+        Cv2.SetTheRNG((ulong)seed);
         using var noise = new Mat(height, width, MatType.CV_8UC1); Cv2.Randn(noise, Scalar.All(0), Scalar.All(3));
         using var signed = new Mat(); scene.ConvertTo(signed, MatType.CV_16S, gain, offset);
         using var n16 = new Mat(); noise.ConvertTo(n16, MatType.CV_16S); Cv2.Add(signed, n16, signed);
         using var result = new Mat(); signed.ConvertTo(result, MatType.CV_8U);
         return Frame("scene-" + seed, result);
+    }
+
+    /// <summary>合成晶圆标签：白底粗体黑字、条码、二维码块，高对比打印风格与颗粒噪声；参数控制笔画粗细、模糊和颗粒强度以模拟逐张印刷差异。</summary>
+    private static ImageFrame Wafer(int serial, int seed, int thickDelta = 0, double blur = 1.2, double grain = 14)
+    {
+        var random = new Random(seed);
+        using var mat = new Mat(1274, 2000, MatType.CV_8UC1, Scalar.All(170));
+        Cv2.Rectangle(mat, new Rect(60, 35, 1860, 1220), Scalar.All(250), -1);
+        void Text(string t, int x, int y, double size, int thick) => Cv2.PutText(mat, t, new OpenCvSharp.Point(x, y), HersheyFonts.HersheyDuplex, size, Scalar.All(15), thick, LineTypes.AntiAlias);
+        Text("SILICON WAFER", 110, 205, 2.6, 9 + thickDelta);
+        Text("SPEC# :   ISP(HLIC)-B-0233", 110, 325, 1.4, 5); Text("DIAMETER(mm) : 300", 1140, 325, 1.4, 5);
+        Text("M.S# :     3P1100B", 110, 445, 1.4, 5); Text("LOT# :   12605350C7A01", 1140, 425, 1.4, 5);
+        Text("FOSB ID", 110, 530, 1.4, 5); Text("LOT ID", 1140, 530, 1.4, 5);
+        for (int x = 112; x < 950; x += 6 + random.Next(14)) Cv2.Rectangle(mat, new Rect(x, 560, 2 + random.Next(9), 105), Scalar.All(15), -1);
+        for (int x = 1145; x < 1725; x += 4 + random.Next(8)) Cv2.Rectangle(mat, new Rect(x, 550, 2 + random.Next(4), 105), Scalar.All(15), -1);
+        Text("WF675907", 112, 712, 1.4, 5); Text("1260535OC7A01" + (174 + serial), 1145, 700, 1.4, 5);
+        Text("CUST PART+LOT QTY+LOT ID", 112, 790, 1.4, 5);
+        for (int y = 865; y < 1055; y += 12) for (int x = 437; x < 630; x += 12) if (random.Next(2) == 0) Cv2.Rectangle(mat, new Rect(x, y, 12, 12), Scalar.All(15), -1);
+        Text("RW00001H02512605350C7A01", 145, 1105, 1.5, 5); Text("Xi'an ESWIN Si Wafer Technology", 1080, 1040, 1.3, 4);
+        Cv2.GaussianBlur(mat, mat, new OpenCvSharp.Size(0, 0), blur);
+        // 二值化风格：强对比S曲线 + 颗粒噪声。
+        Cv2.SetTheRNG((ulong)(seed * 31 + serial));
+        using var noise = new Mat(1274, 2000, MatType.CV_16S); Cv2.Randn(noise, Scalar.All(0), Scalar.All(grain));
+        using var signed = new Mat(); mat.ConvertTo(signed, MatType.CV_16S, 1.6, -100); Cv2.Add(signed, noise, signed);
+        using var result = new Mat(); signed.ConvertTo(result, MatType.CV_8U);
+        return Frame("wafer-" + serial + "-" + seed, result);
+    }
+
+    /// <summary>另一张印刷有差异的标签，按模板中心旋转/缩放后放到center处。</summary>
+    private static ImageFrame WaferScene(ImageFrame source, VisionTemplateDefinition d, Point2d center, double angle, int seed, double scale = 1)
+    {
+        var rnd = new Random(seed * 7);
+        using var label = Wafer(seed, seed, rnd.Next(-2, 3), .8 + rnd.NextDouble() * 1.2, 10 + rnd.NextDouble() * 25);
+        using var src = Mat(label);
+        double c = scale * Math.Cos(angle), s = scale * Math.Sin(angle), px = d.X + d.Width / 2d - .5, py = d.Y + d.Height / 2d - .5, qx = center.X - .5, qy = center.Y - .5;
+        using var matrix = new Mat(2, 3, MatType.CV_64FC1);
+        matrix.Set(0, 0, c); matrix.Set(0, 1, -s); matrix.Set(0, 2, qx - (c * px - s * py));
+        matrix.Set(1, 0, s); matrix.Set(1, 1, c); matrix.Set(1, 2, qy - (s * px + c * py));
+        using var warped = new Mat(); Cv2.WarpAffine(src, warped, matrix, new OpenCvSharp.Size(2000, 1274), InterpolationFlags.Cubic, BorderTypes.Constant, Scalar.All(30));
+        return Frame("wafer-scene-" + seed, warped);
     }
 
     private static Mat Mat(ImageFrame frame)

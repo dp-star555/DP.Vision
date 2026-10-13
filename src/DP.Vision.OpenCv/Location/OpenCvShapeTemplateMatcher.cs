@@ -199,8 +199,37 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
     /// </summary>
     protected override PyramidCandidate Polish(SearchState search, PyramidCandidate candidate, OpenCvPyramidPlan plan)
     {
-        if (!_settings.LeastSquares) return candidate;
-        var state = (State)search; var image = state.Pyramid[0]; var data = Model.Levels[0];
+        var image = ((State)search).Pyramid[0];
+        var refined = _settings.LeastSquares ? LeastSquares(image, candidate, plan) : candidate;
+        // 分数在最终亚像素位姿上用全部特征和双线性插值梯度重算（与HALCON一致）；整数网格上的分数因为最近像素取样而偏低，
+        // 颗粒重、边缘抖动的实拍图上更明显。重算值只会替换更低的网格分数。
+        float rescored = Rescore(image, refined);
+        if (rescored > refined.Score) refined.Score = rescored;
+        return refined;
+    }
+
+    /// <summary>在连续位姿上计算形状分数：第0层全部特征，梯度在8位图像上稀疏计算并双线性插值。</summary>
+    private float Rescore(Mat image, PyramidCandidate pose)
+    {
+        var data = Model.Levels[0]; var gradients = new SparseGradients(image);
+        double c = Math.Cos(pose.Angle), s = Math.Sin(pose.Angle), minimum2 = (double)_settings.MinimumContrast * _settings.MinimumContrast, sum = 0;
+        int n = data.FeatureCount;
+        for (int i = 0; i < n; i++)
+        {
+            double x = pose.X + pose.Scale * (c * data.Qx[i] - s * data.Qy[i]), y = pose.Y + pose.Scale * (s * data.Qx[i] + c * data.Qy[i]);
+            if (!gradients.At(x, y, out float gx, out float gy)) continue;
+            double m2 = (double)gx * gx + (double)gy * gy;
+            if (m2 < minimum2) continue;
+            double d = ((c * data.Ux[i] - s * data.Uy[i]) * gx + (s * data.Ux[i] + c * data.Uy[i]) * gy) / Math.Sqrt(m2);
+            sum += _settings.Metric == EShapeMetric.IgnoreLocalPolarity ? Math.Abs(d) : d;
+        }
+        double score = _settings.Metric == EShapeMetric.IgnoreGlobalPolarity ? Math.Abs(sum) / n : sum / n;
+        return (float)Math.Max(0, Math.Min(1, score));
+    }
+
+    private PyramidCandidate LeastSquares(Mat image, PyramidCandidate candidate, OpenCvPyramidPlan plan)
+    {
+        var data = Model.Levels[0];
         var gradients = new SparseGradients(image);
         // 最小二乘用前1024个特征（均匀子集），足以约束4个参数。
         int count = Math.Min(data.FeatureCount, 1024);
