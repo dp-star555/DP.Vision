@@ -15,7 +15,7 @@ internal readonly struct PyramidPose
     { Angle = angle; Scale = scale; Lo = lo; Hi = hi; Width = width; Height = height; }
     internal double Angle { get; }
     internal double Scale { get; }
-    /// <summary>该角度所属搜索区间，局部精化不越出区间。</summary>
+    /// <summary>该角度所属搜索区间，局部精化不越出区间；整周搜索为无穷，角度可越过±180°。</summary>
     internal double Lo { get; }
     internal double Hi { get; }
     internal int Width { get; }
@@ -131,7 +131,8 @@ internal sealed class OpenCvPyramidPlan
         {
             bool full = interval.Maximum - interval.Minimum >= 2 * Math.PI - 1e-9;
             foreach (double angle in Axis(interval.Minimum, interval.Maximum, plan.AngleStep[level], full))
-                foreach (double scale in scales) result.Add(Bounds(plan, level, angle, scale, interval.Minimum, interval.Maximum));
+                // 整周搜索没有边界：精化时角度可以越过±180°接缝（结果再归一化），否则接缝附近的目标会被夹在±180°上。
+                foreach (double scale in scales) result.Add(Bounds(plan, level, angle, scale, full ? double.NegativeInfinity : interval.Minimum, full ? double.PositiveInfinity : interval.Maximum));
         }
         if (result.Count > 200000) throw new ArgumentException("顶层角度/尺度组合超过200000组，请缩小搜索范围。");
         return result.ToArray();
