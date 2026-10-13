@@ -3,6 +3,8 @@
         <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
         <!-- 独立部署引擎包必须携带 NuGet 托管及原生依赖，不能依赖宿主的静态引用。 -->
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+        <!-- 形状匹配内层循环使用指针访问方向图。 -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../DP.Vision.Algorithms/DP.Vision.Algorithms.csproj" />
