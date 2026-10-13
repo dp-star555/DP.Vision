@@ -46,11 +46,33 @@ internal sealed class OpenCvPyramidPlan
     internal int TemplateWidth, TemplateHeight;
     internal double MinimumScale, MaximumScale;
     internal bool FixedAngle, FixedScale;
+    /// <summary>形状引擎：顶层步长加倍、中间层2倍步长取样。</summary>
+    internal bool Coarse;
 
     /// <summary>精化窗口半径：从顶层下来的第一层用3，其余2。</summary>
     internal int Radius(int level) => level == Top - 1 ? 3 : 2;
 
-    internal static OpenCvPyramidPlan Create(int width, int height, int modelLevels, OpenCvPyramidSettings settings, PixelBounds search, TemplatePoseOptions options)
+    /// <summary>
+    /// 第level层的角度（或尺度）取样间距：顶层为该层步长；中间层为2倍步长（只需把上一层±半个间距的不确定度再减半）；第0层为最终步长。
+    /// 每层只扫3个值（第0层5个），而不是按本层步长铺满上一层的整个间距。NCC相关峰窄，中间层保持本层步长。
+    /// </summary>
+    internal double Spacing(bool angle, int level)
+    {
+        var steps = angle ? AngleStep : ScaleStep;
+        return level == Top || level == 0 || !Coarse ? steps[level] : 2 * steps[level];
+    }
+
+    /// <summary>精化第level层时围绕候选的扫描半径：形状为上一层半个间距，NCC为上一层一个步长（相关峰窄，留足余量）。</summary>
+    internal double Range(bool angle, int level)
+    {
+        double previous = level == Top ? Spacing(angle, level) : Spacing(angle, level + 1);
+        return Coarse ? previous / 2 : previous;
+    }
+
+    /// <summary>精化第level层时的取样数。</summary>
+    internal int Samples(bool angle, int level) => 2 * (int)Math.Ceiling(Range(angle, level) / Spacing(angle, level) - 1e-9) + 1;
+
+    internal static OpenCvPyramidPlan Create(EOpenCvPyramidTemplateKind kind, int width, int height, int modelLevels, OpenCvPyramidSettings settings, PixelBounds search, TemplatePoseOptions options)
     {
         foreach (var interval in options.AngleIntervals())
             if (interval.Minimum < settings.MinimumAngle - 1e-10 || interval.Maximum > settings.MaximumAngle + 1e-10)
@@ -61,7 +83,7 @@ internal sealed class OpenCvPyramidPlan
         {
             TemplateWidth = width, TemplateHeight = height, MinimumScale = options.MinimumScale, MaximumScale = options.MaximumScale,
             FixedAngle = options.MaximumAngleRadians - options.MinimumAngleRadians < 1e-12, FixedScale = options.MaximumScale - options.MinimumScale < 1e-12,
-            Candidates = options.MaximumCandidates
+            Candidates = options.MaximumCandidates, Coarse = kind == EOpenCvPyramidTemplateKind.Shape
         };
         int levels = Math.Max(1, modelLevels);
         plan.SearchWidth = new int[levels]; plan.SearchHeight = new int[levels]; plan.AngleStep = new double[levels]; plan.ScaleStep = new double[levels];
@@ -79,13 +101,19 @@ internal sealed class OpenCvPyramidPlan
         if (poses.All(p => plan.Positions(0, Bounds(plan, 0, p.Angle, p.Scale)) == 0)) { plan.Top = top; plan.TopPoses = Array.Empty<PyramidPose>(); return plan; }
         // 顶层搜索图至少要比模板大一些，否则粗搜索没有意义；逐层降低。
         while (top > 0 && poses.All(p => plan.Positions(top, p) == 0)) { top--; poses = Poses(plan, top, options); }
+        // 形状顶层容许模板最远点偏离约1像素（步长加倍）：边缘方向场经多次高斯降采样后随姿态变化平缓，下一层±上层步长的局部扫描补回。
+        // NCC的相关峰更窄，保持原步长。
+        if (top > 0 && kind == EOpenCvPyramidTemplateKind.Shape)
+        {
+            plan.AngleStep[top] = Math.Min(.4, 2 * plan.AngleStep[top]); plan.ScaleStep[top] = Math.Min(.2, 2 * plan.ScaleStep[top]);
+            poses = Poses(plan, top, options);
+        }
         plan.Top = top; plan.TopPoses = poses;
         long work = 0;
         foreach (var p in poses) work = checked(work + plan.Positions(top, p));
         for (int l = top - (top == 0 ? 0 : 1); l >= 0; l--)
         {
-            double prevA = l == top ? plan.AngleStep[l] : plan.AngleStep[l + 1], prevS = l == top ? plan.ScaleStep[l] : plan.ScaleStep[l + 1];
-            long local = (plan.FixedAngle ? 1 : 2 * (long)Math.Ceiling(prevA / plan.AngleStep[l] - 1e-9) + 1) + (plan.FixedScale ? 0 : 2 * (long)Math.Ceiling(prevS / plan.ScaleStep[l] - 1e-9));
+            long local = (plan.FixedAngle ? 1 : plan.Samples(true, l)) + (plan.FixedScale ? 0 : plan.Samples(false, l) - 1);
             int r = l == top ? 1 : plan.Radius(l);
             work = checked(work + plan.Candidates * local * (2 * r + 1) * (2 * r + 1));
         }
@@ -189,8 +217,11 @@ internal abstract class OpenCvPyramidMatcherBase : IPreparedVisionTemplateMatche
     }
 
     protected abstract SearchState Begin(Mat[] pyramid, OpenCvPyramidPlan plan, CancellationToken token);
-    /// <summary>顶层全图打分；返回 (搜索宽-框宽+1)×(搜索高-框高+1) 的分数图，低于阈值的位置可以写成任意更小值。</summary>
-    protected abstract float[] ScanTop(SearchState state, int index, PyramidPose pose, float threshold, CancellationToken token);
+    /// <summary>
+    /// 顶层全图打分，写入map的前 (搜索宽-框宽+1)×(搜索高-框高+1) 项（行优先）；低于阈值的位置可以写成任意更小值。
+    /// map是每个工作线程复用的缓冲区：逐姿态新建的分数图常超过85KB进入大对象堆，频繁触发完整GC。
+    /// </summary>
+    protected abstract void ScanTop(SearchState state, int index, PyramidPose pose, float threshold, float[] map, CancellationToken token);
     /// <summary>以(u0,v0)为左上角预测，在±r窗口内打分；返回(2r+1)²个分数，不可放置的位置为NaN。</summary>
     protected abstract float[] Window(SearchState state, int level, PyramidPose pose, int u0, int v0, int r);
     /// <summary>最终层引擎特有的精化（形状最小二乘）；默认不变。</summary>
@@ -203,13 +234,15 @@ internal abstract class OpenCvPyramidMatcherBase : IPreparedVisionTemplateMatche
         if ((long)frame.Image.Info.Width * frame.Image.Info.Height > 16777216) throw new ArgumentException("匹配图像超过像素预算。");
         InspectionMask.Validate(region, frame.Image);
         var narrowed = RegionMatchMinimum.Narrow(searchBounds, region);
-        var plan = OpenCvPyramidPlan.Create(Model.Width, Model.Height, Model.Levels.Length, Model.Settings, narrowed ?? searchBounds, options);
+        var plan = OpenCvPyramidPlan.Create(Model.Kind, Model.Width, Model.Height, Model.Levels.Length, Model.Settings, narrowed ?? searchBounds, options);
         if (narrowed is not { } bounds || plan.TopPoses.Length == 0) return new TemplatePoseResult(frame.FrameId, ModelIdentity, 0, null, _reference, Contours);
         using var window = RegionWindow.Create(region, frame, bounds, token);
         var pyramid = new Mat[plan.Top + 1];
+        Mat? gray = null;
         try
         {
-            using (var gray = CvPixels.Gray(frame.Image)) pyramid[0] = new Mat(gray, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height)).Clone();
+            gray = CvPixels.Gray(frame.Image);
+            pyramid[0] = new Mat(gray, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
             for (int l = 1; l <= plan.Top; l++) { pyramid[l] = new Mat(); Cv2.PyrDown(pyramid[l - 1], pyramid[l]); }
             using var state = Begin(pyramid, plan, token);
             var finals = Search(state, plan, options, token);
@@ -225,7 +258,7 @@ internal abstract class OpenCvPyramidMatcherBase : IPreparedVisionTemplateMatche
                 transform = new TemplatePoseTransform(Model.Width, Model.Height, new PointD(bounds.X + c.X, bounds.Y + c.Y), Math.Atan2(Math.Sin(c.Angle), Math.Cos(c.Angle)), c.Scale);
             return new TemplatePoseResult(frame.FrameId, ModelIdentity, Math.Max(0, Math.Min(1, best)), transform, _reference, Contours);
         }
-        finally { foreach (var m in pyramid) m?.Dispose(); }
+        finally { foreach (var m in pyramid) m?.Dispose(); gray?.Dispose(); }
     }
 
     private List<PyramidCandidate> Search(SearchState state, OpenCvPyramidPlan plan, TemplatePoseOptions options, CancellationToken token)
@@ -238,18 +271,22 @@ internal abstract class OpenCvPyramidMatcherBase : IPreparedVisionTemplateMatche
         float threshold = Threshold(top);
         var found = new List<PyramidCandidate>[plan.TopPoses.Length];
         var parallel = new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = Environment.ProcessorCount };
-        Parallel.For(0, plan.TopPoses.Length, parallel, i =>
+        int mapSize = plan.SearchWidth[top] * plan.SearchHeight[top];
+        Parallel.For(0, plan.TopPoses.Length, parallel, () => new float[mapSize], (i, loop, map) =>
         {
             var pose = plan.TopPoses[i];
-            if (plan.Positions(top, pose) == 0) return;
-            var map = ScanTop(state, i, pose, threshold, token);
+            if (plan.Positions(top, pose) == 0) return map;
+            ScanTop(state, i, pose, threshold, map, token);
             int mw = plan.SearchWidth[top] - pose.Width + 1, mh = plan.SearchHeight[top] - pose.Height + 1;
             var list = new List<PyramidCandidate>();
             foreach (var (u, v, score) in Peaks(map, mw, mh, threshold, Math.Min(4, k), peakRadius))
                 list.Add(new PyramidCandidate { X = u + pose.Width / 2d, Y = v + pose.Height / 2d, Angle = pose.Angle, Scale = pose.Scale, Lo = pose.Lo, Hi = pose.Hi, Score = score });
             found[i] = list;
-        });
+            return map;
+        }, _ => { });
         var candidates = Suppress(found.Where(l => l != null).SelectMany(l => l), peakRadius, k);
+        // 顶层分数只用于排序：明显弱于最佳（低于其75%）的候选几乎不可能在精化后反超，丢弃以免逐个精化；多个相同目标分数相近，不受影响。
+        if (candidates.Count > 1) { float cut = .75f * candidates[0].Score; candidates = candidates.Where(c => c.Score >= cut).ToList(); }
         if (candidates.Count == 0) return candidates;
         // 逐层精化；只有一层时在第0层做一次±1步长、±1像素的局部精化以得到亚像素邻域。
         for (int l = top == 0 ? 0 : top - 1; l >= 0; l--)
@@ -257,10 +294,10 @@ internal abstract class OpenCvPyramidMatcherBase : IPreparedVisionTemplateMatche
             token.ThrowIfCancellationRequested();
             bool same = l == top;
             int r = same ? 1 : plan.Radius(l), level = l;
-            double prevA = same ? plan.AngleStep[l] : plan.AngleStep[l + 1], prevS = same ? plan.ScaleStep[l] : plan.ScaleStep[l + 1];
+            double rangeA = plan.Range(true, l), rangeS = plan.Range(false, l);
             var refined = new PyramidCandidate?[candidates.Count];
             var current = candidates;
-            Parallel.For(0, current.Count, parallel, i => refined[i] = Refine(state, plan, level, current[i], same ? 1 : 2, r, prevA, prevS, level == 0));
+            Parallel.For(0, current.Count, parallel, i => refined[i] = Refine(state, plan, level, current[i], same ? 1 : 2, r, rangeA, rangeS, level == 0));
             float t = Threshold(l);
             var alive = refined.Where(c => c.HasValue).Select(c => c!.Value).ToList();
             var kept = alive.Where(c => c.Score >= t).ToList();
@@ -273,13 +310,13 @@ internal abstract class OpenCvPyramidMatcherBase : IPreparedVisionTemplateMatche
     }
 
     /// <summary>
-    /// 本层局部精化：先在原尺度下扫描±上层角度步长，再在最佳角度下扫描±上层尺度步长（可分离搜索，组合数为两轴之和而非乘积），
+    /// 本层局部精化：先在原尺度下扫描±上层半个取样间距，再在最佳角度下扫描尺度（可分离搜索，组合数为两轴之和而非乘积），
     /// 每个组合在预测位置±r窗口内取最大；最终层用角度、尺度剖面和位置邻域做抛物线亚像素。
     /// </summary>
-    private PyramidCandidate? Refine(SearchState state, OpenCvPyramidPlan plan, int level, PyramidCandidate c, int factor, int r, double prevA, double prevS, bool final)
+    private PyramidCandidate? Refine(SearchState state, OpenCvPyramidPlan plan, int level, PyramidCandidate c, int factor, int r, double rangeA, double rangeS, bool final)
     {
-        var angles = Local(c.Angle, prevA, plan.AngleStep[level], c.Lo, c.Hi, plan.FixedAngle);
-        var scales = Local(c.Scale, prevS, plan.ScaleStep[level], plan.MinimumScale, plan.MaximumScale, plan.FixedScale);
+        var angles = Local(c.Angle, rangeA, plan.Spacing(true, level), c.Lo, c.Hi, plan.FixedAngle);
+        var scales = Local(c.Scale, rangeS, plan.Spacing(false, level), plan.MinimumScale, plan.MaximumScale, plan.FixedScale);
         int side = 2 * r + 1;
         var cache = new Dictionary<(int, int), (float Score, int Index, float[] Map, PyramidPose Pose, int U0, int V0)>();
         (float Score, int Index, float[] Map, PyramidPose Pose, int U0, int V0) Evaluate(int i, int j)
@@ -348,7 +385,7 @@ internal abstract class OpenCvPyramidMatcherBase : IPreparedVisionTemplateMatche
         for (int n = 0; n < count; n++)
         {
             float best = threshold; int index = -1;
-            for (int i = 0; i < map.Length; i++) if (map[i] >= best) { best = map[i]; index = i; }
+            for (int i = 0, length = width * height; i < length; i++) if (map[i] >= best) { best = map[i]; index = i; }
             if (index < 0 || float.IsNaN(best)) break;
             int u = index % width, v = index / width;
             result.Add((u, v, best));

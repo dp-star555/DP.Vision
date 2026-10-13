@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using DP.Vision.Algorithms;
@@ -11,11 +12,12 @@ namespace DP.Vision.OpenCv;
 /// <summary>
 /// 梯度方向形状匹配（Steger/HALCON同类思路）：分数为模型边缘点单位梯度方向与图像对应点单位梯度方向点积的平均值，
 /// 低于搜索最小对比度的图像梯度记零向量。对光照线性变化、局部遮挡和背景杂乱稳健。
-/// 顶层按贪婪度提前终止；旋转/缩放直接作用于特征点和方向，不旋转图像；最终层可选点到边缘线的最小二乘精化。
+/// 顶层按特征SIMD累加（点数缩减到均匀子集）；精化层只在读到的像素上现算梯度；旋转/缩放直接作用于特征点和方向，不旋转图像；最终层可选点到边缘线的最小二乘精化。
 /// </summary>
 internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
 {
     private readonly OpenCvPyramidSettings _settings;
+    private const int TopFeatures = 64;
 
     internal OpenCvShapeTemplateMatcher(VisionTemplateSnapshot snapshot, OpenCvPyramidModel model) : base(snapshot, model)
     {
@@ -52,17 +54,18 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
     }
 
     /// <summary>rect内的单位梯度方向（外扩1像素求Sobel）；幅值低于搜索最小对比度记零。</summary>
+    /// <summary>rect内的单位梯度方向（外扩1像素求Sobel）；幅值低于搜索最小对比度记零。</summary>
     private (float[] X, float[] Y) Directions(Mat image, Rect rect)
     {
-        var (gx, gy) = Gradients(image, rect);
+        var (x, y) = Gradients(image, rect);
         float minimum = _settings.MinimumContrast;
-        for (int i = 0; i < gx.Length; i++)
+        for (int i = 0; i < x.Length; i++)
         {
-            float m = (float)Math.Sqrt(gx[i] * gx[i] + gy[i] * gy[i]);
-            if (m < minimum) { gx[i] = 0; gy[i] = 0; }
-            else { gx[i] /= m; gy[i] /= m; }
+            float m = (float)Math.Sqrt(x[i] * x[i] + y[i] * y[i]);
+            if (m < minimum) { x[i] = 0; y[i] = 0; }
+            else { x[i] /= m; y[i] /= m; }
         }
-        return (gx, gy);
+        return (x, y);
     }
 
     /// <summary>rect内的Sobel梯度/4（近似灰度差）。</summary>
@@ -84,9 +87,9 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
     }
 
     /// <summary>按姿态变换本层特征：外接框内的像素偏移和旋转后的单位方向。</summary>
-    private (int[] X, int[] Y, float[] Ux, float[] Uy) Rotate(int level, PyramidPose pose)
+    private (int[] X, int[] Y, float[] Ux, float[] Uy) Rotate(int level, PyramidPose pose, int limit = int.MaxValue)
     {
-        var data = Model.Levels[level]; int n = data.FeatureCount;
+        var data = Model.Levels[level]; int n = Math.Min(limit, data.FeatureCount);
         double c = Math.Cos(pose.Angle), s = Math.Sin(pose.Angle), k = pose.Scale, hw = pose.Width / 2d, hh = pose.Height / 2d;
         var x = new int[n]; var y = new int[n]; var ux = new float[n]; var uy = new float[n];
         for (int i = 0; i < n; i++)
@@ -99,74 +102,93 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
         return (x, y, ux, uy);
     }
 
-    protected override unsafe float[] ScanTop(SearchState search, int index, PyramidPose pose, float threshold, CancellationToken token)
+    /// <summary>
+    /// 顶层全图打分，按特征累加（LINE-MOD式线性内存访问）：对每个特征，把该特征在所有位置上的贡献沿图像行连续地累加到分数行，
+    /// 读写都是连续内存，用Vector&lt;float&gt;做SIMD；不再逐位置做带分支的提前终止（分支预测失败和随机访存才是瓶颈）。
+    /// 顶层只用前TopFeatures个特征（特征顺序已均匀打乱，前缀在模板上均匀分布），相当于HALCON的点数缩减；大图隔行扫描，下一层±3像素窗口补回。
+    /// </summary>
+    protected override unsafe void ScanTop(SearchState search, int index, PyramidPose pose, float threshold, float[] map, CancellationToken token)
     {
         var state = (State)search;
-        int width = state.Pyramid[state.Pyramid.Length - 1].Cols, height = state.Pyramid[state.Pyramid.Length - 1].Rows;
+        int top = state.Pyramid.Length - 1, width = state.Pyramid[top].Cols, height = state.Pyramid[top].Rows;
         int mw = width - pose.Width + 1, mh = height - pose.Height + 1;
-        var (fx, fy, ux, uy) = Rotate(state.Pyramid.Length - 1, pose);
-        int n = fx.Length;
-        var offsets = new int[n];
-        for (int i = 0; i < n; i++) offsets[i] = fy[i] * width + fx[i];
-        // 提前终止界：安全界（剩余点全部完美也达不到阈值）与贪婪界（部分和应不低于阈值比例）按贪婪度插值。
-        var bound = new float[n]; double g = _settings.Greediness, smin = threshold;
-        for (int j = 0; j < n; j++) { int count = j + 1; bound[j] = (float)(g * smin * count + (1 - g) * (smin * n - (n - count)) - 1e-4); }
-        var map = new float[mw * mh];
-        // 顶层图已经过多次高斯降采样，方向场在1像素内变化很小：大图隔点扫描，下一层±3像素的精化窗口补回偏差。
-        int top = state.Pyramid.Length - 1, stride = top > 0 && (long)mw * mh > 4096 ? 2 : 1;
-        if (stride > 1) for (int i = 0; i < map.Length; i++) map[i] = -1;
-        int metric = (int)_settings.Metric; float inverse = 1f / n;
-        fixed (float* dx = state.TopX, dy = state.TopY, px = ux, py = uy, pb = bound, pm = map)
-        fixed (int* po = offsets)
+        var (fx, fy, ux, uy) = Rotate(top, pose, TopFeatures);
+        int n = fx.Length, metric = (int)_settings.Metric, lanes = Vector<float>.Count;
+        int stride = top > 0 && (long)mw * mh > 4096 ? 2 : 1;
+        fixed (float* dx = state.TopX, dy = state.TopY, pm = map)
         {
-            for (int v = 0; v < mh; v += stride)
+            for (int v = 0; v < mh; v++)
             {
+                float* row = pm + v * mw;
+                float initial = v % stride == 0 ? 0 : -1;
+                for (int u = 0; u < mw; u++) row[u] = initial;
+                if (initial < 0) continue;
                 if ((v & 15) == 0) token.ThrowIfCancellationRequested();
-                for (int u = 0; u < mw; u += stride)
+                for (int j = 0; j < n; j++)
                 {
-                    int origin = v * width + u; float sum = 0; int j = 0;
-                    if (metric == 0)
-                        for (; j < n; j++) { int p = origin + po[j]; sum += px[j] * dx[p] + py[j] * dy[p]; if (sum < pb[j]) break; }
-                    else if (metric == 1)
-                        for (; j < n; j++) { int p = origin + po[j]; sum += px[j] * dx[p] + py[j] * dy[p]; if (Math.Abs(sum) < pb[j]) break; }
+                    int origin = (v + fy[j]) * width + fx[j];
+                    float* sx = dx + origin, sy = dy + origin;
+                    float cx = ux[j], cy = uy[j];
+                    var vx = new Vector<float>(cx); var vy = new Vector<float>(cy);
+                    int u = 0;
+                    if (metric == 2)
+                    {
+                        for (; u <= mw - lanes; u += lanes)
+                            *(Vector<float>*)(row + u) += Vector.Abs(vx * *(Vector<float>*)(sx + u) + vy * *(Vector<float>*)(sy + u));
+                        for (; u < mw; u++) row[u] += Math.Abs(cx * sx[u] + cy * sy[u]);
+                    }
                     else
-                        for (; j < n; j++) { int p = origin + po[j]; sum += Math.Abs(px[j] * dx[p] + py[j] * dy[p]); if (sum < pb[j]) break; }
-                    pm[v * mw + u] = j == n ? (metric == 1 ? Math.Abs(sum) : sum) * inverse : -1;
+                    {
+                        for (; u <= mw - lanes; u += lanes)
+                            *(Vector<float>*)(row + u) += vx * *(Vector<float>*)(sx + u) + vy * *(Vector<float>*)(sy + u);
+                        for (; u < mw; u++) row[u] += cx * sx[u] + cy * sy[u];
+                    }
                 }
+                float inverse = 1f / n;
+                if (metric == 1) for (int u = 0; u < mw; u++) row[u] = Math.Abs(row[u]) * inverse;
+                else for (int u = 0; u < mw; u++) row[u] *= inverse;
             }
         }
-        return map;
     }
 
+    /// <summary>
+    /// 精化窗口打分：只在实际读到的像素上从8位图像现算Sobel梯度（边界复制，与Directions一致），不为整个窗口生成方向图——
+    /// 第0层窗口可达数十万像素，而(2r+1)²个位置×特征子集只读其中几万个。
+    /// </summary>
     protected override unsafe float[] Window(SearchState search, int level, PyramidPose pose, int u0, int v0, int r)
     {
         var state = (State)search;
         var image = state.Pyramid[level];
         int side = 2 * r + 1; var result = new float[side * side];
         for (int i = 0; i < result.Length; i++) result[i] = float.NaN;
+        int width = image.Cols, height = image.Rows;
         int x0 = Math.Max(0, u0 - r), y0 = Math.Max(0, v0 - r);
-        int x1 = Math.Min(image.Cols, u0 + r + pose.Width), y1 = Math.Min(image.Rows, v0 + r + pose.Height);
+        int x1 = Math.Min(width, u0 + r + pose.Width), y1 = Math.Min(height, v0 + r + pose.Height);
         if (x1 - x0 < pose.Width || y1 - y0 < pose.Height) return result;
-        var rect = new Rect(x0, y0, x1 - x0, y1 - y0);
-        var (dxs, dys) = Directions(image, rect);
-        var (fx, fy, ux, uy) = Rotate(level, pose);
-        int n = fx.Length, metric = (int)_settings.Metric, width = rect.Width;
-        fixed (float* dx = dxs, dy = dys, px = ux, py = uy)
+        // 打分用均匀特征子集：中间层128个、第0层1024个。
+        var (fx, fy, ux, uy) = Rotate(level, pose, level == 0 ? 1024 : 128);
+        int n = fx.Length, metric = (int)_settings.Metric;
+        long step = image.Step(); byte* data = (byte*)image.Data;
+        float minimum2 = (float)_settings.MinimumContrast * _settings.MinimumContrast;
+        for (int gy = 0; gy < side; gy++)
+        for (int gx = 0; gx < side; gx++)
         {
-            for (int gy = 0; gy < side; gy++)
-            for (int gx = 0; gx < side; gx++)
+            int iu = u0 - r + gx, iv = v0 - r + gy;
+            if (iu < x0 || iv < y0 || iu + pose.Width > x1 || iv + pose.Height > y1) continue;
+            float sum = 0;
+            for (int j = 0; j < n; j++)
             {
-                int u = u0 - r + gx - x0, v = v0 - r + gy - y0;
-                if (u < 0 || v < 0 || u + pose.Width > rect.Width || v + pose.Height > rect.Height) continue;
-                float sum = 0; int origin = v * width + u;
-                for (int j = 0; j < n; j++)
-                {
-                    int p = origin + fy[j] * width + fx[j];
-                    float d = px[j] * dx[p] + py[j] * dy[p];
-                    sum += metric == 2 ? Math.Abs(d) : d;
-                }
-                result[gy * side + gx] = Math.Max(0, metric == 1 ? Math.Abs(sum) / n : sum / n);
+                int x = iu + fx[j], y = iv + fy[j];
+                int xm = x > 0 ? x - 1 : 0, xp = x < width - 1 ? x + 1 : width - 1;
+                byte* r0 = data + (y > 0 ? y - 1 : 0) * step, r1 = data + y * step, r2 = data + (y < height - 1 ? y + 1 : height - 1) * step;
+                float sx = (r0[xp] + 2 * r1[xp] + r2[xp] - r0[xm] - 2 * r1[xm] - r2[xm]) * .25f;
+                float sy = (r2[xm] + 2 * r2[x] + r2[xp] - r0[xm] - 2 * r0[x] - r0[xp]) * .25f;
+                float m2 = sx * sx + sy * sy;
+                if (m2 < minimum2) continue;
+                float d = (ux[j] * sx + uy[j] * sy) / (float)Math.Sqrt(m2);
+                sum += metric == 2 ? Math.Abs(d) : d;
             }
+            result[gy * side + gx] = Math.Max(0, metric == 1 ? Math.Abs(sum) / n : sum / n);
         }
         return result;
     }
@@ -179,35 +201,20 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
     {
         if (!_settings.LeastSquares) return candidate;
         var state = (State)search; var image = state.Pyramid[0]; var data = Model.Levels[0];
-        var pose = OpenCvPyramidPlan.Bounds(plan, 0, candidate.Angle, candidate.Scale);
-        int margin = 5;
-        int x0 = Math.Max(0, (int)Math.Floor(candidate.X - pose.Width / 2d) - margin), y0 = Math.Max(0, (int)Math.Floor(candidate.Y - pose.Height / 2d) - margin);
-        int x1 = Math.Min(image.Cols, (int)Math.Ceiling(candidate.X + pose.Width / 2d) + margin), y1 = Math.Min(image.Rows, (int)Math.Ceiling(candidate.Y + pose.Height / 2d) + margin);
-        if (x1 - x0 < 3 || y1 - y0 < 3) return candidate;
-        var rect = new Rect(x0, y0, x1 - x0, y1 - y0);
-        var (gx, gy) = Gradients(image, rect);
-        int w = rect.Width, h = rect.Height;
-        float Sample(float[] field, double x, double y)
-        {
-            // 边界坐标转像素索引坐标后双线性插值。
-            double fx = x - .5 - x0, fy = y - .5 - y0;
-            int ix = (int)Math.Floor(fx), iy = (int)Math.Floor(fy);
-            if (ix < 0 || iy < 0 || ix + 1 >= w || iy + 1 >= h) return float.NaN;
-            double ax = fx - ix, ay = fy - iy; int i = iy * w + ix;
-            return (float)((1 - ay) * ((1 - ax) * field[i] + ax * field[i + 1]) + ay * ((1 - ax) * field[i + w] + ax * field[i + w + 1]));
-        }
+        var gradients = new SparseGradients(image);
+        // 最小二乘用前1024个特征（均匀子集），足以约束4个参数。
+        int count = Math.Min(data.FeatureCount, 1024);
         double cx = candidate.X, cy = candidate.Y, angle = candidate.Angle, scale = candidate.Scale;
         int unknowns = 2 + (plan.FixedAngle ? 0 : 1) + (plan.FixedScale ? 0 : 1);
         double polarity = 1;
         if (_settings.Metric == EShapeMetric.IgnoreGlobalPolarity)
         {
             double c0 = Math.Cos(angle), s0 = Math.Sin(angle), total = 0;
-            for (int i = 0; i < data.FeatureCount; i++)
+            for (int i = 0; i < count; i++)
             {
                 double rx = scale * (c0 * data.Qx[i] - s0 * data.Qy[i]), ry = scale * (s0 * data.Qx[i] + c0 * data.Qy[i]);
                 double nx = c0 * data.Ux[i] - s0 * data.Uy[i], ny = s0 * data.Ux[i] + c0 * data.Uy[i];
-                float ax = Sample(gx, cx + rx, cy + ry), ay = Sample(gy, cx + rx, cy + ry);
-                if (!float.IsNaN(ax)) total += nx * ax + ny * ay;
+                if (gradients.At(cx + rx, cy + ry, out float ax, out float ay)) total += nx * ax + ny * ay;
             }
             polarity = total < 0 ? -1 : 1;
         }
@@ -217,7 +224,7 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
             var normal = new double[unknowns, unknowns]; var rhs = new double[unknowns]; int used = 0;
             double c = Math.Cos(angle), s = Math.Sin(angle);
             var row = new double[unknowns];
-            for (int i = 0; i < data.FeatureCount; i++)
+            for (int i = 0; i < count; i++)
             {
                 double rx = scale * (c * data.Qx[i] - s * data.Qy[i]), ry = scale * (s * data.Qx[i] + c * data.Qy[i]);
                 double nx = c * data.Ux[i] - s * data.Uy[i], ny = s * data.Ux[i] + c * data.Uy[i];
@@ -226,8 +233,7 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
                 for (int q = 0; q < samples.Length; q++)
                 {
                     double t = -2 + .5 * q;
-                    float ax = Sample(gx, px + t * nx, py + t * ny), ay = Sample(gy, px + t * nx, py + t * ny);
-                    if (float.IsNaN(ax)) { ok = false; break; }
+                    if (!gradients.At(px + t * nx, py + t * ny, out float ax, out float ay)) { ok = false; break; }
                     float projected = (float)(nx * ax + ny * ay);
                     samples[q] = _settings.Metric == EShapeMetric.IgnoreLocalPolarity ? Math.Abs(projected) : (float)(polarity * projected);
                     if (samples[q] > bestV) { bestV = samples[q]; bestK = q; }
@@ -252,6 +258,38 @@ internal sealed class OpenCvShapeTemplateMatcher : OpenCvPyramidMatcherBase
             || Math.Abs(angle - candidate.Angle) > 2 * plan.AngleStep[0] + 1e-12 || Math.Abs(scale - candidate.Scale) > 2 * plan.ScaleStep[0] + 1e-12) return candidate;
         candidate.X = cx; candidate.Y = cy; candidate.Angle = angle; candidate.Scale = scale;
         return candidate;
+    }
+
+    /// <summary>按需在8位图像上计算Sobel/4梯度并双线性插值（边界坐标）；不为整块ROI生成梯度图。</summary>
+    private readonly unsafe struct SparseGradients
+    {
+        private readonly byte* _data;
+        private readonly long _step;
+        private readonly int _width, _height;
+        internal SparseGradients(Mat image) { _data = (byte*)image.Data; _step = image.Step(); _width = image.Cols; _height = image.Rows; }
+
+        private void Sobel(int x, int y, out float gx, out float gy)
+        {
+            int xm = x > 0 ? x - 1 : 0, xp = x < _width - 1 ? x + 1 : _width - 1;
+            byte* r0 = _data + (y > 0 ? y - 1 : 0) * _step, r1 = _data + y * _step, r2 = _data + (y < _height - 1 ? y + 1 : _height - 1) * _step;
+            gx = (r0[xp] + 2 * r1[xp] + r2[xp] - r0[xm] - 2 * r1[xm] - r2[xm]) * .25f;
+            gy = (r2[xm] + 2 * r2[x] + r2[xp] - r0[xm] - 2 * r0[x] - r0[xp]) * .25f;
+        }
+
+        /// <summary>边界坐标(x,y)处的梯度；越出图像返回false。</summary>
+        internal bool At(double x, double y, out float gx, out float gy)
+        {
+            double fx = x - .5, fy = y - .5;
+            int ix = (int)Math.Floor(fx), iy = (int)Math.Floor(fy);
+            gx = gy = 0;
+            if (ix < 0 || iy < 0 || ix + 1 >= _width || iy + 1 >= _height) return false;
+            float ax = (float)(fx - ix), ay = (float)(fy - iy);
+            Sobel(ix, iy, out var x00, out var y00); Sobel(ix + 1, iy, out var x10, out var y10);
+            Sobel(ix, iy + 1, out var x01, out var y01); Sobel(ix + 1, iy + 1, out var x11, out var y11);
+            gx = (1 - ay) * ((1 - ax) * x00 + ax * x10) + ay * ((1 - ax) * x01 + ax * x11);
+            gy = (1 - ay) * ((1 - ax) * y00 + ax * y10) + ay * ((1 - ax) * y01 + ax * y11);
+            return true;
+        }
     }
 
     /// <summary>小型对称正定方程组的高斯消元（部分主元）；病态时返回null。</summary>
